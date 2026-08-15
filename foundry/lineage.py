@@ -81,7 +81,7 @@ def screen_passes(e: dict[str, Any]) -> bool:
         bool(e.get("compile_ok", False))
         and bool(e.get("parent_signature_ok", False))
         and float(e.get("nps_delta_pct", 0.0)) >= float(e.get("min_nps_delta_pct", -5.0))
-        and str(e.get("screening_verdict", "")) in {"ACCEPT_H1", "PASS", "CONTINUE"}
+        and str(e.get("screening_verdict", "")) in {"ACCEPT_H1", "PASS"}
     )
 
 
