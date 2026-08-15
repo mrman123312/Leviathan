@@ -23,6 +23,7 @@
 #include <utility>
 
 #include "bitboard.h"
+#include "leviathan_atlas.h"
 #include "leviathan_policy.h"
 #include "misc.h"
 #include "position.h"
@@ -252,6 +253,7 @@ ExtMove* MovePicker::score(const MoveList<Type>& ml) {
             // With no valid model loaded this is exactly zero, preserving the parent
             // engine's ordering and deterministic bench signature.
             m.value += Leviathan::Policy::ordering_bonus(pos, m);
+            m.value += Leviathan::Atlas::ordering_bonus(pos, m);
         }
 
         else  // Type == EVASIONS
