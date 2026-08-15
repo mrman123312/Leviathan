@@ -1,3 +1,12 @@
 id,parent,hypothesis,change,nps_delta,stc_elo,ltc_elo,status,decision,notes
 P000,5062aee519a1ba262d472d8ab139851ced56573e,Reproducible parent behaves as expected,Baseline only,,,,RUNNING,RETEST,Freeze compiler CPU NNUE and bench evidence
 P001,P000,A cheap learned quiet-move prior can improve cutoff ordering enough to beat inference cost,Bounded policy bonus in MovePicker quiet scoring,,,,IMPLEMENTED,RETEST,Neutral without an LVTP1 model; strength claim forbidden until match evidence
+P002,P001,Search-budget regret can be measured reproducibly from low-vs-deep teacher searches,Generate multi-budget root traces and counterfactual deep verification,,,,PLANNED,RETEST,Data infrastructure only; no live search change
+P003,P002,A calibrated root metacontroller can predict when extra computation is decision-relevant,Stop/deepen value-of-computation predictor at root,,,,PLANNED,RETEST,Start with advisory mode before time-management authority
+P004,P002,A learned regret signal can identify dangerous selective-search decisions,Instrument LMR/pruning re-search outcomes and train prune-risk predictor,,,,PLANNED,RETEST,First live use is veto-only
+P005,P004,Explicit calibrated risk improves LMR allocation,Risk-budgeted reduction adjustments bounded around parent LMR,,,,PLANNED,RETEST,Allow less aggressive reductions before permitting extra reductions
+P006,P002,Explicit short PV proposals can compress search while alpha-beta preserves correctness,2-6 ply PV-skill proposal model used for ordering/aspiration only,,,,PLANNED,RETEST,Measure saved nodes and Elo rather than imitation accuracy
+P007,P005,Search-control formulas can be invented offline and safely selected by evidence,Typed bounded Search DSL plus operator lifecycle and SPRT gate,,,,PLANNED,RETEST,No unrestricted runtime code generation
+P008,P003,Different search topologies benefit from different verified specialists,Metacognitive router to one independently ablatable specialist,,,,PLANNED,RETEST,Add specialists one at a time
+P009,P002,Persistent verified memory can transfer search effort across related positions,Chess Atlas with episodic regret semantic families procedural PV skills and exact islands,,,,PLANNED,RETEST,Exact and learned knowledge must remain distinct
+P010,P007,An automated lineage can improve without silent capability loss,Candidate generation regression NPS match promotion contest retirement rollback pipeline,,,,PLANNED,RETEST,Practical immortality layer; each descendant remains parent-relative

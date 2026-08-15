@@ -4,9 +4,11 @@ on:
   push:
     branches:
       - leviathan/core-v0
+      - leviathan/immortality-layer
   pull_request:
     branches:
       - master
+      - leviathan/core-v0
   workflow_dispatch:
 
 permissions:
@@ -23,7 +25,7 @@ jobs:
 
       - name: Python syntax
         run: |
-          python3 -m py_compile trainer/model.py trainer/train.py trainer/export.py trainer/generate_dataset.py trainer/split_dataset.py tools/elo.py
+          python3 -m py_compile trainer/model.py trainer/train.py trainer/export.py trainer/generate_dataset.py trainer/generate_metasearch_dataset.py trainer/split_dataset.py tools/elo.py
 
       - name: Download NNUE network
         working-directory: src
