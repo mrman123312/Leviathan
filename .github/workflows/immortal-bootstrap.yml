@@ -1,0 +1,158 @@
+name: Leviathan Immortal Bootstrap
+
+on:
+  push:
+    branches:
+      - leviathan/immortal-v1
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: immortal-bootstrap-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  bootstrap:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+
+      - name: Python syntax
+        run: |
+          python3 -m py_compile \
+            tools/bootstrap_immortal.py tools/run_match.py tools/sprt.py \
+            trainer/train_control.py trainer/generate_metasearch_dataset.py trainer/pv_skills.py \
+            atlas/atlas_tool.py foundry/foundry.py foundry/lineage.py \
+            specialists/mate_prover.py specialists/goal_attractor.py
+
+      - name: Install lightweight specialist dependency
+        run: python3 -m pip install --disable-pip-version-check 'python-chess>=1.999,<2'
+
+      - name: Apply guarded Stockfish hooks
+        run: python3 tools/bootstrap_immortal.py
+
+      - name: Download NNUE
+        working-directory: src
+        run: make net
+
+      - name: Build AVX2
+        working-directory: src
+        run: |
+          make clean
+          make -j2 ARCH=x86-64-avx2 build 2>&1 | tee ../immortal-build.txt
+
+      - name: Verify UCI surface
+        working-directory: src
+        run: |
+          printf 'uci\nquit\n' | ./stockfish | tee ../immortal-uci.txt
+          grep -q '^uciok$' ../immortal-uci.txt
+          grep -q 'option name Leviathan Policy ' ../immortal-uci.txt
+          grep -q 'option name Leviathan MetaSearch ' ../immortal-uci.txt
+          grep -q 'option name Leviathan Risk ' ../immortal-uci.txt
+          grep -q 'option name Leviathan Atlas ' ../immortal-uci.txt
+          grep -q 'option name Leviathan Search DSL ' ../immortal-uci.txt
+          grep -q 'option name Leviathan Trace File ' ../immortal-uci.txt
+
+      - name: Parent-equivalent default bench
+        working-directory: src
+        run: |
+          ./stockfish bench 2>&1 | tee ../immortal-bench-default.txt
+          grep 'Nodes searched' ../immortal-bench-default.txt > ../immortal-nodes-default.txt
+          grep -q '2884956' ../immortal-nodes-default.txt
+
+      - name: Create neutral research artifacts
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('neutral-policy.lvtp')
+          lines = ['LVTP1 12 16']
+          lines += [' '.join(['0'] * 12) for _ in range(16)]
+          lines += [' '.join(['0'] * 16)]
+          lines += [' '.join(['0'] * 16)]
+          lines += ['0']
+          p.write_text('\n'.join(lines) + '\n')
+          Path('neutral-meta.lvtm').write_text('LVTM1 8 1 1\n' + ' '.join(['0'] * 9) + '\n')
+          Path('neutral-risk.lvtr').write_text('LVTR1 12 1 1\n' + ' '.join(['0'] * 13) + '\n')
+          Path('neutral.lvsd').write_text('LVSD1\nADD 0\nCLAMP -2048 1024\n')
+          Path('neutral.lvta').write_text('LVTA1\n')
+          PY
+
+      - name: Neutral all-organs equivalence
+        working-directory: src
+        run: |
+          cat > ../neutral-uci.txt <<'EOF'
+          setoption name Leviathan Policy File value ../neutral-policy.lvtp
+          setoption name Leviathan Policy value true
+          setoption name Leviathan Meta File value ../neutral-meta.lvtm
+          setoption name Leviathan Meta Authority value 1
+          setoption name Leviathan MetaSearch value true
+          setoption name Leviathan Risk File value ../neutral-risk.lvtr
+          setoption name Leviathan Risk Authority value 1
+          setoption name Leviathan Risk value true
+          setoption name Leviathan Atlas File value ../neutral.lvta
+          setoption name Leviathan Atlas value true
+          setoption name Leviathan Search DSL File value ../neutral.lvsd
+          setoption name Leviathan Search DSL Authority value 1
+          setoption name Leviathan Search DSL value true
+          bench
+          quit
+          EOF
+          ./stockfish < ../neutral-uci.txt 2>&1 | tee ../immortal-bench-neutral.txt
+          grep 'Nodes searched' ../immortal-bench-neutral.txt > ../immortal-nodes-neutral.txt
+          diff -u ../immortal-nodes-default.txt ../immortal-nodes-neutral.txt
+
+      - name: Tool smoke tests
+        run: |
+          python3 foundry/foundry.py new --out /tmp/candidate.lvsd --seed 8910
+          python3 foundry/foundry.py validate /tmp/candidate.lvsd
+          printf '{"position_key":1,"move_raw":64,"bonus":100,"confidence":900,"kind":"skill","source":"ci"}\n' > /tmp/atlas.jsonl
+          python3 atlas/atlas_tool.py build --input /tmp/atlas.jsonl --out /tmp/test.lvta
+          python3 atlas/atlas_tool.py verify /tmp/test.lvta
+          printf '{"fen":"8/8/8/8/8/8/4K3/7k w - - 0 1","rank":1,"score_cp":0,"teacher_nodes":1000,"pv":["e2e3","h1g1"]}\n' > /tmp/pv-skills.jsonl
+          python3 trainer/pv_skills.py pack --skills /tmp/pv-skills.jsonl --out /tmp/test.lvps
+          grep -q '^LVPS1$' /tmp/test.lvps
+          printf 'parent=5062aee519a1ba262d472d8ab139851ced56573e\nbench=2884956\n' > /tmp/baseline.identity
+          python3 foundry/lineage.py init --state /tmp/lineage.json --artifact /tmp/baseline.identity --id P000
+          python3 foundry/lineage.py register --state /tmp/lineage.json --artifact /tmp/candidate.lvsd --id ci-candidate --parent ACTIVE
+          printf '{"compile_ok":true,"parent_signature_ok":true,"nps_delta_pct":0,"screening_verdict":"PASS","stc_pass":true,"ltc_pass":true,"multi_hardware_pass":true,"elo":1.0}\n' > /tmp/evidence.json
+          python3 foundry/lineage.py evidence --state /tmp/lineage.json --id ci-candidate --evidence /tmp/evidence.json
+          python3 foundry/lineage.py status --state /tmp/lineage.json | grep -q '"active": "ci-candidate"'
+          python3 foundry/lineage.py rollback --state /tmp/lineage.json --reason ci-test
+          python3 foundry/lineage.py status --state /tmp/lineage.json | grep -q '"active": "P000"'
+          python3 specialists/mate_prover.py --fen '7k/8/5KQ1/8/8/8/8/8 w - - 0 1' --plies 1 --max-nodes 1000 --out /tmp/mate.jsonl
+          grep -q '"proven":true' /tmp/mate.jsonl
+          python3 specialists/goal_attractor.py build --lines /tmp/mate.jsonl --out /tmp/goal.lvga
+          python3 specialists/goal_attractor.py query --index /tmp/goal.lvga --fen '7k/8/5KQ1/8/8/8/8/8 w - - 0 1' --max-plies 1 --max-nodes 100 | tee /tmp/goal-query.json
+          grep -q '"found": true' /tmp/goal-query.json
+          python3 tools/sprt.py --wins 10 --draws 20 --losses 10
+
+      - name: Commit validated source hooks
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add src/engine.cpp src/movepick.cpp src/search.cpp
+          if ! git diff --cached --quiet; then
+            git commit -m 'Integrate Immortal v1 search controls'
+            git push origin HEAD:leviathan/immortal-v1
+          fi
+
+      - name: Archive bootstrap evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: immortal-bootstrap-${{ github.sha }}
+          path: |
+            immortal-build.txt
+            immortal-uci.txt
+            immortal-bench-default.txt
+            immortal-bench-neutral.txt
+            immortal-nodes-default.txt
+            immortal-nodes-neutral.txt
+            neutral-*.lvt*
+            neutral.lvsd
+          if-no-files-found: warn

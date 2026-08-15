@@ -31,6 +31,11 @@
 #include <vector>
 
 #include "evaluate.h"
+#include "leviathan_atlas.h"
+#include "leviathan_control.h"
+#include "leviathan_dsl.h"
+#include "leviathan_policy.h"
+#include "leviathan_trace.h"
 #include "misc.h"
 #include "nnue/network.h"
 #include "nnue/nnue_common.h"
@@ -132,6 +137,115 @@ Engine::Engine(std::optional<std::filesystem::path> path) :
     options.add("Syzygy50MoveRule", Option(true));
 
     options.add("SyzygyProbeLimit", Option(7, 0, 7));
+
+    // Project Leviathan research controls. Every organ defaults to disabled.
+    options.add("Leviathan Policy", Option(false, [](const Option& o) {
+        Leviathan::Policy::set_enabled(int(o) != 0);
+        return std::nullopt;
+    }));
+    options.add("Leviathan Policy File", Option("", [](const Option& o) {
+        const std::string path = std::string(o);
+        const bool ok = Leviathan::Policy::set_model_path(path);
+        return !path.empty() && !ok ? std::optional<std::string>("Leviathan: invalid policy model")
+                                    : std::nullopt;
+    }));
+    options.add("Leviathan Policy Weight", Option(100, 0, 400, [](const Option& o) {
+        Leviathan::Policy::set_weight(int(o));
+        return std::nullopt;
+    }));
+
+    options.add("Leviathan MetaSearch", Option(false, [](const Option& o) {
+        Leviathan::Control::set_meta_enabled(int(o) != 0);
+        return std::nullopt;
+    }));
+    options.add("Leviathan Meta File", Option("", [](const Option& o) {
+        const std::string path = std::string(o);
+        const bool ok = Leviathan::Control::set_meta_file(path);
+        return !path.empty() && !ok ? std::optional<std::string>("Leviathan: invalid MetaSearch model")
+                                    : std::nullopt;
+    }));
+    options.add("Leviathan Meta Authority", Option(0, 0, 2, [](const Option& o) {
+        Leviathan::Control::set_meta_authority(int(o));
+        return std::nullopt;
+    }));
+    options.add("Leviathan Meta Max Percent", Option(30, 0, 100, [](const Option& o) {
+        Leviathan::Control::set_meta_max_percent(int(o));
+        return std::nullopt;
+    }));
+
+    options.add("Leviathan Risk", Option(false, [](const Option& o) {
+        Leviathan::Control::set_risk_enabled(int(o) != 0);
+        return std::nullopt;
+    }));
+    options.add("Leviathan Risk File", Option("", [](const Option& o) {
+        const std::string path = std::string(o);
+        const bool ok = Leviathan::Control::set_risk_file(path);
+        return !path.empty() && !ok ? std::optional<std::string>("Leviathan: invalid risk model")
+                                    : std::nullopt;
+    }));
+    options.add("Leviathan Risk Authority", Option(0, 0, 2, [](const Option& o) {
+        Leviathan::Control::set_risk_authority(int(o));
+        return std::nullopt;
+    }));
+    options.add("Leviathan Risk Threshold", Option(650, 0, 1000, [](const Option& o) {
+        Leviathan::Control::set_risk_threshold(int(o));
+        return std::nullopt;
+    }));
+    options.add("Leviathan Risk Veto", Option(1536, 0, 4096, [](const Option& o) {
+        Leviathan::Control::set_risk_veto(int(o));
+        return std::nullopt;
+    }));
+    options.add("Leviathan Specialist", Option(false, [](const Option& o) {
+        Leviathan::Control::set_specialist_enabled(int(o) != 0);
+        return std::nullopt;
+    }));
+    options.add("Leviathan Specialist Veto", Option(768, 0, 4096, [](const Option& o) {
+        Leviathan::Control::set_specialist_veto(int(o));
+        return std::nullopt;
+    }));
+
+    options.add("Leviathan Atlas", Option(false, [](const Option& o) {
+        Leviathan::Atlas::set_enabled(int(o) != 0);
+        return std::nullopt;
+    }));
+    options.add("Leviathan Atlas File", Option("", [](const Option& o) {
+        const std::string path = std::string(o);
+        const bool ok = Leviathan::Atlas::set_file(path);
+        return !path.empty() && !ok ? std::optional<std::string>("Leviathan: invalid Atlas")
+                                    : std::nullopt;
+    }));
+    options.add("Leviathan Atlas Weight", Option(100, 0, 400, [](const Option& o) {
+        Leviathan::Atlas::set_weight(int(o));
+        return std::nullopt;
+    }));
+
+    options.add("Leviathan Search DSL", Option(false, [](const Option& o) {
+        Leviathan::DSL::set_enabled(int(o) != 0);
+        return std::nullopt;
+    }));
+    options.add("Leviathan Search DSL File", Option("", [](const Option& o) {
+        const std::string path = std::string(o);
+        const bool ok = Leviathan::DSL::set_file(path);
+        return !path.empty() && !ok ? std::optional<std::string>("Leviathan: invalid Search DSL")
+                                    : std::nullopt;
+    }));
+    options.add("Leviathan Search DSL Authority", Option(0, 0, 2, [](const Option& o) {
+        Leviathan::DSL::set_authority(int(o));
+        return std::nullopt;
+    }));
+    options.add("Leviathan Search DSL Weight", Option(100, 0, 400, [](const Option& o) {
+        Leviathan::DSL::set_weight(int(o));
+        return std::nullopt;
+    }));
+
+    options.add("Leviathan Trace File", Option("", [](const Option& o) {
+        Leviathan::Trace::set_file(std::string(o));
+        return std::nullopt;
+    }));
+    options.add("Leviathan Trace Sample Permille", Option(0, 0, 1000, [](const Option& o) {
+        Leviathan::Trace::set_sample_permille(int(o));
+        return std::nullopt;
+    }));
 
     options.add(  //
       "EvalFile", Option(EvalFileDefaultName, [this](const Option& o) {

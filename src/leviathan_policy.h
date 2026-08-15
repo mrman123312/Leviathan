@@ -2,9 +2,9 @@
   Project Leviathan policy guidance for Stockfish.
 
   This file is part of a GPLv3-or-later Stockfish derivative.
-  The policy is deliberately disabled unless LEVIATHAN_POLICY_FILE points to
-  a valid model. This keeps the unconfigured engine behavior identical to its
-  Stockfish parent for controlled A/B testing.
+  The policy is disabled by default. Environment variables remain supported for
+  experiment wrappers, while explicit setters allow the same binary to be A/B
+  configured through UCI options.
 */
 
 #ifndef LEVIATHAN_POLICY_H_INCLUDED
@@ -25,8 +25,7 @@ namespace Stockfish::Leviathan::Policy {
 
 constexpr int FeatureCount = 12;
 constexpr int HiddenSize   = 16;
-
-using FeatureVector = std::array<std::int16_t, FeatureCount>;
+using FeatureVector        = std::array<std::int16_t, FeatureCount>;
 
 struct QuantizedModel {
     std::array<std::array<std::int8_t, FeatureCount>, HiddenSize> hiddenWeights{};
@@ -40,35 +39,19 @@ inline int parse_int_env(const char* name, int fallback, int low, int high) {
     const char* raw = std::getenv(name);
     if (!raw || !*raw)
         return fallback;
-
     char* end = nullptr;
     long  v   = std::strtol(raw, &end, 10);
-    if (*end != '\0')
+    if (!end || *end != '\0')
         return fallback;
     return std::clamp<int>(int(v), low, high);
 }
 
-inline const std::string& model_path() {
-    static const std::string path = [] {
-        const char* p = std::getenv("LEVIATHAN_POLICY_FILE");
-        return p ? std::string(p) : std::string();
-    }();
-    return path;
-}
-
-inline int policy_weight() {
-    static const int weight = parse_int_env("LEVIATHAN_POLICY_WEIGHT", 100, 0, 400);
-    return weight;
-}
-
-inline bool policy_enabled() {
-    static const bool enabled = [] {
-        const char* raw = std::getenv("LEVIATHAN_POLICY");
-        if (raw && *raw)
-            return std::string(raw) != "0" && std::string(raw) != "false";
-        return !model_path().empty();
-    }();
-    return enabled;
+inline bool parse_bool_env(const char* name, bool fallback) {
+    const char* raw = std::getenv(name);
+    if (!raw || !*raw)
+        return fallback;
+    const std::string s(raw);
+    return s != "0" && s != "false" && s != "off";
 }
 
 inline bool read_i64(std::istream& in, long long& value) {
@@ -76,23 +59,19 @@ inline bool read_i64(std::istream& in, long long& value) {
     return bool(in);
 }
 
-inline QuantizedModel load_model() {
+inline QuantizedModel load_model_file(const std::string& path) {
     QuantizedModel model;
-    if (!policy_enabled() || model_path().empty())
+    if (path.empty())
         return model;
 
-    std::ifstream in(model_path());
+    std::ifstream in(path);
     if (!in)
         return model;
 
     std::string magic;
-    in >> magic;
-    if (magic != "LVTP1")
-        return model;
-
-    int features = 0, hidden = 0;
-    in >> features >> hidden;
-    if (!in || features != FeatureCount || hidden != HiddenSize)
+    int         features = 0, hidden = 0;
+    in >> magic >> features >> hidden;
+    if (!in || magic != "LVTP1" || features != FeatureCount || hidden != HiddenSize)
         return model;
 
     long long v = 0;
@@ -128,10 +107,39 @@ inline QuantizedModel load_model() {
     return model;
 }
 
-inline const QuantizedModel& model() {
-    static const QuantizedModel m = load_model();
-    return m;
+struct State {
+    bool           enabled = false;
+    int            weight  = 100;
+    std::string    path;
+    QuantizedModel model;
+
+    State() {
+        enabled = parse_bool_env("LEVIATHAN_POLICY", false);
+        weight  = parse_int_env("LEVIATHAN_POLICY_WEIGHT", 100, 0, 400);
+        if (const char* p = std::getenv("LEVIATHAN_POLICY_FILE"))
+            path = p;
+        if (!path.empty())
+            model = load_model_file(path);
+    }
+};
+
+inline State& state() {
+    static State s;
+    return s;
 }
+
+inline void set_enabled(bool v) { state().enabled = v; }
+inline void set_weight(int v) { state().weight = std::clamp(v, 0, 400); }
+inline bool set_model_path(const std::string& path) {
+    state().path  = path;
+    state().model = load_model_file(path);
+    return state().model.loaded;
+}
+
+inline const std::string& model_path() { return state().path; }
+inline int policy_weight() { return state().weight; }
+inline bool policy_enabled() { return state().enabled; }
+inline const QuantizedModel& model() { return state().model; }
 
 inline int centered_file(Square s) { return 2 * (int(s) & 7) - 7; }
 inline int rank_for(Color us, Square s) {
@@ -139,9 +147,6 @@ inline int rank_for(Color us, Square s) {
     return us == WHITE ? rank : 7 - rank;
 }
 
-// Cheap move-local features only. No extra move generation and no recursive
-// evaluation are allowed here: policy ordering has to earn more Elo than it
-// costs in nodes/second.
 inline FeatureVector features(const Position& pos, Move move) {
     const Color  us   = pos.side_to_move();
     const Square from = move.from_sq();
@@ -178,20 +183,15 @@ inline int raw_score(const Position& pos, Move move) {
         return 0;
 
     const FeatureVector x = features(pos, move);
-    std::int32_t         out = m.outputBias;
-
+    std::int32_t out = m.outputBias;
     for (int h = 0; h < HiddenSize; ++h)
     {
         std::int32_t a = m.hiddenBias[h];
         for (int f = 0; f < FeatureCount; ++f)
             a += std::int32_t(m.hiddenWeights[h][f]) * x[f];
-
-        // ReLU with a bounded activation keeps inference deterministic and
-        // prevents malformed-but-parseable weights from dominating ordering.
         a = std::clamp<std::int32_t>(a, 0, 127);
         out += std::int32_t(m.outputWeights[h]) * a;
     }
-
     return std::clamp<int>(out / 16, -2048, 2048);
 }
 

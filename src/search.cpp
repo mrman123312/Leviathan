@@ -36,6 +36,9 @@
 #include "bitboard.h"
 #include "evaluate.h"
 #include "history.h"
+#include "leviathan_control.h"
+#include "leviathan_dsl.h"
+#include "leviathan_trace.h"
 #include "misc.h"
 #include "movegen.h"
 #include "movepick.h"
@@ -603,6 +606,12 @@ bool Search::Worker::iterative_deepening() {
 
             double totalTime = mainThread->tm.optimum() * fallingEval * reduction
                              * bestMoveInstability * highBestMoveEffort;
+
+            // Leviathan P003: MetaSearch first receives bounded time-allocation
+            // authority. Authority 1 can only buy more verification time.
+            totalTime *= Leviathan::Control::meta_time_factor(
+              rootDepth, rootDepth - lastBestMoveDepth, rootMoves[0].previousScore, bestValue,
+              totBestMoveChanges, int(nodesEffort), rootMoves.size(), is_decisive(bestValue));
 
             if (rootMoves.size() == 1)
                 // Cap used time to 0.5s for a better viewer experience
@@ -1314,6 +1323,7 @@ moves_loop:  // When in check, search starts here
         }
 
         u64 nodeCount = rootNode ? u64(nodes) : 0;
+        const u64 leviathanParentKey = u64(pos.key());
 
         // Step 16. Make the move
         do_move(pos, move, st, givesCheck, ss);
@@ -1362,6 +1372,19 @@ moves_loop:  // When in check, search starts here
         if (allNode)
             r += r * 276 / (256 * depth + 268);
 
+        // Leviathan P004/P005/P007: learned risk may first veto unsafe
+        // reductions; Search-DSL candidates are separately bounded and gated.
+        r += Leviathan::Control::lmr_adjustment(
+          depth, moveCount, ss->statScore, correctionValue, PvNode, cutNode, allNode, capture,
+          givesCheck, ttData.depth, ss->staticEval, alpha);
+        r += Leviathan::DSL::lmr_adjustment(
+          depth, moveCount, ss->statScore, correctionValue, PvNode, cutNode, allNode, capture,
+          givesCheck, ttData.depth, ss->staticEval, alpha);
+
+        Value leviathanReducedValue = VALUE_NONE;
+        Depth leviathanReducedDepth = DEPTH_NONE;
+        bool  leviathanResearched   = false;
+
         // Step 17. Late moves reduction / extension (LMR)
         if (depth >= 2 && moveCount > 1)
         {
@@ -1371,10 +1394,12 @@ moves_loop:  // When in check, search starts here
             // To prevent problems when the max value is less than the min value,
             // std::clamp has been replaced by a more robust implementation.
             Depth d = std::max(1, std::min(newDepth - r / 1024, newDepth + 2)) + PvNode;
+            leviathanReducedDepth = d;
 
             ss->reduction = newDepth - d;
             value         = -search<NonPV>(pos, ss + 1, -(alpha + 1), -alpha, d, true);
             ss->reduction = 0;
+            leviathanReducedValue = value;
 
             // Do a full-depth search when reduced LMR search fails high
             // (*Scaler) Shallower searches here don't scale well
@@ -1388,7 +1413,10 @@ moves_loop:  // When in check, search starts here
                 newDepth += doDeeperSearch - doShallowerSearch;
 
                 if (newDepth > d)
+                {
+                    leviathanResearched = true;
                     value = -search<NonPV>(pos, ss + 1, -(alpha + 1), -alpha, newDepth, !cutNode);
+                }
 
                 // Post LMR continuation history updates
                 update_continuation_histories(ss, movedPiece, move.to_sq(), 1334);
@@ -1411,6 +1439,8 @@ moves_loop:  // When in check, search starts here
         // otherwise let the parent node fail low with value <= alpha and try another move.
         if (PvNode && (moveCount == 1 || value > alpha))
         {
+            if (leviathanReducedValue != VALUE_NONE)
+                leviathanResearched = true;
             (ss + 1)->pv = &pv;
             (ss + 1)->pv->clear();
 
@@ -1423,6 +1453,14 @@ moves_loop:  // When in check, search starts here
 
             value = -search<PV>(pos, ss + 1, -beta, -alpha, newDepth, false);
         }
+
+        if (leviathanReducedValue != VALUE_NONE)
+            Leviathan::Trace::record_lmr(
+              leviathanParentKey, move.raw(),
+              Leviathan::Trace::features(depth, moveCount, ss->statScore, correctionValue, PvNode,
+                                          cutNode, allNode, capture, givesCheck, ttData.depth,
+                                          ss->staticEval, alpha),
+              leviathanReducedValue, value, leviathanReducedDepth, newDepth, leviathanResearched);
 
         // Step 19. Undo move
         undo_move(pos, move);
