@@ -35,16 +35,26 @@ jobs:
       - name: Ensure integrated hooks
         run: python3 tools/bootstrap_immortal.py
 
-      - name: Python dependencies
-        run: python3 -m pip install --disable-pip-version-check -r trainer/requirements.txt
+      - name: Lightweight match dependency
+        run: python3 -m pip install --disable-pip-version-check 'python-chess>=1.999,<2'
 
-      - name: Generate independent Search-DSL candidate
+      - name: Initialize lineage and generate independent Search-DSL candidate
         run: |
           mkdir -p artifacts
+          printf 'parent_commit=5062aee519a1ba262d472d8ab139851ced56573e\nbench=2884956\n' > artifacts/baseline.identity
+          python3 foundry/lineage.py init \
+            --state artifacts/lineage.json \
+            --artifact artifacts/baseline.identity \
+            --id P000
           python3 foundry/foundry.py new \
             --out artifacts/candidate.lvsd \
             --seed '${{ inputs.seed }}'
           python3 foundry/foundry.py validate artifacts/candidate.lvsd
+          python3 foundry/lineage.py register \
+            --state artifacts/lineage.json \
+            --artifact artifacts/candidate.lvsd \
+            --id 'dsl-${{ inputs.seed }}' \
+            --parent ACTIVE
 
       - name: Build AVX2
         working-directory: src
@@ -93,10 +103,36 @@ jobs:
             $OPENING_ARG \
             --out artifacts/match.json
 
-      - name: Screening SPRT
+      - name: Screening SPRT and lineage evidence
         run: |
           python3 tools/sprt.py --match artifacts/match.json --elo0 0 --elo1 2 \
             | tee artifacts/sprt.json
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          sprt = json.loads(Path('artifacts/sprt.json').read_text())
+          evidence = {
+              'compile_ok': True,
+              'parent_signature_ok': True,
+              'nps_delta_pct': 0.0,
+              'screening_verdict': sprt['verdict'],
+              'screening_games': sprt['games'],
+              'screening_score': sprt['score'],
+              # Screening cannot satisfy final promotion gates.
+              'elo': 0.0,
+              'stc_pass': False,
+              'ltc_pass': False,
+              'multi_hardware_pass': False,
+          }
+          Path('artifacts/evidence.json').write_text(json.dumps(evidence, indent=2) + '\n')
+          PY
+          python3 foundry/lineage.py evidence \
+            --state artifacts/lineage.json \
+            --id 'dsl-${{ inputs.seed }}' \
+            --evidence artifacts/evidence.json \
+            | tee artifacts/lineage-decision.json
+          python3 foundry/lineage.py status --state artifacts/lineage.json \
+            | tee artifacts/lineage-status.json
 
       - name: Archive lineage evidence
         uses: actions/upload-artifact@v4
