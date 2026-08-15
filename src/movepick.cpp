@@ -23,6 +23,7 @@
 #include <utility>
 
 #include "bitboard.h"
+#include "leviathan_policy.h"
 #include "misc.h"
 #include "position.h"
 
@@ -244,9 +245,13 @@ ExtMove* MovePicker::score(const MoveList<Type>& ml) {
             int v = 20 * (bool(threatByLesser[pt] & from) - bool(threatByLesser[pt] & to));
             m.value += PieceValue[pt] * v;
 
-
             if (ply < LOW_PLY_HISTORY_SIZE)
                 m.value += 8 * (*lowPlyHistory)[ply][m.raw()] / (1 + ply);
+
+            // Leviathan P001: add a bounded learned prior only to quiet move ordering.
+            // With no valid model loaded this is exactly zero, preserving the parent
+            // engine's ordering and deterministic bench signature.
+            m.value += Leviathan::Policy::ordering_bonus(pos, m);
         }
 
         else  // Type == EVASIONS
