@@ -58,6 +58,14 @@ def register(args: argparse.Namespace) -> None:
     print(json.dumps(entry, sort_keys=True))
 
 
+def base_gates_pass(e: dict[str, Any]) -> bool:
+    return (
+        bool(e.get("compile_ok", False))
+        and bool(e.get("parent_signature_ok", False))
+        and float(e.get("nps_delta_pct", 0.0)) >= float(e.get("min_nps_delta_pct", -5.0))
+    )
+
+
 def evidence_passes(e: dict[str, Any]) -> tuple[bool, list[str]]:
     failures: list[str] = []
     if not bool(e.get("compile_ok", False)):
@@ -77,12 +85,7 @@ def evidence_passes(e: dict[str, Any]) -> tuple[bool, list[str]]:
 
 
 def screen_passes(e: dict[str, Any]) -> bool:
-    return (
-        bool(e.get("compile_ok", False))
-        and bool(e.get("parent_signature_ok", False))
-        and float(e.get("nps_delta_pct", 0.0)) >= float(e.get("min_nps_delta_pct", -5.0))
-        and str(e.get("screening_verdict", "")) in {"ACCEPT_H1", "PASS"}
-    )
+    return base_gates_pass(e) and str(e.get("screening_verdict", "")) in {"ACCEPT_H1", "PASS"}
 
 
 def apply_evidence(args: argparse.Namespace) -> None:
@@ -93,6 +96,8 @@ def apply_evidence(args: argparse.Namespace) -> None:
     entry = data["candidates"][args.id]
     entry["evidence"].append({"at": now(), "file": str(args.evidence), "data": e})
     passed, failures = evidence_passes(e)
+    verdict = str(e.get("screening_verdict", ""))
+
     if passed:
         previous = data.get("active")
         if previous and previous != args.id and previous in data["candidates"]:
@@ -106,13 +111,19 @@ def apply_evidence(args: argparse.Namespace) -> None:
     elif screen_passes(e):
         entry["status"] = "SCREENED"
         event = "SCREEN"
+    elif base_gates_pass(e) and verdict in {"CONTINUE", "RETEST", ""}:
+        # Inconclusive evidence is not negative evidence. Preserve the candidate
+        # and its ancestry so more games can be appended later.
+        entry["status"] = "PROVISIONAL"
+        event = "RETEST"
     else:
         entry["status"] = "CONTESTED" if entry.get("status") == "ACTIVE" else "REJECTED"
         entry["failures"] = failures
         event = entry["status"]
+
     data["history"].append({"at": now(), "event": event, "candidate": args.id, "failures": failures})
     save(args.state, data)
-    print(json.dumps({"candidate": args.id, "status": entry["status"], "failures": failures}, sort_keys=True))
+    print(json.dumps({"candidate": args.id, "status": entry["status"], "event": event, "failures": failures}, sort_keys=True))
 
 
 def contest(args: argparse.Namespace) -> None:
