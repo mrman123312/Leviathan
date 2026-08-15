@@ -37,12 +37,37 @@ def digest_file(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+def init_baseline(args: argparse.Namespace) -> None:
+    data = load(args.state)
+    if data.get("active") is not None or data.get("candidates"):
+        raise SystemExit("lineage already initialized")
+    candidate_id = args.id or digest_file(args.artifact)[:16]
+    entry = {
+        "id": candidate_id,
+        "parent": None,
+        "artifact": str(args.artifact),
+        "artifact_sha256": digest_file(args.artifact),
+        "status": "ACTIVE",
+        "created_at": now(),
+        "promoted_at": now(),
+        "baseline": True,
+        "evidence": [],
+    }
+    data["candidates"][candidate_id] = entry
+    data["active"] = candidate_id
+    data["history"].append({"at": now(), "event": "INIT_BASELINE", "candidate": candidate_id})
+    save(args.state, data)
+    print(json.dumps(entry, sort_keys=True))
+
+
 def register(args: argparse.Namespace) -> None:
     data = load(args.state)
     candidate_id = args.id or digest_file(args.artifact)[:16]
     if candidate_id in data["candidates"]:
         raise SystemExit(f"candidate already exists: {candidate_id}")
     parent = args.parent if args.parent != "ACTIVE" else data.get("active")
+    if parent is not None and parent not in data["candidates"]:
+        raise SystemExit(f"unknown parent: {parent}")
     entry = {
         "id": candidate_id,
         "parent": parent,
@@ -94,6 +119,8 @@ def apply_evidence(args: argparse.Namespace) -> None:
         raise SystemExit(f"unknown candidate: {args.id}")
     e = json.loads(args.evidence.read_text(encoding="utf-8"))
     entry = data["candidates"][args.id]
+    if entry.get("baseline"):
+        raise SystemExit("baseline evidence is immutable; register a descendant")
     entry["evidence"].append({"at": now(), "file": str(args.evidence), "data": e})
     passed, failures = evidence_passes(e)
     verdict = str(e.get("screening_verdict", ""))
@@ -131,6 +158,8 @@ def contest(args: argparse.Namespace) -> None:
     if args.id not in data["candidates"]:
         raise SystemExit(f"unknown candidate: {args.id}")
     entry = data["candidates"][args.id]
+    if entry.get("baseline"):
+        raise SystemExit("baseline cannot be contested; register a new baseline only by starting a new lineage")
     entry["status"] = "CONTESTED"
     entry["contest_reason"] = args.reason
     data["history"].append({"at": now(), "event": "CONTEST", "candidate": args.id, "reason": args.reason})
@@ -166,6 +195,10 @@ def status(args: argparse.Namespace) -> None:
 def main() -> None:
     ap = argparse.ArgumentParser()
     sub = ap.add_subparsers(dest="cmd", required=True)
+    i = sub.add_parser("init")
+    i.add_argument("--state", type=Path, required=True)
+    i.add_argument("--artifact", type=Path, required=True)
+    i.add_argument("--id")
     r = sub.add_parser("register")
     r.add_argument("--state", type=Path, required=True)
     r.add_argument("--artifact", type=Path, required=True)
@@ -185,7 +218,9 @@ def main() -> None:
     s = sub.add_parser("status")
     s.add_argument("--state", type=Path, required=True)
     args = ap.parse_args()
-    if args.cmd == "register":
+    if args.cmd == "init":
+        init_baseline(args)
+    elif args.cmd == "register":
         register(args)
     elif args.cmd == "evidence":
         apply_evidence(args)
