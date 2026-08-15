@@ -116,10 +116,14 @@ jobs:
           printf '{"fen":"8/8/8/8/8/8/4K3/7k w - - 0 1","rank":1,"score_cp":0,"teacher_nodes":1000,"pv":["e2e3","h1g1"]}\n' > /tmp/pv-skills.jsonl
           python3 trainer/pv_skills.py pack --skills /tmp/pv-skills.jsonl --out /tmp/test.lvps
           grep -q '^LVPS1$' /tmp/test.lvps
-          python3 foundry/lineage.py register --state /tmp/lineage.json --artifact /tmp/candidate.lvsd --id ci-candidate
+          printf 'parent=5062aee519a1ba262d472d8ab139851ced56573e\nbench=2884956\n' > /tmp/baseline.identity
+          python3 foundry/lineage.py init --state /tmp/lineage.json --artifact /tmp/baseline.identity --id P000
+          python3 foundry/lineage.py register --state /tmp/lineage.json --artifact /tmp/candidate.lvsd --id ci-candidate --parent ACTIVE
           printf '{"compile_ok":true,"parent_signature_ok":true,"nps_delta_pct":0,"screening_verdict":"PASS","stc_pass":true,"ltc_pass":true,"multi_hardware_pass":true,"elo":1.0}\n' > /tmp/evidence.json
           python3 foundry/lineage.py evidence --state /tmp/lineage.json --id ci-candidate --evidence /tmp/evidence.json
           python3 foundry/lineage.py status --state /tmp/lineage.json | grep -q '"active": "ci-candidate"'
+          python3 foundry/lineage.py rollback --state /tmp/lineage.json --reason ci-test
+          python3 foundry/lineage.py status --state /tmp/lineage.json | grep -q '"active": "P000"'
           python3 specialists/mate_prover.py --fen '7k/8/5KQ1/8/8/8/8/8 w - - 0 1' --plies 1 --max-nodes 1000 --out /tmp/mate.jsonl
           grep -q '"proven":true' /tmp/mate.jsonl
           python3 specialists/goal_attractor.py build --lines /tmp/mate.jsonl --out /tmp/goal.lvga
