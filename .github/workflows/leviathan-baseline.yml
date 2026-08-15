@@ -1,0 +1,69 @@
+name: Leviathan Baseline
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - leviathan/phase0-baseline
+
+permissions:
+  contents: read
+
+jobs:
+  baseline:
+    runs-on: ubuntu-22.04
+    defaults:
+      run:
+        working-directory: src
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Record environment
+        run: |
+          mkdir -p ../artifacts
+          {
+            echo "commit=$(git rev-parse HEAD)"
+            echo "date_utc=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            echo "runner_os=$RUNNER_OS"
+            echo "runner_arch=$RUNNER_ARCH"
+            echo "uname=$(uname -a)"
+            echo "compiler=$(g++ --version | head -n1)"
+            echo "make=$(make --version | head -n1)"
+            echo "cpu_model=$(grep -m1 'model name' /proc/cpuinfo | cut -d: -f2- | xargs)"
+            echo "logical_cpus=$(nproc)"
+          } | tee ../artifacts/environment.txt
+
+      - name: Download NNUE network
+        run: make net | tee ../artifacts/make-net.txt
+
+      - name: Build AVX2 baseline
+        run: |
+          make clean
+          make -j2 ARCH=x86-64-avx2 build 2>&1 | tee ../artifacts/build.txt
+
+      - name: Verify UCI
+        run: |
+          printf 'uci\nisready\nquit\n' | ./stockfish | tee ../artifacts/uci.txt
+          grep -q '^uciok$' ../artifacts/uci.txt
+          grep -q '^readyok$' ../artifacts/uci.txt
+
+      - name: Run bench
+        run: |
+          ./stockfish bench 2>&1 | tee ../artifacts/bench.txt
+          grep -q 'Nodes searched' ../artifacts/bench.txt
+
+      - name: Record network identity
+        run: |
+          ls -lh nn-*.nnue 2>/dev/null | tee ../artifacts/networks.txt || true
+          sha256sum nn-*.nnue 2>/dev/null | tee ../artifacts/network-sha256.txt || true
+
+      - name: Upload baseline record
+        uses: actions/upload-artifact@v4
+        with:
+          name: leviathan-phase0-baseline-${{ github.sha }}
+          path: artifacts/
+          if-no-files-found: error
