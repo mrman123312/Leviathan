@@ -1,0 +1,3 @@
+id,parent,hypothesis,change,nps_delta,stc_elo,ltc_elo,status,decision,notes
+P000,5062aee519a1ba262d472d8ab139851ced56573e,Reproducible parent behaves as expected,Baseline only,,,,RUNNING,RETEST,Freeze compiler CPU NNUE and bench evidence
+P001,P000,A cheap learned quiet-move prior can improve cutoff ordering enough to beat inference cost,Bounded policy bonus in MovePicker quiet scoring,,,,IMPLEMENTED,RETEST,Neutral without an LVTP1 model; strength claim forbidden until match evidence

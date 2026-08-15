@@ -1,0 +1,85 @@
+name: Leviathan Core
+
+on:
+  push:
+    branches:
+      - leviathan/core-v0
+  pull_request:
+    branches:
+      - master
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  core:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Python syntax
+        run: |
+          python3 -m py_compile trainer/model.py trainer/train.py trainer/export.py trainer/generate_dataset.py trainer/split_dataset.py tools/elo.py
+
+      - name: Download NNUE network
+        working-directory: src
+        run: make net
+
+      - name: Build AVX2
+        working-directory: src
+        run: |
+          make clean
+          make -j2 ARCH=x86-64-avx2 build
+
+      - name: Verify UCI
+        working-directory: src
+        run: |
+          printf 'uci\nisready\nquit\n' | ./stockfish | tee ../uci.txt
+          grep -q '^uciok$' ../uci.txt
+          grep -q '^readyok$' ../uci.txt
+
+      - name: Parent-equivalent bench with policy disabled
+        working-directory: src
+        run: |
+          ./stockfish bench 2>&1 | tee ../bench-off.txt
+          grep 'Nodes searched' ../bench-off.txt > ../nodes-off.txt
+
+      - name: Build neutral LVTP1 model
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('neutral.lvtp')
+          lines = ['LVTP1 12 16']
+          lines += [' '.join(['0'] * 12) for _ in range(16)]
+          lines += [' '.join(['0'] * 16)]
+          lines += [' '.join(['0'] * 16)]
+          lines += ['0']
+          p.write_text('\n'.join(lines) + '\n', encoding='utf-8')
+          PY
+
+      - name: Neutral policy preserves search tree
+        working-directory: src
+        env:
+          LEVIATHAN_POLICY: "1"
+          LEVIATHAN_POLICY_FILE: ../neutral.lvtp
+          LEVIATHAN_POLICY_WEIGHT: "100"
+        run: |
+          ./stockfish bench 2>&1 | tee ../bench-neutral.txt
+          grep 'Nodes searched' ../bench-neutral.txt > ../nodes-neutral.txt
+          diff -u ../nodes-off.txt ../nodes-neutral.txt
+
+      - name: Archive validation logs
+        uses: actions/upload-artifact@v4
+        with:
+          name: leviathan-core-${{ github.sha }}
+          path: |
+            uci.txt
+            bench-off.txt
+            bench-neutral.txt
+            nodes-off.txt
+            nodes-neutral.txt
+            neutral.lvtp
