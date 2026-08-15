@@ -1,0 +1,106 @@
+name: Leviathan Immortal Lineage
+
+on:
+  workflow_dispatch:
+    inputs:
+      seed:
+        description: Search Foundry candidate seed
+        required: true
+        default: '8910'
+      games:
+        description: Paired screening games
+        required: true
+        default: '20'
+      movetime_ms:
+        description: Wall-clock milliseconds per move per engine
+        required: true
+        default: '50'
+      openings_path:
+        description: Optional repository path containing one FEN per line
+        required: false
+        default: ''
+
+permissions:
+  contents: read
+
+jobs:
+  candidate:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Ensure integrated hooks
+        run: python3 tools/bootstrap_immortal.py
+
+      - name: Python dependencies
+        run: python3 -m pip install --disable-pip-version-check -r trainer/requirements.txt
+
+      - name: Generate independent Search-DSL candidate
+        run: |
+          mkdir -p artifacts
+          python3 foundry/foundry.py new \
+            --out artifacts/candidate.lvsd \
+            --seed '${{ inputs.seed }}'
+          python3 foundry/foundry.py validate artifacts/candidate.lvsd
+
+      - name: Build AVX2
+        working-directory: src
+        run: |
+          make net
+          make clean
+          make -j2 ARCH=x86-64-avx2 build
+
+      - name: Parent signature
+        working-directory: src
+        run: |
+          ./stockfish bench 2>&1 | tee ../artifacts/parent-bench.txt
+          grep -q '2884956' ../artifacts/parent-bench.txt
+
+      - name: Write A/B option files
+        run: |
+          cat > artifacts/parent.json <<'EOF'
+          {
+            "Threads": 1,
+            "Hash": 64
+          }
+          EOF
+          cat > artifacts/candidate.json <<EOF
+          {
+            "Threads": 1,
+            "Hash": 64,
+            "Leviathan Search DSL File": "${GITHUB_WORKSPACE}/artifacts/candidate.lvsd",
+            "Leviathan Search DSL Authority": 1,
+            "Leviathan Search DSL": true
+          }
+          EOF
+
+      - name: Paired same-binary screening match
+        run: |
+          OPENING_ARG=''
+          if [ -n '${{ inputs.openings_path }}' ]; then
+            OPENING_ARG="--openings ${{ inputs.openings_path }}"
+          fi
+          python3 tools/run_match.py \
+            --engine-a "${GITHUB_WORKSPACE}/src/stockfish" \
+            --engine-b "${GITHUB_WORKSPACE}/src/stockfish" \
+            --options-a artifacts/candidate.json \
+            --options-b artifacts/parent.json \
+            --games '${{ inputs.games }}' \
+            --movetime-ms '${{ inputs.movetime_ms }}' \
+            $OPENING_ARG \
+            --out artifacts/match.json
+
+      - name: Screening SPRT
+        run: |
+          python3 tools/sprt.py --match artifacts/match.json --elo0 0 --elo1 2 \
+            | tee artifacts/sprt.json
+
+      - name: Archive lineage evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: immortal-lineage-seed-${{ inputs.seed }}-${{ github.sha }}
+          path: artifacts/
+          if-no-files-found: error
