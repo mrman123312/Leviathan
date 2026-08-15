@@ -27,7 +27,8 @@ jobs:
           python3 -m py_compile \
             tools/bootstrap_immortal.py tools/run_match.py tools/sprt.py \
             trainer/train_control.py trainer/generate_metasearch_dataset.py trainer/pv_skills.py \
-            atlas/atlas_tool.py foundry/foundry.py specialists/mate_prover.py
+            atlas/atlas_tool.py foundry/foundry.py foundry/lineage.py \
+            specialists/mate_prover.py specialists/goal_attractor.py
 
       - name: Apply guarded Stockfish hooks
         run: python3 tools/bootstrap_immortal.py
@@ -112,6 +113,10 @@ jobs:
           printf '{"fen":"8/8/8/8/8/8/4K3/7k w - - 0 1","rank":1,"score_cp":0,"teacher_nodes":1000,"pv":["e2e3","h1g1"]}\n' > /tmp/pv-skills.jsonl
           python3 trainer/pv_skills.py pack --skills /tmp/pv-skills.jsonl --out /tmp/test.lvps
           grep -q '^LVPS1$' /tmp/test.lvps
+          python3 foundry/lineage.py register --state /tmp/lineage.json --artifact /tmp/candidate.lvsd --id ci-candidate
+          printf '{"compile_ok":true,"parent_signature_ok":true,"nps_delta_pct":0,"screening_verdict":"PASS","stc_pass":true,"ltc_pass":true,"multi_hardware_pass":true,"elo":1.0}\n' > /tmp/evidence.json
+          python3 foundry/lineage.py evidence --state /tmp/lineage.json --id ci-candidate --evidence /tmp/evidence.json
+          python3 foundry/lineage.py status --state /tmp/lineage.json | grep -q '"active": "ci-candidate"'
           python3 tools/sprt.py --wins 10 --draws 20 --losses 10
 
       - name: Commit validated source hooks
