@@ -30,6 +30,9 @@ jobs:
             atlas/atlas_tool.py foundry/foundry.py foundry/lineage.py \
             specialists/mate_prover.py specialists/goal_attractor.py
 
+      - name: Install lightweight specialist dependency
+        run: python3 -m pip install --disable-pip-version-check 'python-chess>=1.999,<2'
+
       - name: Apply guarded Stockfish hooks
         run: python3 tools/bootstrap_immortal.py
 
@@ -117,6 +120,11 @@ jobs:
           printf '{"compile_ok":true,"parent_signature_ok":true,"nps_delta_pct":0,"screening_verdict":"PASS","stc_pass":true,"ltc_pass":true,"multi_hardware_pass":true,"elo":1.0}\n' > /tmp/evidence.json
           python3 foundry/lineage.py evidence --state /tmp/lineage.json --id ci-candidate --evidence /tmp/evidence.json
           python3 foundry/lineage.py status --state /tmp/lineage.json | grep -q '"active": "ci-candidate"'
+          python3 specialists/mate_prover.py --fen '7k/8/5KQ1/8/8/8/8/8 w - - 0 1' --plies 1 --max-nodes 1000 --out /tmp/mate.jsonl
+          grep -q '"proven":true' /tmp/mate.jsonl
+          python3 specialists/goal_attractor.py build --lines /tmp/mate.jsonl --out /tmp/goal.lvga
+          python3 specialists/goal_attractor.py query --index /tmp/goal.lvga --fen '7k/8/5KQ1/8/8/8/8/8 w - - 0 1' --max-plies 1 --max-nodes 100 | tee /tmp/goal-query.json
+          grep -q '"found": true' /tmp/goal-query.json
           python3 tools/sprt.py --wins 10 --draws 20 --losses 10
 
       - name: Commit validated source hooks
