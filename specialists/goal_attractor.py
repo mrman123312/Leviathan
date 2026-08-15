@@ -37,8 +37,6 @@ def load_jsonl(path: Path) -> list[dict[str, Any]]:
 def infer_goal(board: chess.Board) -> str:
     if board.is_checkmate():
         return "mate"
-    if any(p.promotion for p in []):  # structural placeholder kept explicit
-        return "promotion"
     if board.is_game_over(claim_draw=True):
         return "terminal"
     return "tactical-line-end"
@@ -62,6 +60,8 @@ def build(args: argparse.Namespace) -> None:
             board.push(move)
         if not states:
             continue
+        # Promotion/material targets should be provided explicitly by the source
+        # artifact; only terminal board states can be inferred without ambiguity.
         goal = str(row.get("goal", infer_goal(board)))
         source = str(row.get("source", row.get("position_id", "unknown")))
         confidence = int(row.get("confidence", 1000 if row.get("proven") else 500))
