@@ -1,0 +1,214 @@
+name: Leviathan vs Stockfish H2H
+
+on:
+  push:
+    branches:
+      - leviathan/h2h-20260815
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  match:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout Leviathan
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          path: leviathan
+
+      - name: Checkout official Stockfish current master
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          repository: official-stockfish/Stockfish
+          ref: 5062aee519a1ba262d472d8ab139851ced56573e
+          path: official
+
+      - name: Install match dependency
+        run: python3 -m pip install --disable-pip-version-check 'python-chess>=1.999,<2'
+
+      - name: Build Leviathan AVX2
+        working-directory: leviathan/src
+        run: |
+          make net
+          make clean
+          make -j2 ARCH=x86-64-avx2 build
+          mv stockfish stockfish-leviathan
+
+      - name: Build official Stockfish AVX2
+        working-directory: official/src
+        run: |
+          make net
+          make clean
+          make -j2 ARCH=x86-64-avx2 build
+          mv stockfish stockfish-official
+
+      - name: Create current-use Leviathan artifacts
+        working-directory: leviathan
+        run: |
+          mkdir -p h2h
+          python3 - <<'PY'
+          from pathlib import Path
+          # Learned organs are enabled with neutral models because no trained
+          # artifacts exist yet. They are intentionally zero-effect rather than
+          # filled with fabricated knowledge.
+          p = Path('h2h/neutral-policy.lvtp')
+          lines = ['LVTP1 12 16']
+          lines += [' '.join(['0'] * 12) for _ in range(16)]
+          lines += [' '.join(['0'] * 16)]
+          lines += [' '.join(['0'] * 16)]
+          lines += ['0']
+          p.write_text('\n'.join(lines) + '\n')
+          Path('h2h/neutral-meta.lvtm').write_text('LVTM1 8 1 1\n' + ' '.join(['0'] * 9) + '\n')
+          Path('h2h/neutral-risk.lvtr').write_text('LVTR1 12 1 1\n' + ' '.join(['0'] * 13) + '\n')
+          Path('h2h/empty.lvta').write_text('LVTA1\n')
+          # Conservative, non-trained current control: only buy back a fraction
+          # of an LMR ply for checks, captures, and PV nodes. Authority=1 means
+          # the DSL is structurally forbidden from making reductions harsher.
+          Path('h2h/conservative.lvsd').write_text(
+              'LVSD1\n'
+              'IFGT 8 0 -192\n'
+              'IFGT 7 0 -96\n'
+              'IFGT 4 0 -64\n'
+              'CLAMP -256 0\n'
+          )
+          PY
+          cat > h2h/leviathan-options.json <<EOF
+          {
+            "Threads": 1,
+            "Hash": 64,
+            "Leviathan Policy File": "${GITHUB_WORKSPACE}/leviathan/h2h/neutral-policy.lvtp",
+            "Leviathan Policy Weight": 100,
+            "Leviathan Policy": true,
+            "Leviathan Meta File": "${GITHUB_WORKSPACE}/leviathan/h2h/neutral-meta.lvtm",
+            "Leviathan Meta Authority": 1,
+            "Leviathan Meta Max Percent": 30,
+            "Leviathan MetaSearch": true,
+            "Leviathan Risk File": "${GITHUB_WORKSPACE}/leviathan/h2h/neutral-risk.lvtr",
+            "Leviathan Risk Authority": 1,
+            "Leviathan Risk Threshold": 500,
+            "Leviathan Risk Veto": 1024,
+            "Leviathan Risk": true,
+            "Leviathan Specialist Veto": 256,
+            "Leviathan Specialist": true,
+            "Leviathan Atlas File": "${GITHUB_WORKSPACE}/leviathan/h2h/empty.lvta",
+            "Leviathan Atlas Weight": 100,
+            "Leviathan Atlas": true,
+            "Leviathan Search DSL File": "${GITHUB_WORKSPACE}/leviathan/h2h/conservative.lvsd",
+            "Leviathan Search DSL Authority": 1,
+            "Leviathan Search DSL Weight": 100,
+            "Leviathan Search DSL": true
+          }
+          EOF
+          cat > h2h/stockfish-options.json <<'EOF'
+          {
+            "Threads": 1,
+            "Hash": 64
+          }
+          EOF
+
+      - name: Generate 50 deterministic paired opening positions
+        working-directory: leviathan
+        run: |
+          python3 - <<'PY'
+          import chess, random
+          from pathlib import Path
+          seed_lines = [
+              ['e2e4','e7e5','g1f3','b8c6','f1b5'],
+              ['e2e4','c7c5','g1f3','d7d6','d2d4','c5d4','f3d4'],
+              ['e2e4','e7e6','d2d4','d7d5','b1c3'],
+              ['e2e4','c7c6','d2d4','d7d5','b1c3'],
+              ['d2d4','d7d5','c2c4','e7e6','b1c3'],
+              ['d2d4','g8f6','c2c4','g7g6','b1c3','f8g7'],
+              ['d2d4','g8f6','c2c4','e7e6','b1c3','f8b4'],
+              ['c2c4','e7e5','b1c3','g8f6','g2g3'],
+              ['g1f3','d7d5','g2g3','g8f6','f1g2'],
+              ['e2e4','g8f6','e4e5','f6d5','d2d4'],
+          ]
+          rng = random.Random(8910)
+          fens=[]
+          for i in range(50):
+              board=chess.Board()
+              for u in seed_lines[i % len(seed_lines)]:
+                  m=chess.Move.from_uci(u)
+                  if m in board.legal_moves:
+                      board.push(m)
+              # Add 2..6 deterministic legal plies for diversity; reversed-color
+              # pairing cancels any opening-side bias.
+              for _ in range(2 + (i % 5)):
+                  moves=list(board.legal_moves)
+                  moves.sort(key=lambda m: m.uci())
+                  if not moves or board.is_game_over():
+                      break
+                  board.push(moves[rng.randrange(len(moves))])
+              fens.append(board.fen())
+          Path('h2h/openings.fen').write_text('\n'.join(fens)+'\n')
+          print('openings', len(fens))
+          PY
+
+      - name: Run 100-game paired match at equal wall-clock
+        working-directory: leviathan
+        run: |
+          python3 tools/run_match.py \
+            --engine-a "${GITHUB_WORKSPACE}/leviathan/src/stockfish-leviathan" \
+            --engine-b "${GITHUB_WORKSPACE}/official/src/stockfish-official" \
+            --options-a h2h/leviathan-options.json \
+            --options-b h2h/stockfish-options.json \
+            --openings h2h/openings.fen \
+            --games 100 \
+            --movetime-ms 50 \
+            --max-plies 180 \
+            --out h2h/match.json | tee h2h/match.log
+
+      - name: Compute preliminary Elo and uncertainty
+        working-directory: leviathan
+        run: |
+          python3 - <<'PY'
+          import json, math, statistics
+          from pathlib import Path
+          d=json.loads(Path('h2h/match.json').read_text())
+          s=d['summary']
+          vals=[g['score_a'] for g in d['games']]
+          n=len(vals); p=sum(vals)/n
+          elo=400*math.log10(p/(1-p)) if 0 < p < 1 else (9999 if p==1 else -9999)
+          sd=statistics.stdev(vals) if n>1 else 0.0
+          se=sd/math.sqrt(n)
+          # Delta-method 95% interval for Elo from score uncertainty. Preliminary only.
+          lo=max(1e-6, p-1.96*se); hi=min(1-1e-6, p+1.96*se)
+          elo_lo=400*math.log10(lo/(1-lo)); elo_hi=400*math.log10(hi/(1-hi))
+          term={}
+          for g in d['games']:
+              term[g['termination']]=term.get(g['termination'],0)+1
+          report={
+              'leviathan_commit':'c7c50c0e42c484d6b67d81c91c5401bfae8d4008',
+              'stockfish_commit':'5062aee519a1ba262d472d8ab139851ced56573e',
+              'games':n,
+              'leviathan_wins':s['wins_a'],
+              'draws':s['draws'],
+              'leviathan_losses':s['losses_a'],
+              'score':p,
+              'preliminary_elo':elo,
+              'approx_95pct_elo':[elo_lo,elo_hi],
+              'terminations':term,
+              'time_control':'50 ms per move, 1 thread, 64 MB hash, paired openings/reversed colors',
+              'learned_organs':'enabled with neutral artifacts (zero learned signal)',
+              'nontrained_live_changes':'conservative tactical/PV LMR buyback via specialist + authority-1 Search DSL'
+          }
+          Path('h2h/report.json').write_text(json.dumps(report, indent=2)+'\n')
+          print(json.dumps(report, indent=2))
+          PY
+
+      - name: Archive match evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: leviathan-vs-stockfish-20260815
+          path: |
+            leviathan/h2h/match.json
+            leviathan/h2h/match.log
+            leviathan/h2h/report.json
+            leviathan/h2h/openings.fen
+            leviathan/h2h/leviathan-options.json
+            leviathan/h2h/stockfish-options.json
+            leviathan/h2h/conservative.lvsd
+          if-no-files-found: error
