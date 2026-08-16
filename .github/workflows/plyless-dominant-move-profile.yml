@@ -1,0 +1,49 @@
+name: Plyless dominant-move persistence profiler
+
+on:
+  push:
+    branches: [leviathan/plyless-v0-decision-depth]
+    paths: ['.github/workflows/plyless-dominant-move-profile.yml']
+  workflow_dispatch:
+
+permissions: {contents: read}
+
+jobs:
+  profile:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with: {repository: official-stockfish/Stockfish, ref: 5062aee519a1ba262d472d8ab139851ced56573e}
+      - name: Instrument width plus dominant move reuse
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path('src/search.cpp');s=p.read_text();s=s.replace('#include <utility>','#include <utility>\n#include <iostream>')
+          a='''namespace {\n\nconstexpr u64 NODES_LIMIT_OUTPUT'''
+          b='''namespace {\n\nstruct LVDomProfile {\n  struct E {Key key=0;u16 move=0;unsigned char width=255,depth=0;};\n  static constexpr usize Size=1u<<16; std::array<E,Size> t{};\n  unsigned long long qualified[7]{}, prior1[7]{}, prior1same[7]{}, prior1sameAndNow1[7]{}, prior1diffAndNow1[7]{}, ttMatchesPrior[7]{};\n  ~LVDomProfile(){for(int d=1;d<=6;++d)std::cerr<<"LVDOM "<<d<<" qualified "<<qualified[d]<<" prior1 "<<prior1[d]<<" same "<<prior1same[d]<<" sameNow1 "<<prior1sameAndNow1[d]<<" diffNow1 "<<prior1diffAndNow1[d]<<" ttMatch "<<ttMatchesPrior[d]<<'\\n';}\n};\nthread_local LVDomProfile lvdom; inline usize lvdomi(Key k){return usize((k^(k>>31)^(k>>17))&(LVDomProfile::Size-1));}\n\nconstexpr u64 NODES_LIMIT_OUTPUT'''
+          if s.count(a)!=1:raise SystemExit('ns');s=s.replace(a,b,1)
+          a='''    bool  capture, ttCapture;\n    int   priorReduction;'''
+          b='''    bool  capture, ttCapture;\n    const int lvED=int(depth); int lvCount=0; u16 lvFirst=0;\n    bool lvHit=false; unsigned char lvPW=255,lvPD=0; u16 lvPM=0;\n    int   priorReduction;'''
+          if s.count(a)!=1:raise SystemExit('loc');s=s.replace(a,b,1)
+          a='''    excludedMove                   = ss->excludedMove;\n    posKey                         = pos.key();\n    auto [ttHit, ttData, ttWriter] = tt.probe(posKey);'''
+          b='''    excludedMove                   = ss->excludedMove;\n    posKey                         = pos.key();\n    if(!excludedMove && lvED>=1 && lvED<=6){auto&e=lvdom.t[lvdomi(posKey)];if(e.key==posKey){lvHit=true;lvPW=e.width;lvPD=e.depth;lvPM=e.move;}}\n    auto [ttHit, ttData, ttWriter] = tt.probe(posKey);'''
+          if s.count(a)!=1:raise SystemExit('key');s=s.replace(a,b,1)
+          # After ttData move normalized, count TT agreement with previous dominant move.
+          a='''    ttCapture    = ttData.move && pos.capture_stage(ttData.move);'''
+          b='''    ttCapture    = ttData.move && pos.capture_stage(ttData.move);\n    if(lvHit && lvPW<=1 && int(lvPD)+1>=lvED && lvED>=1 && lvED<=6 && ttData.move && ttData.move.raw()==lvPM) ++lvdom.ttMatchesPrior[lvED];'''
+          if s.count(a)!=1:raise SystemExit('tt');s=s.replace(a,b,1)
+          a='''        // Step 16. Make the move\n        do_move(pos, move, st, givesCheck, ss);'''
+          b='''        // Step 16. Make the move\n        if(lvED>=1&&lvED<=6){if(lvCount==0)lvFirst=move.raw();++lvCount;}\n        do_move(pos, move, st, givesCheck, ss);'''
+          if s.count(a)!=1:raise SystemExit('dom');s=s.replace(a,b,1)
+          a='''    assert(bestValue > -VALUE_INFINITE && bestValue < VALUE_INFINITE);\n\n    return bestValue;\n}\n\n\n// Quiescence search function'''
+          b='''    assert(bestValue > -VALUE_INFINITE && bestValue < VALUE_INFINITE);\n    if(!excludedMove&&lvED>=1&&lvED<=6){\n      if(lvHit&&int(lvPD)+1>=lvED){++lvdom.qualified[lvED];if(lvPW<=1){++lvdom.prior1[lvED];if(lvFirst&&lvFirst==lvPM){++lvdom.prior1same[lvED];if(lvCount<=1)++lvdom.prior1sameAndNow1[lvED];}else if(lvCount<=1)++lvdom.prior1diffAndNow1[lvED];}}\n      auto&e=lvdom.t[lvdomi(posKey)];if(e.key!=posKey||lvED>=int(e.depth)){e.key=posKey;e.move=lvFirst;e.width=static_cast<unsigned char>(std::min(lvCount,254));e.depth=static_cast<unsigned char>(lvED);}\n    }\n    return bestValue;\n}\n\n\n// Quiescence search function'''
+          if s.count(a)!=1:raise SystemExit('end');p.write_text(s.replace(a,b,1))
+          PY
+      - name: Build and profile
+        working-directory: src
+        run: |
+          make net && make clean && make -j2 ARCH=x86-64-avx2 build
+          ./stockfish bench 2>&1 | tee ../dominant.txt
+          grep '^LVDOM' ../dominant.txt
+      - uses: actions/upload-artifact@v4
+        with: {name: plyless-dominant-move-profile, path: dominant.txt}
