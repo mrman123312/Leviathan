@@ -105,6 +105,14 @@ Engine::Engine(std::optional<std::filesystem::path> path) :
           return std::nullopt;
       }));
 
+    // Diagnostic-only separation of TT reuse from persistent search histories.
+    options.add(  //
+      "Clear TT Only", Option([this](const Option&) {
+          wait_for_search_finished();
+          tt.clear(threads);
+          return std::nullopt;
+      }));
+
     options.add(  //
       "Ponder", Option(false));
 
