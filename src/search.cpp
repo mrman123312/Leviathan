@@ -1418,6 +1418,23 @@ moves_loop:  // When in check, search starts here
             ss->reduction = 0;
             leviathanReducedValue = value;
 
+            // Sparse principal-frontier uncertainty verification.  Revisit only
+            // quiet, early PV rivals whose reduced score sits just below alpha.
+            // This is intentionally a narrow, falsifiable version of uncertainty
+            // allocation rather than a general reduction rollback.
+            if ((PvNode || ss->ttPv) && d + 1 < newDepth && depth >= 6 && moveCount <= 8
+                && !capture && !givesCheck && value <= alpha && value >= alpha - 12)
+            {
+                const Depth verifyDepth = std::min(newDepth - 1, d + 2);
+                if (verifyDepth > d)
+                {
+                    leviathanResearched = true;
+                    ss->reduction       = newDepth - verifyDepth;
+                    value = -search<NonPV>(pos, ss + 1, -(alpha + 1), -alpha, verifyDepth, true);
+                    ss->reduction = 0;
+                }
+            }
+
             // Do a full-depth search when reduced LMR search fails high
             // (*Scaler) Shallower searches here don't scale well
             if (value > alpha)
@@ -1588,7 +1605,13 @@ moves_loop:  // When in check, search starts here
 
                 // Reduce other moves if we have found at least one score improvement
                 if (depth > 3 && depth < 12 && !is_decisive(value))
-                    depth -= 3;
+                {
+                    const int improvement = std::max(1, int(value + inc - alpha));
+                    depth -= (PvNode || ss->ttPv) && depth >= 6 && moveCount <= 8
+                                 && improvement <= 16
+                               ? 1
+                               : 3;
+                }
 
                 assert(depth > 0);
                 alpha = value;  // Update alpha! Always alpha < beta
