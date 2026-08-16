@@ -1,0 +1,111 @@
+name: Leviathan Fundamentals v2.2 Bootstrap
+
+on:
+  push:
+    branches:
+      - leviathan/fundamentals-v2.2
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fundamentals-v22-bootstrap-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  bootstrap:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+
+      - name: Download NNUE
+        working-directory: src
+        run: make net
+
+      - name: Build AVX2
+        working-directory: src
+        run: |
+          make clean
+          make -j2 ARCH=x86-64-avx2 build 2>&1 | tee ../build-v22.txt
+
+      - name: Verify UCI
+        working-directory: src
+        run: |
+          printf 'uci\nquit\n' | ./stockfish | tee ../uci-v22.txt
+          grep -q '^uciok$' ../uci-v22.txt
+          grep -q 'option name Leviathan Fundamentals ' ../uci-v22.txt
+          grep -q 'option name Leviathan Fundamentals Authority ' ../uci-v22.txt
+
+      - name: Frozen parent bench
+        working-directory: src
+        run: |
+          ./stockfish bench 2>&1 | tee ../bench-off.txt
+          grep 'Nodes searched' ../bench-off.txt > ../nodes-off.txt
+          grep -q '2884956' ../nodes-off.txt
+
+      - name: Authority zero exact equivalence
+        working-directory: src
+        run: |
+          cat > ../authority0.uci <<'EOF'
+          setoption name Leviathan Fundamentals value true
+          setoption name Leviathan Fundamentals Authority value 0
+          bench
+          quit
+          EOF
+          ./stockfish < ../authority0.uci 2>&1 | tee ../bench-auth0.txt
+          grep 'Nodes searched' ../bench-auth0.txt > ../nodes-auth0.txt
+          diff -u ../nodes-off.txt ../nodes-auth0.txt
+
+      - name: Active authority benches
+        working-directory: src
+        run: |
+          for AUTH in 1 2; do
+            cat > ../active.uci <<EOF
+          setoption name Leviathan Fundamentals value true
+          setoption name Leviathan Fundamentals Authority value $AUTH
+          bench
+          quit
+          EOF
+            ./stockfish < ../active.uci 2>&1 | tee ../bench-auth${AUTH}.txt
+            grep -E 'Nodes searched|Nodes/second' ../bench-auth${AUTH}.txt
+          done
+
+      - name: Repeated authority-2 speed panel
+        working-directory: src
+        run: |
+          python3 - <<'PY' | tee ../speed-panel.txt
+          import re, subprocess, statistics
+          vals=[]
+          nodes=[]
+          cmd='setoption name Leviathan Fundamentals value true\nsetoption name Leviathan Fundamentals Authority value 2\nbench\nquit\n'
+          for i in range(7):
+              p=subprocess.run(['./stockfish'], input=cmd, text=True, capture_output=True, check=True)
+              out=p.stdout+p.stderr
+              n=int(re.findall(r'Nodes searched\s*:\s*(\d+)', out)[-1])
+              s=int(re.findall(r'Nodes/second\s*:\s*(\d+)', out)[-1])
+              nodes.append(n); vals.append(s)
+              print(i+1,n,s)
+          print('median_nodes', int(statistics.median(nodes)))
+          print('mean_nodes', statistics.mean(nodes))
+          print('median_nps', int(statistics.median(vals)))
+          print('mean_nps', statistics.mean(vals))
+          PY
+
+      - name: Archive evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fundamentals-v22-bootstrap-${{ github.sha }}
+          path: |
+            build-v22.txt
+            uci-v22.txt
+            bench-off.txt
+            bench-auth0.txt
+            bench-auth1.txt
+            bench-auth2.txt
+            nodes-off.txt
+            nodes-auth0.txt
+            speed-panel.txt
+          if-no-files-found: warn
