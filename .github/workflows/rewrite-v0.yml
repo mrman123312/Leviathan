@@ -1,0 +1,34 @@
+name: Leviathan Rewrite v0
+
+on:
+  push:
+    branches:
+      - leviathan/rewrite-v0-greenfield
+    paths:
+      - 'rewrite/**'
+      - '.github/workflows/rewrite-v0.yml'
+  pull_request:
+    paths:
+      - 'rewrite/**'
+      - '.github/workflows/rewrite-v0.yml'
+
+jobs:
+  greenfield-core:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure
+        run: cmake -S rewrite -B rewrite/build -DCMAKE_BUILD_TYPE=Release
+      - name: Build
+        run: cmake --build rewrite/build -j2
+      - name: Self-test
+        run: ctest --test-dir rewrite/build --output-on-failure
+      - name: UCI smoke
+        shell: bash
+        run: |
+          output=$(printf 'uci\nisready\nposition startpos\nperft 4\ngo depth 3\nquit\n' | rewrite/build/leviathan)
+          printf '%s\n' "$output"
+          grep -q 'uciok' <<<"$output"
+          grep -q 'readyok' <<<"$output"
+          grep -q 'nodes 197281' <<<"$output"
+          grep -q '^bestmove ' <<<"$output"
