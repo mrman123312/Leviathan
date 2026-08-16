@@ -1,0 +1,76 @@
+name: Frozen v2.2 interleaved speed
+
+on:
+  push:
+    branches: [leviathan/h2h-v22-100-20260815]
+    paths: ['.github/workflows/v22-interleaved-speed.yml']
+
+permissions:
+  contents: read
+
+jobs:
+  speed:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: b8cbdcbed9bb8bc28b62b3a7b98a5a07d3442f3e
+      - name: Build AVX2
+        working-directory: src
+        run: |
+          make net
+          make -j2 ARCH=x86-64-avx2 build
+      - name: Run 11 paired interleaved benches
+        working-directory: src
+        run: |
+          python3 - <<'PY' | tee ../interleaved-speed.txt
+          import re, subprocess, statistics, json
+
+          def run(active):
+              cmd=''
+              if active:
+                  cmd += 'setoption name Leviathan Fundamentals value true\n'
+                  cmd += 'setoption name Leviathan Fundamentals Authority value 2\n'
+                  cmd += 'setoption name Leviathan Quiet Overdrive value 160\n'
+              cmd += 'bench\nquit\n'
+              p=subprocess.run(['./stockfish'],input=cmd,text=True,capture_output=True,check=True)
+              out=p.stdout+p.stderr
+              ms=int(re.findall(r'Total time \(ms\)\s*:\s*(\d+)',out)[-1])
+              nodes=int(re.findall(r'Nodes searched\s*:\s*(\d+)',out)[-1])
+              nps=int(re.findall(r'Nodes/second\s*:\s*(\d+)',out)[-1])
+              return {'ms':ms,'nodes':nodes,'nps':nps}
+
+          pairs=[]
+          # Warm both paths once; exclude warmup.
+          run(False); run(True)
+          for i in range(11):
+              # Alternate order to suppress thermal/order bias.
+              if i%2==0:
+                  off=run(False); on=run(True)
+              else:
+                  on=run(True); off=run(False)
+              pairs.append({'pair':i+1,'off':off,'on':on})
+              print(i+1,'off',off,'on',on)
+
+          off_ms=[p['off']['ms'] for p in pairs]
+          on_ms=[p['on']['ms'] for p in pairs]
+          ratios=[p['off']['ms']/p['on']['ms'] for p in pairs]
+          node_ratios=[p['on']['nodes']/p['off']['nodes'] for p in pairs]
+          report={
+            'pairs':pairs,
+            'off_median_ms':statistics.median(off_ms),
+            'on_median_ms':statistics.median(on_ms),
+            'median_pair_speedup':statistics.median(ratios),
+            'mean_pair_speedup':statistics.mean(ratios),
+            'median_on_vs_off_node_ratio':statistics.median(node_ratios),
+            'tree_reduction_percent':(1-statistics.median(node_ratios))*100
+          }
+          print('REPORT',json.dumps(report,indent=2))
+          open('../interleaved-speed.json','w').write(json.dumps(report,indent=2)+'\n')
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: v22-interleaved-speed
+          path: |
+            interleaved-speed.txt
+            interleaved-speed.json
