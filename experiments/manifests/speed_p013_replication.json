@@ -1,0 +1,23 @@
+{
+  "schema": "LV_EXPERIMENT_MANIFEST_V1",
+  "id": "W021",
+  "family": "lossless-speed",
+  "hypothesis": "P0+P1+P3 preserves the exact active-reference search and reduces wall time; P3 must also demonstrate incremental value beyond P0+P1.",
+  "candidate_sha": "e157b9332a0c71263b57b39757b22431e3f7f31c",
+  "candidate_tree": "0c867ba4af945e07d14b981408d17a15eb8d7b8b",
+  "references": {
+    "active_reference": "fbccfb6eb5cd335b1ce8fc5c5efad9e36be4e19d",
+    "p01_ablation": "a38620d49cd28d0f1bddd776658dda4b47dd4c96"
+  },
+  "network": "nn-ab28990d4ea3.nnue",
+  "rounds_per_panel": 31,
+  "gates": [
+    "default transcript and nodes",
+    "depth-11 transcript and nodes",
+    "50k-per-position transcript and nodes",
+    "same-run A/A calibration",
+    "bootstrap median interval",
+    "p3 direct ablation"
+  ],
+  "rollback": "Reject P3 if the p3-increment panel is non-positive; reject the stack if the active-reference replication is non-positive or calibration fails."
+}
