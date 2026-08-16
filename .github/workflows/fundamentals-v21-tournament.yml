@@ -1,0 +1,223 @@
+name: Fundamentals v2.1 — allocator tournament and holdout
+
+on:
+  push:
+    branches:
+      - leviathan/fundamentals-v2.1
+    paths:
+      - 'src/leviathan_fundamentals.h'
+      - '.github/workflows/fundamentals-v21-tournament.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  tournament:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout Leviathan v2.1
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          path: leviathan
+
+      - name: Checkout frozen Stockfish parent
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          repository: official-stockfish/Stockfish
+          ref: 5062aee519a1ba262d472d8ab139851ced56573e
+          path: stockfish
+
+      - name: Install match dependency
+        run: python3 -m pip install --disable-pip-version-check 'python-chess>=1.999,<2'
+
+      - name: Build both AVX2 engines
+        run: |
+          cd "$GITHUB_WORKSPACE/leviathan/src"
+          make net
+          make clean
+          make -j2 ARCH=x86-64-avx2 build
+          mv stockfish stockfish-v21
+          cd "$GITHUB_WORKSPACE/stockfish/src"
+          make net
+          make clean
+          make -j2 ARCH=x86-64-avx2 build
+          mv stockfish stockfish-parent
+
+      - name: Verify parent equivalence when disabled
+        working-directory: leviathan/src
+        run: |
+          ./stockfish-v21 bench 2>&1 | tee ../v21-off-bench.txt
+          grep -q '2884956' ../v21-off-bench.txt
+
+      - name: Create candidate configurations
+        working-directory: leviathan
+        run: |
+          mkdir -p v21/candidates v21/results
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          root=Path('v21/candidates')
+          base={
+            'Threads':1,'Hash':64,
+            'Leviathan Fundamentals':True,
+            'Leviathan Zugzwang Guard':True,
+            'Leviathan Sacrifice Rescue':True,
+            'Leviathan Rule50 Pressure':True,
+            'Leviathan Policy':False,
+            'Leviathan MetaSearch':False,
+            'Leviathan Risk':False,
+            'Leviathan Specialist':False,
+            'Leviathan Atlas':False,
+            'Leviathan Search DSL':False,
+          }
+          configs={
+            'default': dict(authority=2, forcing=384, recapture=256, passer=320, endgame=128, overdrive=160, r50=3072),
+            'lean': dict(authority=2, forcing=320, recapture=192, passer=288, endgame=96, overdrive=224, r50=2048),
+            'balanced': dict(authority=2, forcing=448, recapture=256, passer=384, endgame=96, overdrive=192, r50=3072),
+            'tactical': dict(authority=2, forcing=512, recapture=320, passer=448, endgame=128, overdrive=160, r50=3072),
+            'speed': dict(authority=2, forcing=320, recapture=192, passer=256, endgame=64, overdrive=288, r50=2048),
+            'scope': dict(authority=2, forcing=448, recapture=320, passer=384, endgame=160, overdrive=192, r50=4096),
+            'rescue': dict(authority=1, forcing=384, recapture=256, passer=320, endgame=128, overdrive=0, r50=3072),
+          }
+          keymap={
+            'authority':'Leviathan Fundamentals Authority',
+            'forcing':'Leviathan Forcing Buyback',
+            'recapture':'Leviathan Recapture Buyback',
+            'passer':'Leviathan Passer Buyback',
+            'endgame':'Leviathan Endgame Buyback',
+            'overdrive':'Leviathan Quiet Overdrive',
+            'r50':'Leviathan Rule50 Pawn Bonus',
+          }
+          for name,c in configs.items():
+              out=base.copy()
+              out.update({keymap[k]:v for k,v in c.items()})
+              (root/f'{name}.json').write_text(json.dumps(out,indent=2)+'\n')
+          Path('v21/stockfish.json').write_text(json.dumps({'Threads':1,'Hash':64},indent=2)+'\n')
+          PY
+
+      - name: Generate development and holdout openings
+        working-directory: leviathan
+        run: |
+          python3 - <<'PY'
+          import chess, random
+          from pathlib import Path
+          seeds=[
+            ['e2e4','e7e5','g1f3','b8c6'],
+            ['e2e4','c7c5','g1f3','d7d6'],
+            ['e2e4','e7e6','d2d4','d7d5'],
+            ['e2e4','c7c6','d2d4','d7d5'],
+            ['d2d4','d7d5','c2c4','e7e6'],
+            ['d2d4','g8f6','c2c4','g7g6'],
+            ['d2d4','g8f6','c2c4','e7e6'],
+            ['c2c4','e7e5','b1c3','g8f6'],
+            ['g1f3','d7d5','g2g3','g8f6'],
+            ['e2e4','g8f6','e4e5','f6d5'],
+            ['c2c4','c7c5','g1f3','g8f6'],
+            ['d2d4','f7f5','g2g3','g8f6'],
+          ]
+          def make(n, seed, offset):
+              rng=random.Random(seed)
+              out=[]
+              for i in range(n):
+                  b=chess.Board()
+                  for u in seeds[(i+offset)%len(seeds)]:
+                      m=chess.Move.from_uci(u)
+                      if m in b.legal_moves: b.push(m)
+                  for _ in range(3 + ((i+offset)%6)):
+                      moves=sorted(b.legal_moves,key=lambda m:m.uci())
+                      if not moves or b.is_game_over(): break
+                      b.push(moves[rng.randrange(len(moves))])
+                  out.append(b.fen())
+              return out
+          Path('v21/dev.fen').write_text('\n'.join(make(10,891021,0))+'\n')
+          Path('v21/holdout.fen').write_text('\n'.join(make(5,510912,7))+'\n')
+          PY
+
+      - name: Screen seven allocator profiles
+        working-directory: leviathan
+        run: |
+          for C in default lean balanced tactical speed scope rescue; do
+            echo "=== $C ==="
+            python3 tools/run_match.py \
+              --engine-a "$GITHUB_WORKSPACE/leviathan/src/stockfish-v21" \
+              --engine-b "$GITHUB_WORKSPACE/stockfish/src/stockfish-parent" \
+              --options-a "v21/candidates/$C.json" \
+              --options-b v21/stockfish.json \
+              --openings v21/dev.fen \
+              --games 10 \
+              --movetime-ms 25 \
+              --max-plies 180 \
+              --out "v21/results/$C.json" | tee "v21/results/$C.log"
+          done
+
+      - name: Select development winner
+        working-directory: leviathan
+        run: |
+          python3 - <<'PY'
+          import json, shutil
+          from pathlib import Path
+          rows=[]
+          for p in sorted(Path('v21/results').glob('*.json')):
+              d=json.loads(p.read_text())['summary']
+              rows.append((d['score_a'],d['wins_a']-d['losses_a'],p.stem,d))
+          rows.sort(reverse=True)
+          score,net,name,s=rows[0]
+          shutil.copyfile(f'v21/candidates/{name}.json','v21/selected.json')
+          report={'ranking':[{'name':r[2],'score':r[0],'net_wins':r[1],'summary':r[3]} for r in rows],
+                  'selected':name}
+          Path('v21/development-ranking.json').write_text(json.dumps(report,indent=2)+'\n')
+          print(json.dumps(report,indent=2))
+          PY
+
+      - name: Holdout five paired matches vs Stockfish
+        working-directory: leviathan
+        run: |
+          python3 tools/run_match.py \
+            --engine-a "$GITHUB_WORKSPACE/leviathan/src/stockfish-v21" \
+            --engine-b "$GITHUB_WORKSPACE/stockfish/src/stockfish-parent" \
+            --options-a v21/selected.json \
+            --options-b v21/stockfish.json \
+            --openings v21/holdout.fen \
+            --games 10 \
+            --movetime-ms 100 \
+            --max-plies 220 \
+            --out v21/holdout-match.json | tee v21/holdout-match.log
+
+      - name: Summarize v2.1 holdout
+        working-directory: leviathan
+        run: |
+          python3 - <<'PY'
+          import json, math
+          from pathlib import Path
+          rank=json.loads(Path('v21/development-ranking.json').read_text())
+          d=json.loads(Path('v21/holdout-match.json').read_text())
+          s=d['summary']; p=s['score_a']
+          elo=400*math.log10(p/(1-p)) if 0<p<1 else None
+          pairs=[]
+          for i in range(0,10,2):
+              g=d['games'][i:i+2]
+              pairs.append({'match':i//2+1,'points':sum(x['score_a'] for x in g),
+                            'scores':[x['score_a'] for x in g],
+                            'results':[x['result'] for x in g]})
+          report={
+            'leviathan_commit':'${{ github.sha }}',
+            'stockfish_commit':'5062aee519a1ba262d472d8ab139851ced56573e',
+            'selected_profile':rank['selected'],
+            'development_ranking':rank['ranking'],
+            'holdout':{'wins':s['wins_a'],'draws':s['draws'],'losses':s['losses_a'],
+                       'score':p,'naive_elo':elo,'pairs':pairs},
+            'protocol':'development: 7 profiles x 10 games at 25ms; holdout: 5 paired matches / 10 games at 100ms, reversed colors, 1 thread, 64MB'
+          }
+          Path('v21/report.json').write_text(json.dumps(report,indent=2)+'\n')
+          print(json.dumps(report,indent=2))
+          PY
+
+      - name: Archive evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: fundamentals-v21-tournament-${{ github.sha }}
+          path: |
+            leviathan/v21/
+            leviathan/v21-off-bench.txt
+          if-no-files-found: error
