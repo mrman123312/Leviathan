@@ -1141,6 +1141,7 @@ moves_loop:  // When in check, search starts here
     const bool leviathanRiskReady  = Leviathan::Control::risk_ready();
     const bool leviathanDslReady   = Leviathan::DSL::ready();
     const bool leviathanTraceReady = Leviathan::Trace::ready();
+    const bool leviathanFundamentalsReady = Leviathan::Fundamentals::ready();
 
     // Step 13. Loop through all pseudo-legal moves until no moves remain
     // or a beta cutoff occurs.
@@ -1220,14 +1221,14 @@ moves_loop:  // When in check, search starts here
                 if ((alpha >= VALUE_DRAW || pos.non_pawn_material(us) != PieceValue[movedPiece])
                     && !pos.see_ge(move, -margin)
                     && !Leviathan::Fundamentals::rescue_bad_see(
-                      pos, move, prevSq, capture, givesCheck))
+                      pos, move, prevSq, capture, givesCheck, leviathanFundamentalsReady))
                     continue;
             }
             else if (!ss->followPV || !PvNode)
             {
                 const bool leviathanScopeProtected =
                   Leviathan::Fundamentals::protected_scope_move(
-                    pos, move, prevSq, capture, givesCheck);
+                    pos, move, prevSq, capture, givesCheck, leviathanFundamentalsReady);
                 int dIndex  = std::min(int(depth), int(lmrDivisor.size())) - 1;
                 int history = (*contHist[0])[movedPiece][move.to_sq()]
                             + (*contHist[1])[movedPiece][move.to_sq()]
@@ -1396,7 +1397,8 @@ moves_loop:  // When in check, search starts here
               depth, moveCount, ss->statScore, correctionValue, PvNode, cutNode, allNode, capture,
               givesCheck, ttData.depth, ss->staticEval, alpha);
         r += Leviathan::Fundamentals::lmr_adjustment(
-          pos, move, prevSq, depth, moveCount, PvNode, capture, givesCheck);
+          pos, move, prevSq, depth, moveCount, PvNode, capture, givesCheck,
+          leviathanFundamentalsReady);
 
         Value leviathanReducedValue = VALUE_NONE;
         Depth leviathanReducedDepth = DEPTH_NONE;
