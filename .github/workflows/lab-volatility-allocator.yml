@@ -1,0 +1,112 @@
+name: Leviathan matched-compute root volatility allocator
+
+on:
+  push:
+    branches: [leviathan/lab-v4-volatility-allocator]
+    paths:
+      - '.github/workflows/lab-volatility-allocator.yml'
+      - 'tools/volatility_allocator.py'
+      - 'tools/generate_speed_holdout.py'
+      - 'experiments/holdouts/volatility_allocator_seed2026081617.fen'
+      - 'experiments/options/active_fundamentals.json'
+      - 'experiments/requirements-chess-hashed.txt'
+      - 'experiments/manifests/volatility_allocator.json'
+  workflow_dispatch:
+
+permissions: {contents: read}
+
+concurrency:
+  group: lab-volatility-allocator-${{ github.ref }}
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  matched-compute-oracle:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ github.sha }}
+          path: lab
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: a38620d49cd28d0f1bddd776658dda4b47dd4c96
+          path: candidate
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: 5062aee519a1ba262d472d8ab139851ced56573e
+          path: oracle
+      - name: Record immutable provenance
+        run: |
+          set -euo pipefail
+          {
+            echo "runner_image=${ImageOS:-unknown}"
+            echo "runner_image_version=${ImageVersion:-unknown}"
+            uname -a
+            lscpu
+            g++ --version
+            python3 --version
+            git -C lab rev-parse HEAD
+            git -C lab rev-parse 'HEAD^{tree}'
+            git -C candidate rev-parse HEAD
+            git -C candidate rev-parse 'HEAD^{tree}'
+            git -C oracle rev-parse HEAD
+            git -C oracle rev-parse 'HEAD^{tree}'
+            sha256sum lab/tools/volatility_allocator.py
+            sha256sum lab/tools/generate_speed_holdout.py
+            sha256sum lab/experiments/holdouts/volatility_allocator_seed2026081617.fen
+            sha256sum lab/experiments/options/active_fundamentals.json
+            sha256sum lab/experiments/requirements-chess-hashed.txt
+            sha256sum lab/experiments/manifests/volatility_allocator.json
+          } | tee provenance.txt
+          test "$(sha256sum lab/experiments/holdouts/volatility_allocator_seed2026081617.fen | cut -d' ' -f1)" = \
+            f9b321bb8a26e5dfd189314f959ba8069de5edaacea086b1bee114ac46d2770c
+      - name: Install hash-locked chess harness dependency
+        run: |
+          set -euo pipefail
+          PIP_CACHE_DIR="$RUNNER_TEMP/pip-cache" python3 -m pip install \
+            --disable-pip-version-check --require-hashes \
+            -r lab/experiments/requirements-chess-hashed.txt
+          python3 -m pip freeze | sort | tee dependency-freeze.txt
+      - name: Build frozen candidate and oracle
+        run: |
+          set -euo pipefail
+          make -C oracle/src net
+          cp oracle/src/nn-ab28990d4ea3.nnue candidate/src/
+          make -C candidate/src -j2 ARCH=x86-64-avx2 build
+          mv candidate/src/stockfish candidate/src/candidate
+          make -C oracle/src -j2 ARCH=x86-64-avx2 build
+          mv oracle/src/stockfish oracle/src/oracle
+          sha256sum candidate/src/candidate oracle/src/oracle | tee binary-sha256.txt
+          sha256sum candidate/src/nn-ab28990d4ea3.nnue oracle/src/nn-ab28990d4ea3.nnue \
+            | tee network-sha256.txt
+      - name: Fresh matched-compute deep-oracle screen
+        run: |
+          set -euo pipefail
+          mkdir -p results
+          python3 lab/tools/volatility_allocator.py \
+            --engine candidate/src/candidate \
+            --oracle oracle/src/oracle \
+            --options lab/experiments/options/active_fundamentals.json \
+            --positions lab/experiments/holdouts/volatility_allocator_seed2026081617.fen \
+            --probe-nodes 15000 --cap-nodes 100000 --history-depths 5 \
+            --oracle-nodes 500000 --forced-nodes 250000 \
+            --seed 2026081618 --max-node-gap 0.01 \
+            --output results/volatility-allocator.json \
+            2>&1 | tee results/volatility-allocator.log
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: volatility-allocator
+          retention-days: 90
+          if-no-files-found: error
+          path: |
+            provenance.txt
+            dependency-freeze.txt
+            binary-sha256.txt
+            network-sha256.txt
+            results/

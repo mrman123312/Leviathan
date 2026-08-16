@@ -1,0 +1,34 @@
+{
+  "schema": "LV_EXPERIMENT_MANIFEST_V1",
+  "id": "W032",
+  "family": "value-of-computation-allocation",
+  "hypothesis": "Recent root-PV churn identifies positions where completing more search has higher marginal decision value than spending the same aggregate nodes uniformly.",
+  "candidate_sha": "a38620d49cd28d0f1bddd776658dda4b47dd4c96",
+  "oracle_sha": "5062aee519a1ba262d472d8ab139851ced56573e",
+  "holdout": {
+    "path": "experiments/holdouts/volatility_allocator_seed2026081617.fen",
+    "sha256": "f9b321bb8a26e5dfd189314f959ba8069de5edaacea086b1bee114ac46d2770c",
+    "positions": 100,
+    "generator_seed": 2026081617,
+    "generator_nodes": 2000
+  },
+  "predeclared_policy": {
+    "probe_nodes": 15000,
+    "cap_nodes": 100000,
+    "history_depths": 5,
+    "volatile_if_distinct_root_moves_at_least": 2,
+    "uniform_control": "same observed mean nodes, chosen before oracle scoring",
+    "causal_ablation": "shuffle the adaptive per-position node-budget distribution"
+  },
+  "oracle_nodes": 500000,
+  "forced_move_nodes": 250000,
+  "gates": [
+    "fresh mechanism-specific holdout",
+    "aggregate node totals within one percent",
+    "paired bootstrap mean-regret advantage over uniform lower bound above zero",
+    "paired bootstrap mean-regret advantage over shuffled allocation lower bound above zero",
+    "wins not fewer than losses"
+  ],
+  "promotion": "A survivor remains a diagnostic candidate until equal-node games and then fixed-time games replicate it.",
+  "rollback": "Reject move voting and forced-MultiPV fragments already falsified; reject this allocator if either matched-compute or shuffled-allocation gate fails."
+}
