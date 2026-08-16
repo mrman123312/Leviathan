@@ -27,7 +27,24 @@ constexpr Mask operator|(Kind a, Kind b) { return bit(a) | bit(b); }
 constexpr Mask operator|(Mask a, Kind b) { return a | bit(b); }
 constexpr bool has(Mask mask, Kind k) { return (mask & bit(k)) != 0; }
 
+constexpr Mask KNOWN_MASK = bit(Kind::HISTORY) | bit(Kind::RULE50) | bit(Kind::EVAL_DISAGREEMENT)
+                          | bit(Kind::CORRECTION_STRESS) | bit(Kind::NULL_FRAGILITY)
+                          | bit(Kind::PROBCUT_NEAR_PROOF) | bit(Kind::LMR_COUNTEREXAMPLE)
+                          | bit(Kind::CHILD_UNCERTAINTY) | bit(Kind::RIVAL_AMBIGUITY)
+                          | bit(Kind::PERSISTENT_WITNESS);
+
+// Evidence classes are grouped into genuinely different causal domains so
+// correlated warnings cannot impersonate independent confirmation. For example,
+// HISTORY + RULE50 is one provenance domain, not two independent votes.
+constexpr Mask PROVENANCE_DOMAIN = Kind::HISTORY | Kind::RULE50;
+constexpr Mask EVALUATION_DOMAIN = Kind::EVAL_DISAGREEMENT | Kind::CORRECTION_STRESS;
+constexpr Mask SEARCH_DOMAIN = Kind::NULL_FRAGILITY | Kind::PROBCUT_NEAR_PROOF
+                             | Kind::LMR_COUNTEREXAMPLE;
+constexpr Mask CHILD_DOMAIN = bit(Kind::CHILD_UNCERTAINTY);
+constexpr Mask RIVAL_DOMAIN = Kind::RIVAL_AMBIGUITY | Kind::PERSISTENT_WITNESS;
+
 inline int class_count(Mask mask) {
+    mask &= KNOWN_MASK;
     int count = 0;
     while (mask)
     {
@@ -35,6 +52,13 @@ inline int class_count(Mask mask) {
         mask >>= 1;
     }
     return count;
+}
+
+inline int domain_count(Mask mask) {
+    mask &= KNOWN_MASK;
+    return int(bool(mask & PROVENANCE_DOMAIN)) + int(bool(mask & EVALUATION_DOMAIN))
+         + int(bool(mask & SEARCH_DOMAIN)) + int(bool(mask & CHILD_DOMAIN))
+         + int(bool(mask & RIVAL_DOMAIN));
 }
 
 struct State {
@@ -49,21 +73,22 @@ struct State {
     }
 
     void merge(Mask otherMask, int inheritedDebt) {
-        mask |= otherMask;
+        mask |= otherMask & KNOWN_MASK;
         debt = std::max(debt, std::clamp(inheritedDebt, 0, 5));
     }
 
     bool contains(Kind kind) const { return has(mask, kind); }
     int  classes() const { return class_count(mask); }
-    bool multi_source() const { return debt >= 3 && classes() >= 2; }
-    bool severe() const { return debt >= 4 && classes() >= 3; }
+    int  domains() const { return domain_count(mask); }
+    bool multi_source() const { return debt >= 3 && domains() >= 2; }
+    bool severe() const { return debt >= 4 && domains() >= 3; }
 };
 
 // Specialist authority routing. These helpers are deliberately conservative:
 // typed evidence may remove shortcut authority, but never grants a shortcut
 // that the scalar-debt safeguards would already have rejected.
 inline bool tt_sensitive(const State& s) {
-    const Mask ttMask = Kind::HISTORY | Kind::RULE50 | Kind::EVAL_DISAGREEMENT;
+    const Mask ttMask = PROVENANCE_DOMAIN | bit(Kind::EVAL_DISAGREEMENT);
     return (s.mask & ttMask) && s.debt >= 2;
 }
 
@@ -89,14 +114,22 @@ inline double root_time_factor(const State& s) {
     return 1.0;
 }
 
-constexpr Mask KNOWN_MASK = bit(Kind::HISTORY) | bit(Kind::RULE50) | bit(Kind::EVAL_DISAGREEMENT)
-                          | bit(Kind::CORRECTION_STRESS) | bit(Kind::NULL_FRAGILITY)
-                          | bit(Kind::PROBCUT_NEAR_PROOF) | bit(Kind::LMR_COUNTEREXAMPLE)
-                          | bit(Kind::CHILD_UNCERTAINTY) | bit(Kind::RIVAL_AMBIGUITY)
-                          | bit(Kind::PERSISTENT_WITNESS);
-
 static_assert((KNOWN_MASK & (KNOWN_MASK + 1)) == 0,
               "Leviathan evidence kinds must remain a dense low-bit set");
+static_assert((PROVENANCE_DOMAIN & EVALUATION_DOMAIN) == 0
+              && (PROVENANCE_DOMAIN & SEARCH_DOMAIN) == 0
+              && (PROVENANCE_DOMAIN & CHILD_DOMAIN) == 0
+              && (PROVENANCE_DOMAIN & RIVAL_DOMAIN) == 0
+              && (EVALUATION_DOMAIN & SEARCH_DOMAIN) == 0
+              && (EVALUATION_DOMAIN & CHILD_DOMAIN) == 0
+              && (EVALUATION_DOMAIN & RIVAL_DOMAIN) == 0
+              && (SEARCH_DOMAIN & CHILD_DOMAIN) == 0
+              && (SEARCH_DOMAIN & RIVAL_DOMAIN) == 0
+              && (CHILD_DOMAIN & RIVAL_DOMAIN) == 0,
+              "Leviathan evidence domains must remain disjoint");
+static_assert((PROVENANCE_DOMAIN | EVALUATION_DOMAIN | SEARCH_DOMAIN | CHILD_DOMAIN | RIVAL_DOMAIN)
+                == KNOWN_MASK,
+              "Every evidence kind must belong to exactly one causal domain");
 
 }  // namespace Stockfish::Leviathan::Evidence
 
