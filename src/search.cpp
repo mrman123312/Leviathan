@@ -774,7 +774,7 @@ Value Search::Worker::search(
     Value bestValue, value, eval, maxValue, probCutBeta, probCutNearValue;
     bool  givesCheck, improving, priorCapture, opponentWorsening;
     bool  capture, ttCapture, leviathanNullFragile;
-    int   priorReduction;
+    int   priorReduction, leviathanProofDebt;
     Piece movedPiece;
 
     SearchedList capturesSearched;
@@ -827,6 +827,7 @@ Value Search::Worker::search(
     probCutNearMiss  = Move::none();
     probCutNearValue      = -VALUE_INFINITE;
     leviathanNullFragile = false;
+    leviathanProofDebt   = 0;
     priorReduction        = (ss - 1)->reduction;
     (ss - 1)->reduction = 0;
     ss->statScore       = 0;
@@ -889,6 +890,23 @@ Value Search::Worker::search(
     // for us than at the last ply.
     improving         = ss->staticEval > (ss - 2)->staticEval;
     opponentWorsening = ss->staticEval > -(ss - 1)->staticEval;
+
+    // Leviathan strength v6 - Proof Obligation. Search shortcuts are evidence,
+    // not truth. Accumulate independent reasons that the node's current story
+    // may be unreliable, then spend verification only when warnings agree.
+    if (pos.has_repeated())
+        leviathanProofDebt += 2;
+    if (pos.rule50_count() >= 80)
+        leviathanProofDebt += 1;
+    if (is_valid(ttData.value) && !is_decisive(ttData.value))
+    {
+        const int ttEvalGap = std::abs(int(ttData.value - ss->staticEval));
+        leviathanProofDebt += ttEvalGap >= 256 ? 2 : int(ttEvalGap >= 96);
+    }
+    const int correctionGap = std::abs(correctionValue) / 131072;
+    if (correctionGap >= 96)
+        leviathanProofDebt += 1;
+    leviathanProofDebt = std::min(leviathanProofDebt, 5);
 
     // Hindsight adjustment of reductions based on static evaluation difference.
     if (priorReduction >= 3 && !opponentWorsening)
@@ -1014,12 +1032,14 @@ Value Search::Worker::search(
     // Step 7. Razoring
     // If eval is really low, skip search entirely and return the qsearch value.
     // For PvNodes, we must have a guard against mates being returned.
-    if (!PvNode && eval < alpha - 483 - 318 * depth * depth)
+    if (!PvNode && leviathanProofDebt < 2
+        && eval < alpha - 483 - 318 * depth * depth)
         return qsearch<NonPV>(pos, ss, alpha, beta);
 
     // Step 8. Futility pruning: child node
     // The depth condition is important for mate finding. It shouldn't be tuned.
-    if (!ss->ttPv && eval >= beta && (!ttData.move || ttCapture) && !is_loss(beta) && !is_win(eval)
+    if (!ss->ttPv && leviathanProofDebt < 2 && eval >= beta
+        && (!ttData.move || ttCapture) && !is_loss(beta) && !is_win(eval)
         && depth < futility_depth(eval, beta))
     {
         Value futilityMult = std::min(45 + depth * 4, 85);
@@ -1054,7 +1074,10 @@ Value Search::Worker::search(
         // and become less willing to discard quiet alternatives below.
         if (depth >= 6 && nullValue < beta
             && ss->staticEval - nullValue >= 192 && !is_decisive(nullValue))
+        {
             leviathanNullFragile = true;
+            leviathanProofDebt = std::min(5, leviathanProofDebt + 2);
+        }
 
         // Do not return unproven mate or TB scores
         if (nullValue >= beta && !is_win(nullValue))
@@ -1082,7 +1105,8 @@ Value Search::Worker::search(
     // Step 10. Internal iterative reductions
     // At sufficient depth, reduce depth for PV/Cut nodes without a TTMove.
     // (*Scaler) Making IIR more aggressive scales poorly.
-    if (!ss->followPV && !allNode && depth >= 6 && !ttData.move)
+    if (!ss->followPV && !allNode && depth >= 6 && !ttData.move
+        && leviathanProofDebt < 2)
         depth--;
 
     // Step 11. ProbCut
@@ -1142,11 +1166,15 @@ Value Search::Worker::search(
         }
     }
 
+    if (probCutNearMiss)
+        leviathanProofDebt = std::min(5, leviathanProofDebt + 1);
+
 moves_loop:  // When in check, search starts here
 
     // Step 12. A small Probcut idea
     probCutBeta = beta + 428;
-    if ((ttData.bound & BOUND_LOWER) && ttData.depth >= depth - 4 && ttData.value >= probCutBeta
+    if (leviathanProofDebt < 2 && (ttData.bound & BOUND_LOWER)
+        && ttData.depth >= depth - 4 && ttData.value >= probCutBeta
         && !is_decisive(beta) && is_valid(ttData.value) && !is_decisive(ttData.value))
         return probCutBeta;
 
@@ -1220,7 +1248,7 @@ moves_loop:  // When in check, search starts here
         if (!rootNode && pos.non_pawn_material(us) && !is_loss(bestValue))
         {
             // Skip quiet moves if movecount exceeds our threshold
-            if (!leviathanNullFragile
+            if (leviathanProofDebt < 2
                 && moveCount >= (3 + depth * depth) / (2 - improving))
                 mp.skip_quiet_moves();
 
@@ -1256,7 +1284,8 @@ moves_loop:  // When in check, search starts here
                 const bool leviathanScopeProtected =
                   Leviathan::Fundamentals::protected_scope_move(
                     pos, move, prevSq, capture, givesCheck)
-                  || (leviathanNullFragile && moveCount <= 10);
+                  || (leviathanProofDebt >= 2
+                      && moveCount <= 6 + std::min(leviathanProofDebt, 4));
                 int dIndex  = std::min(int(depth), int(lmrDivisor.size())) - 1;
                 int history = (*contHist[0])[movedPiece][move.to_sq()]
                             + (*contHist[1])[movedPiece][move.to_sq()]
@@ -1336,7 +1365,8 @@ moves_loop:  // When in check, search starts here
             // over the original beta, we assume this expected cut-node is not
             // singular (multiple moves fail high), and we can prune the whole
             // subtree by returning a softbound.
-            else if (value >= beta && !is_decisive(value))
+            else if (value >= beta && !is_decisive(value)
+                     && leviathanProofDebt < 3)
             {
                 ttMoveHistory << -421 - 110 * depth;
 
@@ -1360,7 +1390,7 @@ moves_loop:  // When in check, search starts here
 
             // If the ttMove is assumed to fail high over current beta or
             // if we are on a cutNode
-            else if (ttData.value >= beta || cutNode)
+            else if ((ttData.value >= beta || cutNode) && leviathanProofDebt < 3)
                 extension = -3;
         }
 
@@ -1386,10 +1416,12 @@ moves_loop:  // When in check, search starts here
         if (move == probCutNearMiss)
             r -= 768;
 
-        // A failed null-move shortcut says the position depends heavily on making
-        // a real move now. Buy back a small amount of depth on quiet candidates.
-        if (leviathanNullFragile && !capture && !givesCheck && moveCount <= 10)
-            r -= 256;
+        // Proof debt converts contradictory evidence into bounded search authority.
+        // Only early serious candidates receive the buyback; debt is capped above.
+        if (leviathanProofDebt >= 2 && !capture && !givesCheck && moveCount <= 8)
+            r -= 128 * std::min(leviathanProofDebt, 4);
+        if (leviathanProofDebt >= 4 && depth >= 7 && moveCount <= 2)
+            r -= 384;
 
         r -= moveCount * 65;
         r -= std::abs(correctionValue) / 26310;
@@ -1484,8 +1516,9 @@ moves_loop:  // When in check, search starts here
             // have missed because of the reduction itself. Re-open only near-
             // boundary, genuinely reduced branches instead of globally inflating depth.
             else if (d < newDepth && depth >= 6 && moveCount <= 10 && !capture && !givesCheck
-                     && value >= alpha - (18 + 3 * std::min(int(depth), 12))
-                     && (PvNode || ss->ttPv
+                     && value >= alpha - (18 + 3 * std::min(int(depth), 12)
+                                               + 8 * leviathanProofDebt)
+                     && (PvNode || ss->ttPv || leviathanProofDebt >= 3
                          || Leviathan::Fundamentals::quiet_tactical_tension(
                            pos, move, capture, givesCheck)
                          || Leviathan::Fundamentals::quiet_major_threat(
@@ -1659,6 +1692,10 @@ moves_loop:  // When in check, search starts here
                     // PV/TT-PV nodes are exactly where rival ordering can change
                     // the root decision, so demand one extra level of evidence.
                     if (PvNode || ss->ttPv)
+                        siblingPenalty = std::max(0, siblingPenalty - 1);
+                    if (leviathanProofDebt >= 2)
+                        siblingPenalty = std::max(0, siblingPenalty - 1);
+                    if (leviathanProofDebt >= 4)
                         siblingPenalty = std::max(0, siblingPenalty - 1);
 
                     depth -= siblingPenalty;
