@@ -1,0 +1,42 @@
+name: Freeze PV-only Rival Ambiguity Reuse
+
+on:
+  push:
+    branches: [leviathan/speed-v3-profile]
+    paths: ['.github/workflows/freeze-rar-pv.yml']
+
+permissions:
+  contents: write
+
+jobs:
+  freeze:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: fbccfb6eb5cd335b1ce8fc5c5efad9e36be4e19d
+          fetch-depth: 0
+      - name: Create candidate branch and apply exact PV-only RAR patch
+        run: |
+          git checkout -B leviathan/strength-v3-rar-pv
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path('src/search.cpp');s=p.read_text()
+          a='''    int   priorReduction;\n    Piece movedPiece;'''
+          b='''    int   priorReduction;\n    int   leviathanRivalAmbiguity = 0;\n    Piece movedPiece;'''
+          if s.count(a)!=1:raise SystemExit('var anchor')
+          s=s.replace(a,b,1)
+          a='''            ss->excludedMove = Move::none();\n\n            if (value < singularBeta)'''
+          b='''            ss->excludedMove = Move::none();\n\n            // Leviathan RAR: preserve already-paid rival-strength evidence.\n            if (value >= singularBeta && value < beta && !is_decisive(value))\n                leviathanRivalAmbiguity = 1;\n\n            if (value < singularBeta)'''
+          if s.count(a)!=1:raise SystemExit('singular anchor')
+          s=s.replace(a,b,1)
+          a='''        // Increase reduction if ttMove is a capture\n        if (ttCapture)\n            r += 1079;'''
+          b='''        // Increase reduction if ttMove is a capture\n        if (ttCapture)\n            r += 1079;\n\n        // On principal TT routes, do not forget that the singular probe found\n        // a credible rival. Search those later quiet rivals less shallowly.\n        if (leviathanRivalAmbiguity && ss->ttPv && move != ttData.move && !capture\n            && !givesCheck && depth >= 6 && moveCount <= 10)\n            r -= 320;'''
+          if s.count(a)!=1:raise SystemExit('lmr anchor')
+          p.write_text(s.replace(a,b,1))
+          PY
+          git config user.name github-actions
+          git config user.email github-actions@github.com
+          git add src/search.cpp
+          git commit -m 'Add PV-only Rival Ambiguity Reuse'
+          git push -f origin leviathan/strength-v3-rar-pv
