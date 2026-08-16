@@ -1,0 +1,112 @@
+name: Leviathan plyless v0 frontier-corridor screen
+
+on:
+  push:
+    branches: [leviathan/plyless-v0-decision-depth]
+    paths: ['.github/workflows/plyless-v0-frontier-corridor.yml']
+  workflow_dispatch:
+
+permissions: {contents: read}
+
+jobs:
+  screen:
+    runs-on: ubuntu-22.04
+    strategy:
+      fail-fast: false
+      matrix:
+        profile: [control, qforced, qforced-lowmat, qforced-r50]
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with: {ref: fbccfb6eb5cd335b1ce8fc5c5efad9e36be4e19d, path: leviathan}
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with: {repository: official-stockfish/Stockfish, ref: 5062aee519a1ba262d472d8ab139851ced56573e, path: stockfish}
+
+      - name: Apply frontier corridor traversal
+        if: matrix.profile != 'control'
+        working-directory: leviathan
+        env: {PROFILE: '${{ matrix.profile }}'}
+        run: |
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+          q=os.environ['PROFILE']; p=Path('src/search.cpp'); s=p.read_text()
+          anchor='''    Square prevSq = ((ss - 1)->currentMove).is_ok() ? ((ss - 1)->currentMove).to_sq() : SQ_NONE;\n\n    // Initialize a MovePicker object for the current position, and prepare to search'''
+          if q=='qforced': extra='true'
+          elif q=='qforced-lowmat': extra='pos.count<ALL_PIECES>() <= 12'
+          elif q=='qforced-r50': extra='pos.rule50_count() >= 40 || pos.count<ALL_PIECES>() <= 12'
+          else: raise SystemExit(q)
+          repl=f'''    Square prevSq = ((ss - 1)->currentMove).is_ok() ? ((ss - 1)->currentMove).to_sq() : SQ_NONE;\n\n    // Leviathan Plyless frontier: qsearch normally assumes a legal "stand pat"\n    // at quiet positions. If there is exactly one legal move, passing is not a\n    // real option. Traverse that quiet forced corridor instead of letting the\n    // artificial horizon terminate it. Branching remains exactly one.\n    if (Leviathan::Fundamentals::ready() && !ss->inCheck && ss->ply < MAX_PLY - 1\n        && ({extra}))\n    {{\n        MoveList<LEGAL> lvLegal(pos);\n        if (lvLegal.size() == 1)\n        {{\n            const Move forced = *lvLegal.begin();\n            const bool forcedCapture = pos.capture_stage(forced);\n            const bool forcedCheck = pos.gives_check(forced);\n            // Tactical forced moves are already inside ordinary qsearch. The new\n            // scope is the horizon hole: a unique legal QUIET continuation.\n            if (!forcedCapture)\n            {{\n                do_move(pos, forced, st, forcedCheck, ss);\n                Value forcedValue = -qsearch<nodeType>(pos, ss + 1, -beta, -alpha);\n                undo_move(pos, forced);\n                return forcedValue;\n            }}\n        }}\n    }}\n\n    // Initialize a MovePicker object for the current position, and prepare to search'''
+          if s.count(anchor)!=1: raise SystemExit('qsearch frontier anchor')
+          p.write_text(s.replace(anchor,repl,1))
+          PY
+          git diff --check
+
+      - run: python3 -m pip install --disable-pip-version-check 'python-chess>=1.999,<2'
+      - name: Build AVX2
+        run: |
+          cd leviathan/src && make net && make clean && make -j2 ARCH=x86-64-avx2 build && mv stockfish leviathan
+          cd ../../stockfish/src && make net && make clean && make -j2 ARCH=x86-64-avx2 build && mv stockfish parent
+
+      - name: Config and common openings
+        working-directory: leviathan
+        run: |
+          mkdir -p x
+          cat > x/a.json <<'EOF'
+          {"Threads":1,"Hash":64,"Leviathan Fundamentals":true,"Leviathan Fundamentals Authority":2,"Leviathan Forcing Buyback":384,"Leviathan Recapture Buyback":256,"Leviathan Passer Buyback":320,"Leviathan Endgame Buyback":128,"Leviathan Quiet Overdrive":160,"Leviathan Rule50 Pawn Bonus":3072,"Leviathan Zugzwang Guard":true,"Leviathan Sacrifice Rescue":true,"Leviathan Rule50 Pressure":true,"Leviathan Policy":false,"Leviathan MetaSearch":false,"Leviathan Risk":false,"Leviathan Specialist":false,"Leviathan Atlas":false,"Leviathan Search DSL":false}
+          EOF
+          echo '{"Threads":1,"Hash":64}' > x/b.json
+          python3 - <<'PY'
+          import random,chess,chess.engine
+          from pathlib import Path
+          sf=chess.engine.SimpleEngine.popen_uci('../stockfish/src/parent');sf.configure({'Threads':1,'Hash':64});out=[];seen=set()
+          try:
+            for family in range(5):
+              r=random.Random(49979687+family*67867967);loc=[]
+              while len(loc)<5:
+                b=chess.Board()
+                for _ in range(r.randint(12,28)):
+                  if b.is_game_over():break
+                  z=sf.analyse(b,chess.engine.Limit(nodes=1600),multipv=min(6,b.legal_moves.count()));z=z if isinstance(z,list) else [z];ranked=[]
+                  for i in z:
+                    if i.get('pv'):ranked.append((i['pv'][0],int(i['score'].pov(b.turn).score(mate_score=100000) or 0)))
+                  if not ranked:break
+                  best=ranked[0][1];v=[x for x in ranked if best-x[1]<=120] or ranked[:1];b.push(r.choices([m for m,_ in v],weights=range(len(v),0,-1),k=1)[0])
+                k=' '.join(b.fen().split()[:4])
+                if b.is_game_over() or k in seen:continue
+                seen.add(k);loc.append(b.fen())
+              out+=loc
+          finally:sf.quit()
+          Path('x/openings.fen').write_text('\n'.join(out)+'\n')
+          PY
+
+      - name: Exact off containment and active bench
+        working-directory: leviathan/src
+        env: {PROFILE: '${{ matrix.profile }}'}
+        run: |
+          ./leviathan bench 2>&1 | tee ../x/off-${PROFILE}.txt
+          grep -q 'Nodes searched  : 2884956' ../x/off-${PROFILE}.txt
+          printf 'setoption name Leviathan Fundamentals value true\nsetoption name Leviathan Fundamentals Authority value 2\nbench\nquit\n' | ./leviathan 2>&1 | tee ../x/on-${PROFILE}.txt
+
+      - name: 50 equal-node games
+        working-directory: leviathan
+        env: {PROFILE: '${{ matrix.profile }}'}
+        run: |
+          python3 tools/run_match.py --engine-a "$PWD/src/leviathan" --engine-b "$GITHUB_WORKSPACE/stockfish/src/parent" --options-a x/a.json --options-b x/b.json --openings x/openings.fen --games 50 --nodes-per-move 22000 --max-plies 246 --out x/nodes-${PROFILE}.json
+
+      - name: 50 fixed-time games
+        working-directory: leviathan
+        env: {PROFILE: '${{ matrix.profile }}'}
+        run: |
+          python3 tools/run_match.py --engine-a "$PWD/src/leviathan" --engine-b "$GITHUB_WORKSPACE/stockfish/src/parent" --options-a x/a.json --options-b x/b.json --openings x/openings.fen --games 50 --movetime-ms 100 --max-plies 246 --out x/time-${PROFILE}.json
+
+      - name: Summarize
+        working-directory: leviathan
+        env: {PROFILE: '${{ matrix.profile }}'}
+        run: |
+          python3 - <<'PY'
+          import json,os,re
+          from pathlib import Path
+          q=os.environ['PROFILE'];n=json.load(open(f'x/nodes-{q}.json'))['summary'];t=json.load(open(f'x/time-{q}.json'))['summary'];off=Path(f'x/off-{q}.txt').read_text();on=Path(f'x/on-{q}.txt').read_text();g=lambda p,s:int(re.findall(p,s)[-1]);R={'profile':q,'equal_node':n,'fixed_time':t,'active_nodes':g(r'Nodes searched\s*:\s*(\d+)',on),'off_ms':g(r'Total time \(ms\)\s*:\s*(\d+)',off),'active_ms':g(r'Total time \(ms\)\s*:\s*(\d+)',on)};Path(f'x/report-{q}.json').write_text(json.dumps(R,indent=2)+'\n');print(json.dumps(R,indent=2))
+          PY
+      - uses: actions/upload-artifact@v4
+        with: {name: 'plyless-frontier-${{ matrix.profile }}', path: 'leviathan/x/report-${{ matrix.profile }}.json'}
