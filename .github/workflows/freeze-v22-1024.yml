@@ -1,0 +1,38 @@
+name: Freeze Leviathan v2.2 1024 candidate
+
+on:
+  push:
+    branches: [leviathan/fundamentals-v2.2]
+    paths: ['.github/workflows/freeze-v22-1024.yml']
+
+permissions:
+  contents: write
+
+jobs:
+  freeze:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: leviathan/fundamentals-v2.2
+      - name: Freeze measured candidate
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('src/leviathan_fundamentals.h')
+          s = p.read_text()
+          old = 'delta += 512 + state().quietOverdrive * lateness * depthScale / 24;'
+          new = 'delta += 1024 + state().quietOverdrive * lateness * depthScale / 24;'
+          if s.count(old) != 1:
+              raise SystemExit(f'expected exactly one hard-budget anchor, found {s.count(old)}')
+          p.write_text(s.replace(old, new, 1))
+          PY
+          git diff --check
+          git diff -- src/leviathan_fundamentals.h
+      - name: Commit frozen candidate
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add src/leviathan_fundamentals.h
+          git commit -m 'Freeze v2.2 hard budget at measured 1024 candidate'
+          git push origin HEAD:leviathan/fundamentals-v2.2
