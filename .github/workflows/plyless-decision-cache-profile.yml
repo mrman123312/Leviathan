@@ -1,0 +1,56 @@
+name: Plyless decision-cache reuse profiler
+
+on:
+  push:
+    branches: [leviathan/plyless-v0-decision-depth]
+    paths: ['.github/workflows/plyless-decision-cache-profile.yml']
+  workflow_dispatch:
+
+permissions: {contents: read}
+
+jobs:
+  profile:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with: {repository: official-stockfish/Stockfish, ref: 5062aee519a1ba262d472d8ab139851ced56573e}
+      - name: Instrument sidecar decision-width reuse
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path('src/search.cpp');s=p.read_text()
+          s=s.replace('#include <utility>','#include <utility>\n#include <iostream>')
+          a='''namespace {\n\nconstexpr u64 NODES_LIMIT_OUTPUT'''
+          b='''namespace {\n\nstruct LVDecisionCacheProfile {\n    struct Entry { Key key=0; unsigned char width=255; unsigned char depth=0; unsigned short pad=0; };\n    static constexpr usize Size = 1u << 16;\n    std::array<Entry, Size> table{};\n    unsigned long long visits[7]{}, hits[7]{}, qualified[7]{}, pred1[7]{}, pred1ok[7]{}, pred2[7]{}, pred2ok[7]{}, exact[7]{};\n    ~LVDecisionCacheProfile(){\n      for(int d=1;d<=6;++d) std::cerr<<"LVDC "<<d<<" visits "<<visits[d]<<" hits "<<hits[d]<<" qualified "<<qualified[d]<<" pred1 "<<pred1[d]<<" pred1ok "<<pred1ok[d]<<" pred2 "<<pred2[d]<<" pred2ok "<<pred2ok[d]<<" exact "<<exact[d]<<'\\n';\n    }\n};\nthread_local LVDecisionCacheProfile lvdc;\ninline usize lvDecisionIndex(Key k){ return usize((k ^ (k>>32) ^ (k>>17)) & (LVDecisionCacheProfile::Size-1)); }\n\nconstexpr u64 NODES_LIMIT_OUTPUT'''
+          if s.count(a)!=1: raise SystemExit('namespace')
+          s=s.replace(a,b,1)
+
+          a='''    bool  capture, ttCapture;\n    int   priorReduction;'''
+          b='''    bool  capture, ttCapture;\n    const int lvEntryDepth = int(depth);\n    int lvSearchedCount = 0;\n    bool lvCacheHit = false;\n    unsigned char lvPrevWidth = 255;\n    unsigned char lvPrevDepth = 0;\n    int   priorReduction;'''
+          if s.count(a)!=1: raise SystemExit('decl')
+          s=s.replace(a,b,1)
+
+          # Lookup immediately after canonical position key is available.
+          a='''    excludedMove                   = ss->excludedMove;\n    posKey                         = pos.key();\n    auto [ttHit, ttData, ttWriter] = tt.probe(posKey);'''
+          b='''    excludedMove                   = ss->excludedMove;\n    posKey                         = pos.key();\n    if (!excludedMove && lvEntryDepth >= 1 && lvEntryDepth <= 6)\n    {\n        ++lvdc.visits[lvEntryDepth];\n        const auto& e = lvdc.table[lvDecisionIndex(posKey)];\n        if (e.key == posKey)\n        {\n            lvCacheHit = true; lvPrevWidth = e.width; lvPrevDepth = e.depth;\n            ++lvdc.hits[lvEntryDepth];\n            if (int(e.depth) + 1 >= lvEntryDepth) ++lvdc.qualified[lvEntryDepth];\n        }\n    }\n    auto [ttHit, ttData, ttWriter] = tt.probe(posKey);'''
+          if s.count(a)!=1: raise SystemExit('key')
+          s=s.replace(a,b,1)
+
+          a='''        // Step 16. Make the move\n        do_move(pos, move, st, givesCheck, ss);'''
+          b='''        // Step 16. Make the move\n        if (lvEntryDepth >= 1 && lvEntryDepth <= 6) ++lvSearchedCount;\n        do_move(pos, move, st, givesCheck, ss);'''
+          if s.count(a)!=1: raise SystemExit('search count')
+          s=s.replace(a,b,1)
+
+          a='''    assert(bestValue > -VALUE_INFINITE && bestValue < VALUE_INFINITE);\n\n    return bestValue;\n}\n\n\n// Quiescence search function'''
+          b='''    assert(bestValue > -VALUE_INFINITE && bestValue < VALUE_INFINITE);\n\n    if (!excludedMove && lvEntryDepth >= 1 && lvEntryDepth <= 6)\n    {\n        const unsigned char now = static_cast<unsigned char>(std::min(lvSearchedCount, 254));\n        if (lvCacheHit && int(lvPrevDepth) + 1 >= lvEntryDepth)\n        {\n            if (lvPrevWidth <= 1) { ++lvdc.pred1[lvEntryDepth]; if (now <= 1) ++lvdc.pred1ok[lvEntryDepth]; }\n            if (lvPrevWidth <= 2) { ++lvdc.pred2[lvEntryDepth]; if (now <= 2) ++lvdc.pred2ok[lvEntryDepth]; }\n            if (lvPrevWidth == now) ++lvdc.exact[lvEntryDepth];\n        }\n        auto& e = lvdc.table[lvDecisionIndex(posKey)];\n        if (e.key != posKey || lvEntryDepth >= int(e.depth))\n        { e.key=posKey; e.width=now; e.depth=static_cast<unsigned char>(std::min(lvEntryDepth,255)); }\n    }\n\n    return bestValue;\n}\n\n\n// Quiescence search function'''
+          if s.count(a)!=1: raise SystemExit('end')
+          p.write_text(s.replace(a,b,1))
+          PY
+      - name: Build and profile
+        working-directory: src
+        run: |
+          make net && make clean && make -j2 ARCH=x86-64-avx2 build
+          ./stockfish bench 2>&1 | tee ../decision-cache.txt
+          grep '^LVDC' ../decision-cache.txt
+      - uses: actions/upload-artifact@v4
+        with: {name: plyless-decision-cache-profile, path: decision-cache.txt}
