@@ -1,0 +1,32 @@
+{
+  "schema": "LV_EXPERIMENT_MANIFEST_V1",
+  "experiment_id": "W019",
+  "name": "Sparse uncertainty v3 direct retest",
+  "reference_commit": "9fe94b6c81ccf3b1defe3200d6c08098a8dba1e1",
+  "oracle_commit": "5062aee519a1ba262d472d8ab139851ced56573e",
+  "candidate_ref": "leviathan/lab-v4-sparse-retest event SHA",
+  "prior_evidence": {
+    "run": 31926006580,
+    "candidate_job": 95113556775,
+    "control_job": 95113556801,
+    "candidate_equal_node_score": 0.5125,
+    "control_equal_node_score": 0.5125,
+    "candidate_fixed_time_score": 0.525,
+    "control_fixed_time_score": 0.45,
+    "games_per_mode": 40,
+    "caveat": "Separate candidate-vs-Stockfish and control-vs-Stockfish jobs; not a direct causal match."
+  },
+  "stockfish_assumption": "A reduced quiet PV rival just below alpha rarely deserves explicit verification, and one score improvement justifies sharply reducing later rivals.",
+  "reason_for_assumption": "Uncertainty verification expands the tree and local LMR signals are normally a cheaper resource allocator.",
+  "mechanism": "Spend one narrow verification only on early quiet PV rivals within 12 cp of alpha, and preserve two plies of depth for later rivals only when the PV lead is fragile.",
+  "primary_test": "100 color-reversed games at 24000 nodes per move on 50 committed fresh openings, candidate directly against reference.",
+  "secondary_test": "100 color-reversed games at 100 ms per move on the same openings.",
+  "adversarial_test": "40 candidate/reference move disagreements at 24000 nodes, evaluated by a 300000-node-per-forced-move frozen Stockfish oracle.",
+  "harness_limits": "This is a screening match: max-plies positions are adjudicated as draws and fixed-time play has no real game clock or time forfeits. It cannot by itself promote the candidate.",
+  "automatic_decision": {
+    "reject": "Equal-node score <= 0.485 with negative oracle mean regret advantage, or any decisive paired-confidence regression.",
+    "provisional_survivor": "Equal-node evidence is positive, fixed-time is non-regressive, and oracle regret is non-negative.",
+    "otherwise": "Inconclusive; do not promote."
+  },
+  "next_ablation_if_survives": "Verification-only versus rival-preservation-only versus both."
+}
