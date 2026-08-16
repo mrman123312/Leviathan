@@ -1,0 +1,52 @@
+name: Leviathan strength v6 build
+
+on:
+  push:
+    branches:
+      - leviathan/strength-v6-proof-obligation
+    paths:
+      - 'src/**'
+      - '.github/workflows/strength-v6-build.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout strength v6
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: leviathan/strength-v6-proof-obligation
+
+      - name: Build AVX2
+        working-directory: src
+        run: |
+          make net
+          make clean
+          make -j2 ARCH=x86-64-avx2 build
+
+      - name: UCI strength-mode smoke
+        working-directory: src
+        run: |
+          {
+            echo uci
+            echo 'setoption name Threads value 1'
+            echo 'setoption name Hash value 64'
+            echo 'setoption name Leviathan Fundamentals value true'
+            echo 'setoption name Leviathan Fundamentals Authority value 1'
+            echo 'setoption name Leviathan Quiet Overdrive value 0'
+            echo isready
+            echo 'position startpos moves e2e4 e7e5 g1f3 b8c6 f1b5 a7a6 b5a4 g8f6'
+            echo 'go depth 13'
+            echo quit
+          } | ./stockfish | tee ../strength-v6-smoke.txt
+          grep -q '^bestmove ' ../strength-v6-smoke.txt
+
+      - name: Archive smoke evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: strength-v6-build-smoke
+          path: strength-v6-smoke.txt
+          if-no-files-found: error
