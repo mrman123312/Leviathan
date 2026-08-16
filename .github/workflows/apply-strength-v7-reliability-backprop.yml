@@ -1,0 +1,48 @@
+name: Apply strength v7 reliability backprop
+
+on:
+  push:
+    branches:
+      - leviathan/strength-v7-persistent-proof
+    paths:
+      - '.github/workflows/apply-strength-v7-reliability-backprop.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout strength v7
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: leviathan/strength-v7-persistent-proof
+
+      - name: Add reliability backprop and memory decay
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('src/search.cpp')
+          s = p.read_text()
+          old = "    const int leviathanRootGamePly = rootPos.game_ply();\n    if (leviathanLastRootGamePly >= 0 && leviathanRootGamePly <= leviathanLastRootGamePly)\n        leviathan_proof_memory_reset();\n    leviathanLastRootGamePly = leviathanRootGamePly;\n"
+          new = "    const int leviathanRootGamePly = rootPos.game_ply();\n    if (leviathanLastRootGamePly >= 0)\n    {\n        if (leviathanRootGamePly <= leviathanLastRootGamePly)\n            leviathan_proof_memory_reset();\n        else\n        {\n            // Proof warnings are hypotheses, not permanent labels. Preserve them\n            // across nearby real-game moves but decay them as the game moves away.\n            const unsigned decay = unsigned(std::min(3,\n              std::max(1, (leviathanRootGamePly - leviathanLastRootGamePly + 1) / 2)));\n            for (auto& e : leviathanProofMemory)\n            {\n                if (e.debt <= decay)\n                    e = {};\n                else\n                    e.debt -= decay;\n            }\n        }\n    }\n    leviathanLastRootGamePly = leviathanRootGamePly;\n"
+          if s.count(old) != 1:
+              raise SystemExit(f'decay anchor count {s.count(old)}')
+          s = s.replace(old, new, 1)
+          old = "        if (leviathanTraceReady && leviathanReducedValue != VALUE_NONE)\n            Leviathan::Trace::record_lmr(\n              leviathanParentKey, move.raw(),\n              Leviathan::Trace::features(depth, moveCount, ss->statScore, correctionValue, PvNode,\n                                          cutNode, allNode, capture, givesCheck, ttData.depth,\n                                          ss->staticEval, alpha),\n              leviathanReducedValue, value, leviathanReducedDepth, newDepth, leviathanResearched);\n\n        // Step 19. Undo move\n"
+          new = "        if (leviathanTraceReady && leviathanReducedValue != VALUE_NONE)\n            Leviathan::Trace::record_lmr(\n              leviathanParentKey, move.raw(),\n              Leviathan::Trace::features(depth, moveCount, ss->statScore, correctionValue, PvNode,\n                                          cutNode, allNode, capture, givesCheck, ttData.depth,\n                                          ss->staticEval, alpha),\n              leviathanReducedValue, value, leviathanReducedDepth, newDepth, leviathanResearched);\n\n        // Leviathan strength v7.1 - Reliability Backpropagation. Alpha-beta\n        // returns a score but normally discards how difficult that score was to\n        // establish. If the searched child retained substantial proof debt, let\n        // the parent know that its conclusion rests on an uncertain future.\n        const unsigned leviathanChildDebt =\n          leviathan_proof_memory_load(leviathan_tt_key(pos));\n        if ((PvNode && leviathanChildDebt >= 3) || leviathanChildDebt >= 4)\n            leviathanProofDebt = std::min(5, leviathanProofDebt + 1);\n\n        // Step 19. Undo move\n"
+          if s.count(old) != 1:
+              raise SystemExit(f'backprop anchor count {s.count(old)}')
+          p.write_text(s.replace(old, new, 1))
+          PY
+          git diff --check
+          git diff -- src/search.cpp
+
+      - name: Commit reliability backprop
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add src/search.cpp
+          git commit -m 'Strength v7.1: propagate and decay proof reliability'
+          git push origin HEAD:leviathan/strength-v7-persistent-proof
