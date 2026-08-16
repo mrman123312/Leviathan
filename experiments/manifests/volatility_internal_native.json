@@ -1,0 +1,37 @@
+{
+  "schema": "LV_EXPERIMENT_MANIFEST_V1",
+  "id": "W035",
+  "family": "value-of-computation-counterfactual",
+  "hypothesis": "A deterministic iteration-boundary root-volatility latch allocates equal aggregate nodes more usefully than Stockfish's native time manager, a uniform budget, and a shuffled allocation.",
+  "candidate_sha": "63d7c506fc1d0bfafdd892ad762f43c1b68a1514",
+  "reference_sha": "a38620d49cd28d0f1bddd776658dda4b47dd4c96",
+  "oracle_sha": "5062aee519a1ba262d472d8ab139851ced56573e",
+  "holdout": {
+    "path": "experiments/holdouts/volatility_internal_native_seed2026081622.fen",
+    "sha256": "9dd67329987091be54f1f6f3108356157c8f560602c438c254c524f230991cc1",
+    "positions": 100,
+    "generator_seed": 2026081622,
+    "generator_nodes": 2000
+  },
+  "frozen_policy": {
+    "adaptive_control": "internal iteration-boundary latch",
+    "probe_nodes": 15000,
+    "cap_nodes": 100000,
+    "stable_depths": 5,
+    "decision_count": 1,
+    "native_control": "Stockfish nodestime=1, remaining_moves=50, clock secant-calibrated before oracle scoring",
+    "uniform_control": "same observed mean nodes, selected before oracle scoring",
+    "causal_ablation": "shuffle the adaptive per-position node-budget distribution"
+  },
+  "oracle_nodes": 500000,
+  "forced_move_nodes": 250000,
+  "gates": [
+    "candidate option-off matches reference on all three exact normalized transcripts",
+    "two independent internal adaptive processes match moves, volatility flags, histories, and aggregate nodes within one percent",
+    "adaptive, native, uniform, and shuffled aggregate nodes are each within one percent",
+    "adaptive-vs-native, adaptive-vs-uniform, and adaptive-vs-shuffled bootstrap mean lower bounds are above zero",
+    "adaptive wins are not fewer than losses in all three comparisons"
+  ],
+  "promotion": "Passing advances only to equal-node and fixed-time games; deep-oracle evidence alone cannot establish strength.",
+  "rollback": "Reject or redesign the latch if reproducibility, compute matching, native-TM, uniform, or shuffled causal gates fail."
+}
