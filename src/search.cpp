@@ -237,8 +237,25 @@ void Search::Worker::start_searching() {
     // Persist proof warnings while the actual game advances, but never leak
     // them into a new game, a takeback, or repeated analysis of the same root.
     const int leviathanRootGamePly = rootPos.game_ply();
-    if (leviathanLastRootGamePly >= 0 && leviathanRootGamePly <= leviathanLastRootGamePly)
-        leviathan_proof_memory_reset();
+    if (leviathanLastRootGamePly >= 0)
+    {
+        if (leviathanRootGamePly <= leviathanLastRootGamePly)
+            leviathan_proof_memory_reset();
+        else
+        {
+            // Proof warnings are hypotheses, not permanent labels. Preserve them
+            // across nearby real-game moves but decay them as the game moves away.
+            const unsigned decay = unsigned(std::min(3,
+              std::max(1, (leviathanRootGamePly - leviathanLastRootGamePly + 1) / 2)));
+            for (auto& e : leviathanProofMemory)
+            {
+                if (e.debt <= decay)
+                    e = {};
+                else
+                    e.debt -= decay;
+            }
+        }
+    }
     leviathanLastRootGamePly = leviathanRootGamePly;
 
     // Non-main threads go directly to iterative_deepening()
@@ -1667,6 +1684,15 @@ moves_loop:  // When in check, search starts here
                                           cutNode, allNode, capture, givesCheck, ttData.depth,
                                           ss->staticEval, alpha),
               leviathanReducedValue, value, leviathanReducedDepth, newDepth, leviathanResearched);
+
+        // Leviathan strength v7.1 - Reliability Backpropagation. Alpha-beta
+        // returns a score but normally discards how difficult that score was to
+        // establish. If the searched child retained substantial proof debt, let
+        // the parent know that its conclusion rests on an uncertain future.
+        const unsigned leviathanChildDebt =
+          leviathan_proof_memory_load(leviathan_tt_key(pos));
+        if ((PvNode && leviathanChildDebt >= 3) || leviathanChildDebt >= 4)
+            leviathanProofDebt = std::min(5, leviathanProofDebt + 1);
 
         // Step 19. Undo move
         undo_move(pos, move);
