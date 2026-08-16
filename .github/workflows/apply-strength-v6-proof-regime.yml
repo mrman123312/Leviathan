@@ -1,0 +1,44 @@
+name: Apply strength v6 proof regime
+
+on:
+  push:
+    branches:
+      - leviathan/strength-v6-proof-obligation
+    paths:
+      - '.github/workflows/apply-strength-v6-proof-regime.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout strength v6
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: leviathan/strength-v6-proof-obligation
+
+      - name: Enforce proof-regime reduction caps
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('src/search.cpp')
+          s = p.read_text()
+
+          old = "        r += Leviathan::Fundamentals::lmr_adjustment(\n          pos, move, prevSq, depth, moveCount, PvNode, capture, givesCheck);\n\n        Value leviathanReducedValue = VALUE_NONE;"
+          new = "        r += Leviathan::Fundamentals::lmr_adjustment(\n          pos, move, prevSq, depth, moveCount, PvNode, capture, givesCheck);\n\n        // Leviathan strength v6.4 - Proof Regime. Once several independent\n        // warnings agree, incremental buybacks are not enough: accumulated LMR\n        // terms can still bury the very branch we declared uncertain. Cap the\n        // reduction itself so proof debt has real search authority.\n        if (depth >= 7 && leviathanProofDebt >= 4 && moveCount <= 2)\n            r = std::min(r, 0);      // full depth (negative extension remains allowed)\n        else if (depth >= 6 && leviathanProofDebt >= 3 && moveCount <= 4)\n            r = std::min(r, 1024);   // at most about one ply of positive reduction\n\n        Value leviathanReducedValue = VALUE_NONE;"
+          if s.count(old) != 1:
+              raise SystemExit(f'proof regime anchor count {s.count(old)}')
+          p.write_text(s.replace(old, new, 1))
+          PY
+          git diff --check
+          git diff -- src/search.cpp
+
+      - name: Commit proof regime
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add src/search.cpp
+          git commit -m 'Strength v6.4: enforce proof-regime LMR caps'
+          git push origin HEAD:leviathan/strength-v6-proof-obligation
