@@ -398,8 +398,9 @@ class Worker {
     // it never stores a move or evaluation as truth. Per-worker ownership keeps
     // it lock-free, and the cache survives consecutive go commands in one game.
     struct LeviathanProofMemoryEntry {
-        Key          key  = 0;
-        unsigned int debt = 0;
+        Key          key     = 0;
+        unsigned int debt    = 0;
+        Move         witness = Move::none();
     };
     static constexpr usize LEVIATHAN_PROOF_MEMORY_SIZE = 4096;
     std::array<LeviathanProofMemoryEntry, LEVIATHAN_PROOF_MEMORY_SIZE> leviathanProofMemory{};
@@ -410,14 +411,24 @@ class Worker {
         return e.key == key ? e.debt : 0;
     }
 
-    void leviathan_proof_memory_store(Key key, int debt) {
-        if (debt < 3)
+    Move leviathan_proof_memory_witness(Key key) const {
+        const auto& e = leviathanProofMemory[usize(key) & (LEVIATHAN_PROOF_MEMORY_SIZE - 1)];
+        return e.key == key ? e.witness : Move::none();
+    }
+
+    void leviathan_proof_memory_store(Key key, int debt, Move witness = Move::none()) {
+        if (debt < 3 && !witness)
             return;
         auto& e = leviathanProofMemory[usize(key) & (LEVIATHAN_PROOF_MEMORY_SIZE - 1)];
+        const unsigned boundedDebt = unsigned(std::clamp(debt, 0, 5));
         if (e.key != key)
-            e = {key, unsigned(std::min(debt, 5))};
+            e = {key, boundedDebt, witness};
         else
-            e.debt = std::max(e.debt, unsigned(std::min(debt, 5)));
+        {
+            e.debt = std::max(e.debt, boundedDebt);
+            if (witness)
+                e.witness = witness;
+        }
     }
 
     void leviathan_proof_memory_reset() {

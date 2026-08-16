@@ -854,7 +854,7 @@ Value Search::Worker::search(
     StateInfo st;
 
     Key   posKey;
-    Move  move, excludedMove, bestMove, probCutNearMiss;
+    Move  move, excludedMove, bestMove, probCutNearMiss, leviathanWitness;
     Depth extension, newDepth;
     Value bestValue, value, eval, maxValue, probCutBeta, probCutNearValue;
     bool  givesCheck, improving, priorCapture, opponentWorsening;
@@ -913,6 +913,7 @@ Value Search::Worker::search(
     probCutNearValue      = -VALUE_INFINITE;
     leviathanNullFragile = false;
     leviathanProofDebt   = 0;
+    leviathanWitness     = Move::none();
     priorReduction        = (ss - 1)->reduction;
     (ss - 1)->reduction = 0;
     ss->statScore       = 0;
@@ -927,6 +928,7 @@ Value Search::Worker::search(
     // the revisit with that proof debt instead of paying to rediscover it.
     leviathanProofDebt = std::max(leviathanProofDebt,
                                   int(leviathan_proof_memory_load(posKey)));
+    leviathanWitness = leviathan_proof_memory_witness(posKey);
     auto [ttHit, ttData, ttWriter] = tt.probe(posKey);
     // Need further processing of the saved data
     ss->ttHit    = ttHit;
@@ -1261,7 +1263,10 @@ Value Search::Worker::search(
     }
 
     if (probCutNearMiss)
+    {
         leviathanProofDebt = std::min(5, leviathanProofDebt + 1);
+        leviathanWitness   = probCutNearMiss;
+    }
 
 moves_loop:  // When in check, search starts here
 
@@ -1279,7 +1284,11 @@ moves_loop:  // When in check, search starts here
 
     // If the TT has no principal move, reuse the strongest tactical near-proof
     // that ProbCut already paid to discover. It still receives a normal alpha-beta search.
-    const Move leviathanPreferredMove = ttData.move ? ttData.move : probCutNearMiss;
+    const Move persistentWitness =
+      leviathanWitness && pos.pseudo_legal(leviathanWitness) ? leviathanWitness : Move::none();
+    const Move leviathanPreferredMove = ttData.move ? ttData.move
+                                      : probCutNearMiss ? probCutNearMiss
+                                                       : persistentWitness;
     MovePicker mp(pos, leviathanPreferredMove, depth, &mainHistory, &lowPlyHistory, &captureHistory,
                   contHist, &sharedHistory, ss->ply);
 
@@ -1380,6 +1389,7 @@ moves_loop:  // When in check, search starts here
                 const bool leviathanScopeProtected =
                   Leviathan::Fundamentals::protected_scope_move(
                     pos, move, prevSq, capture, givesCheck)
+                  || move == persistentWitness
                   || (leviathanProofDebt >= 2
                       && moveCount <= 6 + std::min(leviathanProofDebt, 4));
                 int dIndex  = std::min(int(depth), int(lmrDivisor.size())) - 1;
@@ -1511,6 +1521,8 @@ moves_loop:  // When in check, search starts here
         // depth buyback when the normal search reaches the same move.
         if (move == probCutNearMiss)
             r -= 768;
+        else if (move == persistentWitness)
+            r -= 640;
 
         // Proof debt converts contradictory evidence into bounded search authority.
         // Only early serious candidates receive the buyback; debt is capped above.
@@ -1635,6 +1647,9 @@ moves_loop:  // When in check, search starts here
                 // A rescued PV false-negative is a concrete counterexample to the
                 // reduction model. Do not merely restore baseline depth: give the
                 // subsequent PV proof one extra ply to resolve the contradiction.
+                if (leviathanReducedValue <= alpha && value > alpha)
+                    leviathanWitness = move;
+
                 if (PvNode && leviathanReducedValue <= alpha && value > alpha
                     && depth >= 7 && newDepth < depth)
                     ++newDepth;
@@ -1686,6 +1701,8 @@ moves_loop:  // When in check, search starts here
             const bool boundaryFlip  = (leviathanReducedValue > alpha) != (value > alpha);
             const int  evidenceBoost = boundaryFlip ? 2 : lmrError >= 160 ? 2 : int(lmrError >= 64);
             leviathanProofDebt = std::min(5, leviathanProofDebt + evidenceBoost);
+            if (boundaryFlip || lmrError >= 160)
+                leviathanWitness = move;
         }
 
         if (leviathanTraceReady && leviathanReducedValue != VALUE_NONE)
@@ -1923,7 +1940,7 @@ moves_loop:  // When in check, search starts here
     // Persist only substantial proof debt. This is deliberately separate
     // from TT score authority: future visits inherit skepticism, not a verdict.
     if (!excludedMove && leviathanProofDebt >= 3)
-        leviathan_proof_memory_store(posKey, leviathanProofDebt);
+        leviathan_proof_memory_store(posKey, leviathanProofDebt, leviathanWitness);
 
     // Write gathered information in transposition table. Note that the
     // static evaluation is saved as it was before correction history.
