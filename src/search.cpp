@@ -773,7 +773,7 @@ Value Search::Worker::search(
     Depth extension, newDepth;
     Value bestValue, value, eval, maxValue, probCutBeta, probCutNearValue;
     bool  givesCheck, improving, priorCapture, opponentWorsening;
-    bool  capture, ttCapture;
+    bool  capture, ttCapture, leviathanNullFragile;
     int   priorReduction;
     Piece movedPiece;
 
@@ -825,8 +825,9 @@ Value Search::Worker::search(
     Square prevSq  = ((ss - 1)->currentMove).is_ok() ? ((ss - 1)->currentMove).to_sq() : SQ_NONE;
     bestMove         = Move::none();
     probCutNearMiss  = Move::none();
-    probCutNearValue = -VALUE_INFINITE;
-    priorReduction   = (ss - 1)->reduction;
+    probCutNearValue      = -VALUE_INFINITE;
+    leviathanNullFragile = false;
+    priorReduction        = (ss - 1)->reduction;
     (ss - 1)->reduction = 0;
     ss->statScore       = 0;
     (ss + 2)->cutoffCnt = 0;
@@ -1047,6 +1048,14 @@ Value Search::Worker::search(
 
         undo_null_move(pos);
 
+        // Leviathan strength v5 - Null Fragility Memory. If static evaluation
+        // expected a cutoff but losing one tempo collapses the reduced search,
+        // the node is unusually tempo-dependent. Preserve that paid-for warning
+        // and become less willing to discard quiet alternatives below.
+        if (depth >= 6 && nullValue < beta
+            && ss->staticEval - nullValue >= 192 && !is_decisive(nullValue))
+            leviathanNullFragile = true;
+
         // Do not return unproven mate or TB scores
         if (nullValue >= beta && !is_win(nullValue))
         {
@@ -1211,7 +1220,8 @@ moves_loop:  // When in check, search starts here
         if (!rootNode && pos.non_pawn_material(us) && !is_loss(bestValue))
         {
             // Skip quiet moves if movecount exceeds our threshold
-            if (moveCount >= (3 + depth * depth) / (2 - improving))
+            if (!leviathanNullFragile
+                && moveCount >= (3 + depth * depth) / (2 - improving))
                 mp.skip_quiet_moves();
 
             // Reduced depth of the next LMR search
@@ -1245,7 +1255,8 @@ moves_loop:  // When in check, search starts here
             {
                 const bool leviathanScopeProtected =
                   Leviathan::Fundamentals::protected_scope_move(
-                    pos, move, prevSq, capture, givesCheck);
+                    pos, move, prevSq, capture, givesCheck)
+                  || (leviathanNullFragile && moveCount <= 10);
                 int dIndex  = std::min(int(depth), int(lmrDivisor.size())) - 1;
                 int history = (*contHist[0])[movedPiece][move.to_sq()]
                             + (*contHist[1])[movedPiece][move.to_sq()]
@@ -1374,6 +1385,11 @@ moves_loop:  // When in check, search starts here
         // depth buyback when the normal search reaches the same move.
         if (move == probCutNearMiss)
             r -= 768;
+
+        // A failed null-move shortcut says the position depends heavily on making
+        // a real move now. Buy back a small amount of depth on quiet candidates.
+        if (leviathanNullFragile && !capture && !givesCheck && moveCount <= 10)
+            r -= 256;
 
         r -= moveCount * 65;
         r -= std::abs(correctionValue) / 26310;
