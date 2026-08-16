@@ -1,0 +1,45 @@
+name: Plyless decision-cache size profiler
+
+on:
+  push:
+    branches: [leviathan/plyless-v0-decision-depth]
+    paths: ['.github/workflows/plyless-cache-size-profile.yml']
+  workflow_dispatch:
+
+permissions: {contents: read}
+
+jobs:
+  profile:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with: {repository: official-stockfish/Stockfish, ref: 5062aee519a1ba262d472d8ab139851ced56573e}
+      - name: Instrument three sidecar sizes
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path('src/search.cpp');s=p.read_text();s=s.replace('#include <utility>','#include <utility>\n#include <iostream>')
+          a='''namespace {\n\nconstexpr u64 NODES_LIMIT_OUTPUT'''
+          b='''namespace {\n\ntemplate<int Bits> struct LVCS {\n struct E{Key k=0;unsigned char w=255,d=0;}; std::array<E,1u<<Bits> t{};\n unsigned long long hit[7]{},qual[7]{},p1[7]{},ok1[7]{};\n E& at(Key k){return t[usize((k^(k>>32)^(k>>17))&((1u<<Bits)-1))];}\n};\nstruct LVCSP {LVCS<12>a;LVCS<14>b;LVCS<16>c;unsigned long long visits[7]{};~LVCSP(){for(int d=1;d<=6;++d){auto pr=[&](const char*n,const auto&x){std::cerr<<"LVCS "<<n<<' '<<d<<" visits "<<visits[d]<<" hit "<<x.hit[d]<<" qual "<<x.qual[d]<<" p1 "<<x.p1[d]<<" ok1 "<<x.ok1[d]<<'\\n';};pr("4k",a);pr("16k",b);pr("64k",c);}}};\nthread_local LVCSP lvcsp;\n\nconstexpr u64 NODES_LIMIT_OUTPUT'''
+          if s.count(a)!=1:raise SystemExit('ns');s=s.replace(a,b,1)
+          a='''    bool  capture, ttCapture;\n    int   priorReduction;'''
+          b='''    bool  capture, ttCapture; const int lvD=int(depth); int lvCnt=0;\n    Key lvK=0; struct LVPrev{bool h=false;unsigned char w=255,d=0;} lvP[3];\n    int   priorReduction;'''
+          if s.count(a)!=1:raise SystemExit('loc');s=s.replace(a,b,1)
+          a='''    excludedMove                   = ss->excludedMove;\n    posKey                         = pos.key();\n    auto [ttHit, ttData, ttWriter] = tt.probe(posKey);'''
+          b='''    excludedMove                   = ss->excludedMove; posKey=pos.key();\n    if(!excludedMove&&lvD>=1&&lvD<=6){++lvcsp.visits[lvD];lvK=posKey;int i=0;auto get=[&](auto&c){auto&e=c.at(lvK);if(e.k==lvK){lvP[i]={true,e.w,e.d};++c.hit[lvD];if(int(e.d)+1>=lvD){++c.qual[lvD];if(e.w<=1)++c.p1[lvD];}}++i;};get(lvcsp.a);get(lvcsp.b);get(lvcsp.c);}\n    auto [ttHit, ttData, ttWriter] = tt.probe(posKey);'''
+          if s.count(a)!=1:raise SystemExit('key');s=s.replace(a,b,1)
+          a='''        // Step 16. Make the move\n        do_move(pos, move, st, givesCheck, ss);'''
+          b='''        // Step 16. Make the move\n        if(lvD>=1&&lvD<=6)++lvCnt; do_move(pos, move, st, givesCheck, ss);'''
+          if s.count(a)!=1:raise SystemExit('move');s=s.replace(a,b,1)
+          a='''    assert(bestValue > -VALUE_INFINITE && bestValue < VALUE_INFINITE);\n\n    return bestValue;\n}\n\n\n// Quiescence search function'''
+          b='''    assert(bestValue > -VALUE_INFINITE && bestValue < VALUE_INFINITE);\n    if(!excludedMove&&lvD>=1&&lvD<=6){int i=0;auto put=[&](auto&c){if(lvP[i].h&&int(lvP[i].d)+1>=lvD&&lvP[i].w<=1&&lvCnt<=1)++c.ok1[lvD];auto&e=c.at(lvK);if(e.k!=lvK||lvD>=int(e.d)){e.k=lvK;e.w=static_cast<unsigned char>(std::min(lvCnt,254));e.d=static_cast<unsigned char>(lvD);}++i;};put(lvcsp.a);put(lvcsp.b);put(lvcsp.c);}\n    return bestValue;\n}\n\n\n// Quiescence search function'''
+          if s.count(a)!=1:raise SystemExit('end');p.write_text(s.replace(a,b,1))
+          PY
+      - name: Build and run
+        working-directory: src
+        run: |
+          make net && make clean && make -j2 ARCH=x86-64-avx2 build
+          ./stockfish bench 2>&1 | tee ../sizes.txt
+          grep '^LVCS' ../sizes.txt
+      - uses: actions/upload-artifact@v4
+        with: {name: plyless-cache-size-profile, path: sizes.txt}
