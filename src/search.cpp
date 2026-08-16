@@ -864,7 +864,7 @@ Value Search::Worker::search(
     Depth extension, newDepth;
     Value bestValue, value, eval, maxValue, probCutBeta, probCutNearValue;
     bool  givesCheck, improving, priorCapture, opponentWorsening;
-    bool  capture, ttCapture, leviathanNullFragile;
+    bool  capture, ttCapture;
     int   priorReduction;
     Leviathan::Evidence::State leviathanEvidence;
     int&  leviathanProofDebt = leviathanEvidence.debt;
@@ -919,7 +919,6 @@ Value Search::Worker::search(
     bestMove         = Move::none();
     probCutNearMiss  = Move::none();
     probCutNearValue      = -VALUE_INFINITE;
-    leviathanNullFragile = false;
     leviathanEvidence    = {};
     leviathanWitness     = Move::none();
     priorReduction        = (ss - 1)->reduction;
@@ -1185,7 +1184,6 @@ Value Search::Worker::search(
         if (depth >= 6 && nullValue < beta
             && ss->staticEval - nullValue >= 192 && !is_decisive(nullValue))
         {
-            leviathanNullFragile = true;
             leviathanEvidence.add(Leviathan::Evidence::Kind::NULL_FRAGILITY, 2);
         }
 
