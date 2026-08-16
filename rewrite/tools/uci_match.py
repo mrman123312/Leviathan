@@ -42,7 +42,7 @@ def main() -> int:
             info = engine.play(
                 board,
                 chess.engine.Limit(time=args.movetime / 1000.0),
-                info=chess.engine.INFO_SCORE | chess.engine.INFO_DEPTH | chess.engine.INFO_NODES,
+                info=chess.engine.INFO_BASIC | chess.engine.INFO_SCORE,
             )
             if info.move is None or info.move not in board.legal_moves:
                 raise RuntimeError(f"illegal/null move from {'white' if board.turn else 'black'}: {info.move}")
@@ -66,7 +66,8 @@ def main() -> int:
 
         if board.is_game_over(claim_draw=True):
             result = board.result(claim_draw=True)
-            termination = board.outcome(claim_draw=True).termination.name if board.outcome(claim_draw=True) else "unknown"
+            outcome = board.outcome(claim_draw=True)
+            termination = outcome.termination.name if outcome else "unknown"
         else:
             result = "*"
             termination = "max_plies"
