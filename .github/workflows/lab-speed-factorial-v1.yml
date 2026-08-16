@@ -1,0 +1,113 @@
+name: Leviathan lab speed factorial v1
+
+on:
+  push:
+    branches: [leviathan/lab-v4-reconciliation]
+    paths:
+      - '.github/workflows/lab-speed-factorial-v1.yml'
+      - 'tools/leviathan_speed_factorial.py'
+  workflow_dispatch:
+
+permissions: {contents: read}
+
+concurrency:
+  group: lab-speed-factorial-v1-${{ github.ref }}
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  strict-factorial:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 55
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: ${{ github.sha }}
+          path: lab
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: fbccfb6eb5cd335b1ce8fc5c5efad9e36be4e19d
+          path: frozen
+      - name: Record immutable environment
+        run: |
+          set -euo pipefail
+          {
+            echo "runner_image=${ImageOS:-unknown}"
+            echo "runner_image_version=${ImageVersion:-unknown}"
+            uname -a
+            lscpu
+            g++ --version
+            git -C lab rev-parse HEAD
+            git -C frozen rev-parse HEAD
+            sha256sum lab/tools/leviathan_speed_factorial.py
+          } | tee environment.txt
+      - name: Materialize exact variants
+        run: |
+          set -euo pipefail
+          cd frozen/src
+          make net
+          sha256sum nn-ab28990d4ea3.nnue | tee -a ../../environment.txt
+          cd ../..
+          mkdir variants
+          : > variant-source-sha256.txt
+          for variant in control_a control_b p0 p01 p02 p03 p012 p013 p0123; do
+            mkdir "variants/$variant"
+            cp -a frozen/src "variants/$variant/src"
+            python3 lab/tools/leviathan_speed_factorial.py apply "$variant" "variants/$variant"
+            (
+              cd "variants/$variant/src"
+              find . -type f ! -name '*.nnue' -print0 \
+                | sort -z \
+                | xargs -0 sha256sum \
+                | sha256sum
+            ) | sed "s#  -#  $variant#" >> variant-source-sha256.txt
+            set +e
+            diff -ru --exclude='*.nnue' frozen/src "variants/$variant/src" \
+              > "variant-$variant.patch"
+            diff_status=$?
+            set -e
+            if (( diff_status > 1 )); then
+              exit "$diff_status"
+            fi
+          done
+      - name: Build all variants
+        run: |
+          set -euo pipefail
+          for variant in control_a control_b p0 p01 p02 p03 p012 p013 p0123; do
+            make -C "variants/$variant/src" -j2 ARCH=x86-64-avx2 build
+            mv "variants/$variant/src/stockfish" "variants/$variant/src/$variant"
+          done
+          : > variant-binary-sha256.txt
+          for variant in control_a control_b p0 p01 p02 p03 p012 p013 p0123; do
+            sha256sum "variants/$variant/src/$variant" >> variant-binary-sha256.txt
+          done
+      - name: Exactness gates and drift-corrected factorial panel
+        run: |
+          set -euo pipefail
+          python3 lab/tools/leviathan_speed_factorial.py benchmark \
+            --rounds 15 \
+            --engine control_a=variants/control_a/src/control_a \
+            --engine control_b=variants/control_b/src/control_b \
+            --engine p0=variants/p0/src/p0 \
+            --engine p01=variants/p01/src/p01 \
+            --engine p02=variants/p02/src/p02 \
+            --engine p03=variants/p03/src/p03 \
+            --engine p012=variants/p012/src/p012 \
+            --engine p013=variants/p013/src/p013 \
+            --engine p0123=variants/p0123/src/p0123 \
+            --output speed-factorial-v1.json 2>&1 | tee speed-factorial-v1.log
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: lab-speed-factorial-v1
+          retention-days: 90
+          path: |
+            environment.txt
+            variant-source-sha256.txt
+            variant-binary-sha256.txt
+            variant-*.patch
+            speed-factorial-v1.json
+            speed-factorial-v1.log
