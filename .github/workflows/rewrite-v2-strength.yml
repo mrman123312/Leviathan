@@ -1,16 +1,9 @@
 name: Leviathan Rewrite v2 Strength Probe
 
+# The requested one-game probe was completed on 2026-08-16.
+# Keep this manual-only so later research commits cannot silently create extra matches.
 on:
-  push:
-    branches:
-      - leviathan/rewrite-v2-bootstrap-strength
-    paths:
-      - 'rewrite/**'
-      - '.github/workflows/rewrite-v2-strength.yml'
-  pull_request:
-    paths:
-      - 'rewrite/**'
-      - '.github/workflows/rewrite-v2-strength.yml'
+  workflow_dispatch:
 
 jobs:
   build-test-teach-match:
@@ -48,14 +41,6 @@ jobs:
             --source leviathan-bootstrap-seed \
             --license project_native \
             --output rewrite/results/bootstrap_labels.jsonl
-          python3 - <<'PY'
-          import json
-          rows=[json.loads(x) for x in open('rewrite/results/bootstrap_labels.jsonl')]
-          print('teacher positions:', len(rows))
-          print('bestmove disagreements:', sum(r['bestmove_disagreement'] for r in rows))
-          vals=[r['disagreement_cp'] for r in rows if r['disagreement_cp'] is not None]
-          print('mean score disagreement cp:', round(sum(vals)/len(vals),2) if vals else 'n/a')
-          PY
 
       - name: One game vs Stockfish 18
         run: |
@@ -69,12 +54,6 @@ jobs:
             --pgn rewrite/results/leviathan-vs-stockfish18.pgn \
             --summary rewrite/results/leviathan-vs-stockfish18.json
           cat rewrite/results/leviathan-vs-stockfish18.pgn
-          python3 - <<'PY'
-          import json
-          p='rewrite/results/leviathan-vs-stockfish18.json'
-          d=json.load(open(p))
-          print('MATCH_RESULT', d['result'], d['termination'], 'plies=', d['plies'])
-          PY
 
       - uses: actions/upload-artifact@v4
         with:
