@@ -1,0 +1,149 @@
+name: Leviathan qforced fresh 200-game holdout
+
+on:
+  push:
+    branches: [leviathan/plyless-v0-decision-depth]
+    paths: ['.github/workflows/qforced-fresh-200.yml']
+  workflow_dispatch:
+
+permissions: {contents: read}
+
+jobs:
+  shard:
+    runs-on: ubuntu-22.04
+    strategy:
+      fail-fast: false
+      matrix:
+        mode: [nodes, time]
+        shard: [0,1,2,3,4]
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with: {ref: fbccfb6eb5cd335b1ce8fc5c5efad9e36be4e19d, path: leviathan}
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with: {repository: official-stockfish/Stockfish, ref: 5062aee519a1ba262d472d8ab139851ced56573e, path: stockfish}
+      - name: Apply exact qforced frontier mechanism
+        working-directory: leviathan
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path('src/search.cpp');s=p.read_text()
+          anchor='''    Square prevSq = ((ss - 1)->currentMove).is_ok() ? ((ss - 1)->currentMove).to_sq() : SQ_NONE;\n\n    // Initialize a MovePicker object for the current position, and prepare to search'''
+          repl='''    Square prevSq = ((ss - 1)->currentMove).is_ok() ? ((ss - 1)->currentMove).to_sq() : SQ_NONE;\n\n    // Leviathan qforced: qsearch may not terminate at a quiet frontier when\n    // there is exactly one legal move. There is no real stand-pat option.\n    if (Leviathan::Fundamentals::ready() && !ss->inCheck && ss->ply < MAX_PLY - 1)\n    {\n        MoveList<LEGAL> lvLegal(pos);\n        if (lvLegal.size() == 1)\n        {\n            const Move forced = *lvLegal.begin();\n            const bool forcedCapture = pos.capture_stage(forced);\n            const bool forcedCheck = pos.gives_check(forced);\n            if (!forcedCapture)\n            {\n                do_move(pos, forced, st, forcedCheck, ss);\n                Value forcedValue = -qsearch<nodeType>(pos, ss + 1, -beta, -alpha);\n                undo_move(pos, forced);\n                return forcedValue;\n            }\n        }\n    }\n\n    // Initialize a MovePicker object for the current position, and prepare to search'''
+          if s.count(anchor)!=1:raise SystemExit('qforced anchor missing')
+          p.write_text(s.replace(anchor,repl,1))
+          PY
+      - run: python3 -m pip install --disable-pip-version-check 'python-chess>=1.999,<2'
+      - name: Build AVX2
+        run: |
+          cd leviathan/src && make net && make -j2 ARCH=x86-64-avx2 build && mv stockfish leviathan
+          cd ../../stockfish/src && make net && make -j2 ARCH=x86-64-avx2 build && mv stockfish parent
+      - name: Configure and generate fresh paired openings
+        working-directory: leviathan
+        env: {SHARD: '${{ matrix.shard }}'}
+        run: |
+          mkdir -p q
+          cat > q/a.json <<'EOF'
+          {"Threads":1,"Hash":64,"Leviathan Fundamentals":true,"Leviathan Fundamentals Authority":2,"Leviathan Forcing Buyback":384,"Leviathan Recapture Buyback":256,"Leviathan Passer Buyback":320,"Leviathan Endgame Buyback":128,"Leviathan Quiet Overdrive":160,"Leviathan Rule50 Pawn Bonus":3072,"Leviathan Zugzwang Guard":true,"Leviathan Sacrifice Rescue":true,"Leviathan Rule50 Pressure":true,"Leviathan Policy":false,"Leviathan MetaSearch":false,"Leviathan Risk":false,"Leviathan Specialist":false,"Leviathan Atlas":false,"Leviathan Search DSL":false}
+          EOF
+          echo '{"Threads":1,"Hash":64}' > q/b.json
+          python3 - <<'PY'
+          import os,random,chess,chess.engine
+          from pathlib import Path
+          sh=int(os.environ['SHARD']);r=random.Random(2468910+sh*104729);out=[];seen=set()
+          sf=chess.engine.SimpleEngine.popen_uci('../stockfish/src/parent');sf.configure({'Threads':1,'Hash':64})
+          try:
+            while len(out)<10:
+              b=chess.Board()
+              for _ in range(r.randint(10,30)):
+                if b.is_game_over():break
+                I=sf.analyse(b,chess.engine.Limit(nodes=1600),multipv=min(6,b.legal_moves.count()));I=I if isinstance(I,list) else [I];R=[]
+                for z in I:
+                  if z.get('pv'):
+                    cp=z['score'].pov(b.turn).score(mate_score=100000);R.append((z['pv'][0],int(cp or 0)))
+                if not R:break
+                best=R[0][1];V=[x for x in R if best-x[1]<=110] or R[:1]
+                b.push(r.choices([m for m,_ in V],weights=list(range(len(V),0,-1)),k=1)[0])
+              k=' '.join(b.fen().split()[:4])
+              if b.is_game_over() or k in seen:continue
+              seen.add(k);out.append(b.fen())
+          finally:sf.quit()
+          Path('q/openings.fen').write_text('\n'.join(out)+'\n')
+          PY
+      - name: Play 20 games
+        working-directory: leviathan
+        env: {MODE: '${{ matrix.mode }}'}
+        run: |
+          if [ "$MODE" = nodes ]; then
+            python3 tools/run_match.py --engine-a "$PWD/src/leviathan" --engine-b "$GITHUB_WORKSPACE/stockfish/src/parent" --options-a q/a.json --options-b q/b.json --openings q/openings.fen --games 20 --nodes-per-move 22000 --max-plies 246 --out q/result.json | tee q/result.log
+          else
+            python3 tools/run_match.py --engine-a "$PWD/src/leviathan" --engine-b "$GITHUB_WORKSPACE/stockfish/src/parent" --options-a q/a.json --options-b q/b.json --openings q/openings.fen --games 20 --movetime-ms 100 --max-plies 246 --out q/result.json | tee q/result.log
+          fi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: qforced-${{ matrix.mode }}-${{ matrix.shard }}
+          path: |
+            leviathan/q/result.json
+            leviathan/q/result.log
+            leviathan/q/openings.fen
+
+  bench:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with: {ref: fbccfb6eb5cd335b1ce8fc5c5efad9e36be4e19d, path: leviathan}
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with: {repository: official-stockfish/Stockfish, ref: 5062aee519a1ba262d472d8ab139851ced56573e, path: stockfish}
+      - name: Apply exact qforced patch
+        working-directory: leviathan
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path('src/search.cpp');s=p.read_text();a='''    Square prevSq = ((ss - 1)->currentMove).is_ok() ? ((ss - 1)->currentMove).to_sq() : SQ_NONE;\n\n    // Initialize a MovePicker object for the current position, and prepare to search''';b='''    Square prevSq = ((ss - 1)->currentMove).is_ok() ? ((ss - 1)->currentMove).to_sq() : SQ_NONE;\n\n    if (Leviathan::Fundamentals::ready() && !ss->inCheck && ss->ply < MAX_PLY - 1)\n    {\n        MoveList<LEGAL> lvLegal(pos);\n        if (lvLegal.size() == 1)\n        {\n            const Move forced = *lvLegal.begin();\n            const bool forcedCapture = pos.capture_stage(forced);\n            const bool forcedCheck = pos.gives_check(forced);\n            if (!forcedCapture)\n            {\n                do_move(pos, forced, st, forcedCheck, ss);\n                Value forcedValue = -qsearch<nodeType>(pos, ss + 1, -beta, -alpha);\n                undo_move(pos, forced);\n                return forcedValue;\n            }\n        }\n    }\n\n    // Initialize a MovePicker object for the current position, and prepare to search''';assert s.count(a)==1;p.write_text(s.replace(a,b,1))
+          PY
+      - name: Build and compare 21 alternating benches
+        run: |
+          cd leviathan/src && make net && make -j2 ARCH=x86-64-avx2 build && mv stockfish leviathan
+          cd ../../stockfish/src && make net && make -j2 ARCH=x86-64-avx2 build && mv stockfish parent
+          cd ../..
+          python3 - <<'PY' | tee qforced-bench.txt
+          import subprocess,re,statistics,json
+          lev='./leviathan/src/leviathan';sf='./stockfish/src/parent';cfg='setoption name Threads value 1\nsetoption name Hash value 64\nsetoption name Leviathan Fundamentals value true\nsetoption name Leviathan Fundamentals Authority value 2\n'
+          def R(p,inp):
+            z=subprocess.run([p],input=inp+'bench\nquit\n',text=True,capture_output=True,check=True);o=z.stdout+z.stderr
+            return {'ms':int(re.findall(r'Total time \(ms\)\s*:\s*(\d+)',o)[-1]),'nodes':int(re.findall(r'Nodes searched\s*:\s*(\d+)',o)[-1])}
+          R(lev,cfg);R(sf,'');P=[]
+          for i in range(21):
+            if i%2:l=R(lev,cfg);s=R(sf,'')
+            else:s=R(sf,'');l=R(lev,cfg)
+            P.append((s,l));print(i+1,s,l,s['ms']/l['ms'])
+          q=[s['ms']/l['ms'] for s,l in P];out={'parent_nodes':P[0][0]['nodes'],'qforced_nodes':P[0][1]['nodes'],'node_reduction':1-P[0][1]['nodes']/P[0][0]['nodes'],'median_speedup':statistics.median(q),'mean_speedup':statistics.mean(q),'parent_median_ms':statistics.median(s['ms'] for s,l in P),'qforced_median_ms':statistics.median(l['ms'] for s,l in P)};open('qforced-bench.json','w').write(json.dumps(out,indent=2)+'\n');print(json.dumps(out,indent=2))
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: qforced-bench-21
+          path: |
+            qforced-bench.json
+            qforced-bench.txt
+
+  aggregate:
+    needs: shard
+    runs-on: ubuntu-22.04
+    strategy:
+      matrix: {mode: [nodes, time]}
+    steps:
+      - uses: actions/download-artifact@v4
+        with: {pattern: 'qforced-${{ matrix.mode }}-*', path: shards}
+      - name: Aggregate 100 games
+        env: {MODE: '${{ matrix.mode }}'}
+        run: |
+          python3 - <<'PY'
+          import os,json,math,statistics
+          from pathlib import Path
+          m=os.environ['MODE'];G=[]
+          for f in sorted(Path('shards').glob(f'qforced-{m}-*/result.json')):G+=json.loads(f.read_text())['games']
+          assert len(G)==100,len(G);w=sum(g['score_a']==1 for g in G);d=sum(g['score_a']==.5 for g in G);l=sum(g['score_a']==0 for g in G);s=sum(g['score_a'] for g in G)/100;P=[(G[i]['score_a']+G[i+1]['score_a'])/2 for i in range(0,100,2)];se=statistics.stdev(P)/50**.5;lo=max(.001,s-1.96*se);hi=min(.999,s+1.96*se);elo=lambda x:400*math.log10(x/(1-x)) if 0<x<1 else None;out={'mode':m,'games':100,'wins':w,'draws':d,'losses':l,'score':s,'naive_elo':elo(s),'pair_cluster_approx_95pct_elo_interval':[elo(lo),elo(hi)]};Path(f'qforced-{m}-report.json').write_text(json.dumps(out,indent=2)+'\n');print(json.dumps(out,indent=2))
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: qforced-${{ matrix.mode }}-100games
+          path: qforced-${{ matrix.mode }}-report.json
