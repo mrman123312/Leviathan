@@ -1,0 +1,74 @@
+{
+  "schema_version": 1,
+  "policy": {
+    "principle": "Reuse public chess knowledge without pretending every donor's original corpus is reproducible.",
+    "required_fields_before_training": ["source", "license", "provenance", "format", "selection_rules"],
+    "forbidden": ["unlicensed corpus ingestion", "mixing corpora without provenance", "claiming exact reproduction from weights alone"]
+  },
+  "datasets": [
+    {
+      "id": "lc0-public-training",
+      "source": "Leela Chess Zero public training data",
+      "source_home": "https://lczero.org/play/training/",
+      "license": "ODbL",
+      "availability": "public",
+      "local_status": "not_mirrored",
+      "role": ["foundation_positions", "policy_value_reference", "distillation"],
+      "notes": "Use under dataset-license obligations; keep source batch identity on every derived record."
+    },
+    {
+      "id": "stockfish-production-networks",
+      "source": "official-stockfish/networks",
+      "license": "CC0-1.0",
+      "availability": "public_weights",
+      "local_status": "model_registry_pinned",
+      "role": ["teacher", "frozen_evaluation_control"],
+      "notes": "These are trained weights, not the complete raw corpora that produced them."
+    },
+    {
+      "id": "stockfish-nnue-training-toolchain",
+      "source": "official-stockfish/nnue-pytorch",
+      "license": "GPL-3.0",
+      "availability": "public_tooling",
+      "local_status": "donor_registered",
+      "role": ["binpack_training", "checkpoint_conversion", "network_selection"],
+      "notes": "Trainer expects externally supplied compatible training data."
+    },
+    {
+      "id": "plentychess-selfplay-lineage",
+      "source": "Yoshie2000/PlentyChess",
+      "license": "GPL-3.0",
+      "availability": "methodology_and_engine",
+      "local_status": "donor_registered",
+      "role": ["selfplay_methodology", "threat_input_distillation"],
+      "notes": "Upstream reports 15B+ self-generated positions; do not assume the full historical raw corpus is published."
+    },
+    {
+      "id": "caissa-selfplay-lineage",
+      "source": "Witek902/Caissa",
+      "license": "MIT",
+      "availability": "generator_and_trainer",
+      "local_status": "donor_registered",
+      "role": ["selfplay_generator", "cpu_training", "progressive_training"],
+      "notes": "Upstream reports 20B+ self-play positions and progressive purging of older games; generator/trainer are more reproducible than the complete historical corpus."
+    },
+    {
+      "id": "viridithas-public-networks",
+      "source": "cosmobobak/viridithas-networks",
+      "license": "CC0-1.0",
+      "availability": "public_weights",
+      "local_status": "donor_registered",
+      "role": ["independent_teacher", "cross_evaluator_reference"],
+      "notes": "Treat weights separately from current AGPL engine source."
+    },
+    {
+      "id": "leviathan-failure-frontier",
+      "source": "Leviathan experiments",
+      "license": "project_native",
+      "availability": "generated",
+      "local_status": "schema_ready",
+      "role": ["engine_disagreement", "search_regret", "failures", "adversarial_positions", "selfplay", "uncertainty_frontier"],
+      "notes": "This grows over time and should increasingly dominate training as Leviathan matures."
+    }
+  ]
+}
