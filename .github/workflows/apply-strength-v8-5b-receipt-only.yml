@@ -1,0 +1,33 @@
+name: Apply strength v8.5B LMR receipt only
+
+on:
+  push:
+    branches:
+      - leviathan/strength-v8-5b-lmr-receipt-only
+    paths:
+      - '.github/workflows/apply-strength-v8-5b-receipt-only.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout V8.5B
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: leviathan/strength-v8-5b-lmr-receipt-only
+      - name: Apply LMR receipt only
+        run: |
+          set -euo pipefail
+          python3 tools/leviathan_apply_v8_5b_receipt_only.py
+          git diff --check
+          git diff -- src/search.h src/search.cpp
+      - name: Commit V8.5B source
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add src/search.h src/search.cpp
+          git commit -m 'Strength v8.5B: isolate causal LMR receipt'
+          git push origin HEAD:leviathan/strength-v8-5b-lmr-receipt-only
