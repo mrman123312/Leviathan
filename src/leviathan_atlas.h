@@ -17,6 +17,7 @@
 #include <string>
 #include <unordered_map>
 
+#include "leviathan_attributes.h"
 #include "position.h"
 #include "types.h"
 
@@ -102,7 +103,7 @@ inline void set_weight(int v) { state().weight = std::clamp(v, 0, 400); }
 inline bool set_file(const std::string& path) { return load(path); }
 inline bool ready() { return state().enabled && state().loaded; }
 
-inline int ordering_bonus(const Position& pos, Move move) {
+LEVIATHAN_NOINLINE inline int ordering_bonus(const Position& pos, Move move) {
     const auto& s = state();
     if (!s.enabled || !s.loaded)
         return 0;

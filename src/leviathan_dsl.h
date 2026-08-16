@@ -17,6 +17,7 @@
 #include <string>
 #include <vector>
 
+#include "leviathan_attributes.h"
 #include "types.h"
 
 namespace Stockfish::Leviathan::DSL {
@@ -180,7 +181,7 @@ inline int eval(const std::array<int, FeatureCount>& x) {
     return ready() ? eval_ready(x) : 0;
 }
 
-inline int lmr_adjustment(Depth depth,
+LEVIATHAN_NOINLINE inline int lmr_adjustment(Depth depth,
                           int moveCount,
                           int statScore,
                           int correctionValue,

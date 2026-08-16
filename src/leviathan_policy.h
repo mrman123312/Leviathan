@@ -18,6 +18,7 @@
 #include <limits>
 #include <string>
 
+#include "leviathan_attributes.h"
 #include "position.h"
 #include "types.h"
 
@@ -195,7 +196,7 @@ inline int raw_score(const Position& pos, Move move) {
     return std::clamp<int>(out / 16, -2048, 2048);
 }
 
-inline int ordering_bonus(const Position& pos, Move move) {
+LEVIATHAN_NOINLINE inline int ordering_bonus(const Position& pos, Move move) {
     if (!policy_enabled() || !model().loaded)
         return 0;
     return std::clamp(raw_score(pos, move) * policy_weight() / 100, -8192, 8192);

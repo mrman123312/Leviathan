@@ -17,6 +17,7 @@
 #include <mutex>
 #include <string>
 
+#include "leviathan_attributes.h"
 #include "types.h"
 
 namespace Stockfish::Leviathan::Trace {
@@ -70,7 +71,7 @@ inline void set_sample_permille(int v) {
         s.out.close();
 }
 
-inline std::array<int, RiskFeatures> features(Depth depth,
+LEVIATHAN_NOINLINE inline std::array<int, RiskFeatures> features(Depth depth,
                                                int moveCount,
                                                int statScore,
                                                int correctionValue,
@@ -97,7 +98,7 @@ inline std::array<int, RiskFeatures> features(Depth depth,
       std::clamp(std::abs(staticEval) / 32, 0, 256)};
 }
 
-inline void record_lmr(u64 parentKey,
+LEVIATHAN_NOINLINE inline void record_lmr(u64 parentKey,
                        u16 moveRaw,
                        const std::array<int, RiskFeatures>& x,
                        Value reducedValue,

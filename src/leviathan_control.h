@@ -20,6 +20,7 @@
 #include <limits>
 #include <string>
 
+#include "leviathan_attributes.h"
 #include "types.h"
 
 namespace Stockfish::Leviathan::Control {
@@ -297,7 +298,7 @@ inline int risk_score(Depth depth,
 // Return an adjustment in Stockfish's reduction units. Negative means search
 // deeper. Authority level 1 can only veto/reduce aggressiveness; authority 2
 // may also add a small reduction in exceptionally low-risk cases.
-inline int lmr_adjustment(Depth depth,
+LEVIATHAN_NOINLINE inline int lmr_adjustment(Depth depth,
                           int moveCount,
                           int statScore,
                           int correctionValue,
