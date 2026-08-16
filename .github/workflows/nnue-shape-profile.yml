@@ -22,34 +22,32 @@ jobs:
           from pathlib import Path
           p=Path('src/nnue/nnue_accumulator.cpp');s=p.read_text()
           s=s.replace('#include <new>','#include <new>\n#include <cstdio>\n#include <cstdlib>\n#include <cstdint>')
-          anchor='''void apply_combined(Color                              perspective,'''
-          instrument=r'''
-struct LeviathanShapeStats {
-    std::uint64_t counts[8][8][8][8]{};
-    std::uint64_t total = 0;
-    ~LeviathanShapeStats() {
-        if (!std::getenv("LEVIATHAN_NNUE_SHAPES")) return;
-        std::fprintf(stderr, "LVSHAPE_TOTAL %llu\n", (unsigned long long) total);
-        for (int a=0;a<8;++a) for (int r=0;r<8;++r)
-          for (int ta=0;ta<8;++ta) for (int tr=0;tr<8;++tr)
-            if (counts[a][r][ta][tr])
-              std::fprintf(stderr,"LVSHAPE %d %d %d %d %llu\n",a,r,ta,tr,
-                           (unsigned long long)counts[a][r][ta][tr]);
-    }
-};
-LeviathanShapeStats leviathanShapeStats;
-
-'''
+          anchor='void apply_combined(Color                              perspective,'
+          instrument=(
+            '\nstruct LeviathanShapeStats {\n'
+            '    std::uint64_t counts[8][8][8][8]{};\n'
+            '    std::uint64_t total = 0;\n'
+            '    ~LeviathanShapeStats() {\n'
+            '        if (!std::getenv("LEVIATHAN_NNUE_SHAPES")) return;\n'
+            '        std::fprintf(stderr, "LVSHAPE_TOTAL %llu\\n", (unsigned long long) total);\n'
+            '        for (int a=0;a<8;++a) for (int r=0;r<8;++r)\n'
+            '          for (int ta=0;ta<8;++ta) for (int tr=0;tr<8;++tr)\n'
+            '            if (counts[a][r][ta][tr])\n'
+            '              std::fprintf(stderr,"LVSHAPE %d %d %d %d %llu\\n",a,r,ta,tr,\n'
+            '                           (unsigned long long)counts[a][r][ta][tr]);\n'
+            '    }\n'
+            '};\n'
+            'LeviathanShapeStats leviathanShapeStats;\n\n')
           if anchor not in s: raise SystemExit('anchor missing')
           s=s.replace(anchor,instrument+anchor,1)
-          body='''    const auto& fromAcc = from.accumulation[perspective];'''
-          repl='''    if (std::getenv("LEVIATHAN_NNUE_SHAPES")) {
-        const int a=std::min(7,psqAdded.ssize()), r=std::min(7,psqRemoved.ssize());
-        const int ta=std::min(7,thrAdded.ssize()), tr=std::min(7,thrRemoved.ssize());
-        ++leviathanShapeStats.counts[a][r][ta][tr]; ++leviathanShapeStats.total;
-    }
-
-    const auto& fromAcc = from.accumulation[perspective];'''
+          body='    const auto& fromAcc = from.accumulation[perspective];'
+          repl=(
+            '    if (std::getenv("LEVIATHAN_NNUE_SHAPES")) {\n'
+            '        const int a=std::min(7,psqAdded.ssize()), r=std::min(7,psqRemoved.ssize());\n'
+            '        const int ta=std::min(7,thrAdded.ssize()), tr=std::min(7,thrRemoved.ssize());\n'
+            '        ++leviathanShapeStats.counts[a][r][ta][tr]; ++leviathanShapeStats.total;\n'
+            '    }\n\n'
+            '    const auto& fromAcc = from.accumulation[perspective];')
           if body not in s: raise SystemExit('body anchor missing')
           s=s.replace(body,repl,1);p.write_text(s)
           PY
@@ -61,19 +59,16 @@ LeviathanShapeStats leviathanShapeStats;
       - name: Rank shapes
         run: |
           python3 - <<'PY' | tee shapes-summary.txt
-          import re,json
+          import json
           rows=[];total=0
           for line in open('shapes.log',errors='ignore'):
             if line.startswith('LVSHAPE_TOTAL '): total=int(line.split()[1])
             elif line.startswith('LVSHAPE '):
-              p=line.split();rows.append({'psq_add':int(p[1]),'psq_remove':int(p[2]),'threat_add':int(p[3]),'threat_remove':int(p[4]),'count':int(p[5])})
-          rows.sort(key=lambda x:x['count'],reverse=True)
-          cum=0
+              q=line.split();rows.append({'psq_add':int(q[1]),'psq_remove':int(q[2]),'threat_add':int(q[3]),'threat_remove':int(q[4]),'count':int(q[5])})
+          rows.sort(key=lambda x:x['count'],reverse=True);cum=0
           for i,x in enumerate(rows[:30],1):
-            cum+=x['count'];x['fraction']=x['count']/total if total else 0;x['top_cumulative']=cum/total if total else 0
-            print(i,x)
-          out={'total':total,'unique_shapes':len(rows),'top':rows[:30]}
-          open('shapes.json','w').write(json.dumps(out,indent=2)+'\n')
+            cum+=x['count'];x['fraction']=x['count']/total if total else 0;x['top_cumulative']=cum/total if total else 0;print(i,x)
+          out={'total':total,'unique_shapes':len(rows),'top':rows[:30]};open('shapes.json','w').write(json.dumps(out,indent=2)+'\n')
           PY
       - uses: actions/upload-artifact@v4
         with:
