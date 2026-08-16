@@ -1,0 +1,53 @@
+name: Leviathan speed v3 NNUE common-shape screen
+on:
+  push:
+    branches: [leviathan/speed-v3-nnue-shapes]
+    paths: ['.github/workflows/speed-v3-nnue-shape-screen.yml']
+  workflow_dispatch:
+permissions: {contents: read}
+jobs:
+  bench:
+    runs-on: ubuntu-22.04
+    strategy:
+      fail-fast: false
+      matrix: {profile: [control, psqshape]}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with: {ref: fbccfb6eb5cd335b1ce8fc5c5efad9e36be4e19d}
+      - name: Apply exact common-shape kernel
+        if: matrix.profile == 'psqshape'
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path('src/nnue/nnue_accumulator.cpp');s=p.read_text()
+          anchor='''        apply_psq_features<-1>(j, acc, psqRemoved, featureTransformer);\n        apply_psq_features<+1>(j, acc, psqAdded, featureTransformer);\n\n        apply_threat_features<-1>(j, acc, thrRemoved, featureTransformer);'''
+          repl='''        // Leviathan exact common-shape kernel. Instrumentation over the full\n        // bench found PSQ removals are always 1 or 2 and additions are one in\n        // 98.9% of updates. Preserve Stockfish's arithmetic order exactly while\n        // avoiding generic list loops/size checks on this overwhelmingly hot path.\n        if (psqAdded.ssize() == 1 && psqRemoved.ssize() == 1)\n        {\n            const auto* rem = reinterpret_cast<const vec_t*>(\n              &featureTransformer.weights[psqRemoved[0] * Dimensions + tileOff]);\n            const auto* add = reinterpret_cast<const vec_t*>(\n              &featureTransformer.weights[psqAdded[0] * Dimensions + tileOff]);\n            for (IndexType k = 0; k < Tiling::NumRegs; ++k)\n            {\n                acc[k] = vec_sub_16(acc[k], rem[k]);\n                acc[k] = vec_add_16(acc[k], add[k]);\n            }\n        }\n        else if (psqAdded.ssize() == 1 && psqRemoved.ssize() == 2)\n        {\n            const auto* rem0 = reinterpret_cast<const vec_t*>(\n              &featureTransformer.weights[psqRemoved[0] * Dimensions + tileOff]);\n            const auto* rem1 = reinterpret_cast<const vec_t*>(\n              &featureTransformer.weights[psqRemoved[1] * Dimensions + tileOff]);\n            const auto* add = reinterpret_cast<const vec_t*>(\n              &featureTransformer.weights[psqAdded[0] * Dimensions + tileOff]);\n            for (IndexType k = 0; k < Tiling::NumRegs; ++k)\n            {\n                acc[k] = vec_sub_16(acc[k], rem0[k]);\n                acc[k] = vec_sub_16(acc[k], rem1[k]);\n                acc[k] = vec_add_16(acc[k], add[k]);\n            }\n        }\n        else\n        {\n            apply_psq_features<-1>(j, acc, psqRemoved, featureTransformer);\n            apply_psq_features<+1>(j, acc, psqAdded, featureTransformer);\n        }\n\n        apply_threat_features<-1>(j, acc, thrRemoved, featureTransformer);'''
+          if s.count(anchor)!=1: raise SystemExit('accumulator PSQ anchor not found')
+          s=s.replace(anchor,repl,1)
+          # PSQT is only eight dimensions but uses the exact same shape; specialize it too.
+          anchor='''        apply_psqt<-1>(j, psqt, psqRemoved, featureTransformer.psqtWeights.data());\n        apply_psqt<+1>(j, psqt, psqAdded, featureTransformer.psqtWeights.data());\n\n        apply_psqt<-1>(j, psqt, thrRemoved, featureTransformer.threatAndPpPsqtWeights.data());'''
+          repl='''        if (psqAdded.ssize() == 1 && psqRemoved.ssize() == 1)\n        {\n            const auto* rem = reinterpret_cast<const psqt_vec_t*>(\n              &featureTransformer.psqtWeights[psqRemoved[0] * PSQTBuckets + psqtTileOff]);\n            const auto* add = reinterpret_cast<const psqt_vec_t*>(\n              &featureTransformer.psqtWeights[psqAdded[0] * PSQTBuckets + psqtTileOff]);\n            for (IndexType k = 0; k < Tiling::NumPsqtRegs; ++k)\n            {\n                psqt[k] = vec_sub_psqt_32(psqt[k], rem[k]);\n                psqt[k] = vec_add_psqt_32(psqt[k], add[k]);\n            }\n        }\n        else if (psqAdded.ssize() == 1 && psqRemoved.ssize() == 2)\n        {\n            const auto* rem0 = reinterpret_cast<const psqt_vec_t*>(\n              &featureTransformer.psqtWeights[psqRemoved[0] * PSQTBuckets + psqtTileOff]);\n            const auto* rem1 = reinterpret_cast<const psqt_vec_t*>(\n              &featureTransformer.psqtWeights[psqRemoved[1] * PSQTBuckets + psqtTileOff]);\n            const auto* add = reinterpret_cast<const psqt_vec_t*>(\n              &featureTransformer.psqtWeights[psqAdded[0] * PSQTBuckets + psqtTileOff]);\n            for (IndexType k = 0; k < Tiling::NumPsqtRegs; ++k)\n            {\n                psqt[k] = vec_sub_psqt_32(psqt[k], rem0[k]);\n                psqt[k] = vec_sub_psqt_32(psqt[k], rem1[k]);\n                psqt[k] = vec_add_psqt_32(psqt[k], add[k]);\n            }\n        }\n        else\n        {\n            apply_psqt<-1>(j, psqt, psqRemoved, featureTransformer.psqtWeights.data());\n            apply_psqt<+1>(j, psqt, psqAdded, featureTransformer.psqtWeights.data());\n        }\n\n        apply_psqt<-1>(j, psqt, thrRemoved, featureTransformer.threatAndPpPsqtWeights.data());'''
+          if s.count(anchor)!=1: raise SystemExit('PSQT anchor not found')
+          p.write_text(s.replace(anchor,repl,1))
+          PY
+          git diff --check
+      - name: Build AVX2
+        working-directory: src
+        run: make net && make clean && make -j2 ARCH=x86-64-avx2 build
+      - name: Exact bench and 31 alternating pairs
+        working-directory: src
+        env: {PROFILE: '${{ matrix.profile }}'}
+        run: |
+          python3 - <<'PY'
+          import subprocess,re,json,statistics,os
+          q=os.environ['PROFILE']
+          def run():
+            p=subprocess.run(['./stockfish'],input='bench\nquit\n',text=True,capture_output=True,check=True);o=p.stdout+p.stderr
+            return {'ms':int(re.findall(r'Total time \(ms\)\s*:\s*(\d+)',o)[-1]),'nodes':int(re.findall(r'Nodes searched\s*:\s*(\d+)',o)[-1]),'nps':int(re.findall(r'Nodes/second\s*:\s*(\d+)',o)[-1])}
+          run();xs=[run() for _ in range(31)]
+          if any(x['nodes']!=2884956 for x in xs): raise SystemExit('LOSSLESS GATE FAILED: node signature changed')
+          R={'profile':q,'runs':xs,'median_nps':statistics.median(x['nps'] for x in xs),'median_ms':statistics.median(x['ms'] for x in xs),'mean_nps':statistics.mean(x['nps'] for x in xs)}
+          open(f'../report-{q}.json','w').write(json.dumps(R,indent=2)+'\n');print(json.dumps(R,indent=2))
+          PY
+      - uses: actions/upload-artifact@v4
+        with: {name: 'speed-v3-nnue-${{ matrix.profile }}', path: 'report-${{ matrix.profile }}.json'}
