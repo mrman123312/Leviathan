@@ -1,0 +1,132 @@
+name: Leviathan match harness v2 reproducibility
+
+on:
+  push:
+    branches:
+      - leviathan/strength-v8-5a-witness-hygiene
+    paths:
+      - 'tools/run_match.py'
+      - '.github/workflows/match-harness-v2-repro.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  repro:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout harness v2
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: leviathan/strength-v8-5a-witness-hygiene
+          path: harness
+
+      - name: Checkout exact hygiene candidate
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: 95b779abefedf158a856d5db7eff9d2a61df2982
+          path: candidate
+
+      - name: Checkout exact V7.4 reference
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: 9ffe3f2c43972fc55163300449e97a981a01e358
+          path: reference
+
+      - name: Install deterministic match dependency
+        run: python3 -m pip install --disable-pip-version-check 'python-chess==1.999'
+
+      - name: Verify harness source contract
+        run: |
+          set -euo pipefail
+          grep -q 'HARNESS_VERSION = 2' harness/tools/run_match.py
+          grep -q 'game_token = object()' harness/tools/run_match.py
+          grep -q 'game=game_token' harness/tools/run_match.py
+          grep -q 'python-chess-game-token/ucinewgame' harness/tools/run_match.py
+
+      - name: Build exact engines identically
+        run: |
+          set -euo pipefail
+          for D in candidate reference; do
+            cd "$GITHUB_WORKSPACE/$D/src"
+            make net
+            make clean
+            make -j2 ARCH=x86-64-avx2 build
+            mv stockfish "stockfish-$D"
+          done
+
+      - name: Prepare small deterministic bank and options
+        run: |
+          set -euo pipefail
+          mkdir -p repro
+          cat > repro/options.json <<'EOF'
+          {
+            "Threads": 1,
+            "Hash": 64,
+            "Leviathan Fundamentals": true,
+            "Leviathan Fundamentals Authority": 1,
+            "Leviathan Quiet Overdrive": 0,
+            "Leviathan Policy": false,
+            "Leviathan MetaSearch": false,
+            "Leviathan Risk": false,
+            "Leviathan Specialist": false,
+            "Leviathan Atlas": false,
+            "Leviathan Search DSL": false
+          }
+          EOF
+          cat > repro/openings.fen <<'EOF'
+          r1bqkbnr/pppp1ppp/2n5/4p3/B3P3/5N2/PPPP1PPP/RNBQK2R b KQkq - 3 4
+          rnbqkb1r/pp2pppp/2pp1n2/8/2PP4/8/PP2PPPP/RNBQKBNR w KQkq - 0 4
+          r1bqk2r/pppp1ppp/2n2n2/4p3/2B1P3/2N2N2/PPPP1PPP/R1BQK2R b KQkq - 5 5
+          rnbqkb1r/ppp1pppp/5n2/3p4/2PP4/5N2/PP2PPPP/RNBQKB1R b KQkq - 1 3
+          EOF
+          test "$(wc -l < repro/openings.fen)" -eq 4
+
+      - name: Run identical fixed-node match twice
+        run: |
+          set -euo pipefail
+          for R in 1 2; do
+            python3 harness/tools/run_match.py \
+              --engine-a "$GITHUB_WORKSPACE/candidate/src/stockfish-candidate" \
+              --engine-b "$GITHUB_WORKSPACE/reference/src/stockfish-reference" \
+              --options-a repro/options.json \
+              --options-b repro/options.json \
+              --openings repro/openings.fen \
+              --games 8 \
+              --nodes-per-move 5000 \
+              --max-plies 160 \
+              --out "repro/run-$R.json" | tee "repro/run-$R.log"
+          done
+
+      - name: Require exact game-sequence reproducibility
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json, hashlib
+          from pathlib import Path
+          a=json.loads(Path('repro/run-1.json').read_text())
+          b=json.loads(Path('repro/run-2.json').read_text())
+          for doc in (a,b):
+              s=doc['summary']
+              assert s['harness_version']==2
+              assert s['game_boundary_mode']=='python-chess-game-token/ucinewgame'
+              assert s['resource']['nodes_per_move']==5000
+          if a['games'] != b['games']:
+              for i,(x,y) in enumerate(zip(a['games'],b['games']),1):
+                  if x != y:
+                      raise SystemExit(f'non-reproducible game {i}: run1={x} run2={y}')
+              raise SystemExit('non-reproducible game arrays')
+          payload=json.dumps(a['games'],sort_keys=True,separators=(',',':')).encode()
+          digest=hashlib.sha256(payload).hexdigest()
+          Path('repro/repro.sha256').write_text(digest+'\n')
+          print('exact_reproducibility_sha256',digest)
+          print('summary',json.dumps(a['summary'],sort_keys=True))
+          PY
+
+      - name: Archive harness evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: match-harness-v2-repro
+          path: repro/
+          if-no-files-found: error
