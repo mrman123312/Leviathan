@@ -1,0 +1,105 @@
+name: Leviathan ProbCut near-miss v3
+
+on:
+  push:
+    branches: [leviathan/speed-v3-profile]
+    paths: ['.github/workflows/probcut-nearmiss-v3.yml']
+  workflow_dispatch:
+
+permissions: {contents: read}
+
+jobs:
+  screen:
+    runs-on: ubuntu-22.04
+    strategy:
+      fail-fast: false
+      matrix:
+        profile: [control, tight, gentle, pv-tight]
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with: {ref: fbccfb6eb5cd335b1ce8fc5c5efad9e36be4e19d, path: leviathan}
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with: {repository: official-stockfish/Stockfish, ref: 5062aee519a1ba262d472d8ab139851ced56573e, path: stockfish}
+      - name: Apply near-miss reuse
+        if: matrix.profile != 'control'
+        working-directory: leviathan
+        env: {PROFILE: '${{ matrix.profile }}'}
+        run: |
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+          q=os.environ['PROFILE'];p=Path('src/search.cpp');s=p.read_text()
+          a='''    int   priorReduction;\n    Piece movedPiece;'''
+          b='''    int   priorReduction;\n    int   leviathanProbCutNearMiss = 0;\n    Piece movedPiece;'''
+          if s.count(a)!=1: raise SystemExit('var anchor')
+          s=s.replace(a,b,1)
+          a='''            undo_move(pos, move);\n\n            if (value >= probCutBeta)'''
+          if q=='tight': margin=24
+          elif q=='gentle': margin=48
+          elif q=='pv-tight': margin=32
+          else: raise SystemExit(q)
+          b=f'''            undo_move(pos, move);\n\n            // Preserve already-paid evidence that a tactical capture nearly\n            // reached the ProbCut proof threshold.\n            if (value < probCutBeta && value >= probCutBeta - {margin} && !is_decisive(value))\n                leviathanProbCutNearMiss = 1;\n\n            if (value >= probCutBeta)'''
+          if s.count(a)!=1: raise SystemExit('probcut anchor')
+          s=s.replace(a,b,1)
+          a='''        // Increase reduction if ttMove is a capture\n        if (ttCapture)\n            r += 1079;'''
+          if q=='tight': cond='leviathanProbCutNearMiss && ss->ttPv && !capture && !givesCheck && depth >= 6 && moveCount <= 8'; amount=128
+          elif q=='gentle': cond='leviathanProbCutNearMiss && ss->ttPv && !capture && !givesCheck && depth >= 5 && moveCount <= 10'; amount=192
+          else: cond='leviathanProbCutNearMiss && (PvNode || ss->ttPv) && !capture && !givesCheck && depth >= 7 && moveCount <= 6'; amount=192
+          b=f'''        // Increase reduction if ttMove is a capture\n        if (ttCapture)\n            r += 1079;\n\n        if ({cond})\n            r -= {amount};'''
+          if s.count(a)!=1: raise SystemExit('lmr anchor')
+          p.write_text(s.replace(a,b,1))
+          PY
+      - run: python3 -m pip install --disable-pip-version-check 'python-chess>=1.999,<2'
+      - name: Build
+        run: |
+          cd leviathan/src && make net && make -j2 ARCH=x86-64-avx2 build && mv stockfish leviathan
+          cd ../../stockfish/src && make net && make -j2 ARCH=x86-64-avx2 build && mv stockfish parent
+      - name: Configure and openings
+        working-directory: leviathan
+        run: |
+          mkdir -p q
+          cat > q/a.json <<'EOF'
+          {"Threads":1,"Hash":64,"Leviathan Fundamentals":true,"Leviathan Fundamentals Authority":2,"Leviathan Forcing Buyback":384,"Leviathan Recapture Buyback":256,"Leviathan Passer Buyback":320,"Leviathan Endgame Buyback":128,"Leviathan Quiet Overdrive":160,"Leviathan Rule50 Pawn Bonus":3072,"Leviathan Zugzwang Guard":true,"Leviathan Sacrifice Rescue":true,"Leviathan Rule50 Pressure":true,"Leviathan Policy":false,"Leviathan MetaSearch":false,"Leviathan Risk":false,"Leviathan Specialist":false,"Leviathan Atlas":false,"Leviathan Search DSL":false}
+          EOF
+          echo '{"Threads":1,"Hash":64}' > q/b.json
+          python3 - <<'PY'
+          import random,chess,chess.engine
+          from pathlib import Path
+          sf=chess.engine.SimpleEngine.popen_uci('../stockfish/src/parent');sf.configure({'Threads':1,'Hash':64});r=random.Random(771903);out=[];seen=set()
+          try:
+            while len(out)<20:
+              b=chess.Board()
+              for _ in range(r.randint(10,28)):
+                if b.is_game_over(): break
+                I=sf.analyse(b,chess.engine.Limit(nodes=1300),multipv=min(6,b.legal_moves.count()));I=I if isinstance(I,list) else [I];R=[]
+                for z in I:
+                  if z.get('pv'):
+                    cp=z['score'].pov(b.turn).score(mate_score=100000);R.append((z['pv'][0],int(cp or 0)))
+                if not R:break
+                best=R[0][1];V=[x for x in R if best-x[1]<=100] or R[:1];b.push(r.choices([m for m,_ in V],weights=list(range(len(V),0,-1)),k=1)[0])
+              k=' '.join(b.fen().split()[:4])
+              if b.is_game_over() or k in seen:continue
+              seen.add(k);out.append(b.fen())
+          finally:sf.quit()
+          Path('q/openings.fen').write_text('\n'.join(out)+'\n')
+          PY
+      - name: Bench
+        working-directory: leviathan/src
+        run: |
+          printf 'setoption name Leviathan Fundamentals value true\nsetoption name Leviathan Fundamentals Authority value 2\nbench\nquit\n' | ./leviathan 2>&1 | tee ../q/bench.txt
+      - name: 40 equal-node games
+        working-directory: leviathan
+        run: |
+          python3 tools/run_match.py --engine-a "$GITHUB_WORKSPACE/leviathan/src/leviathan" --engine-b "$GITHUB_WORKSPACE/stockfish/src/parent" --options-a q/a.json --options-b q/b.json --openings q/openings.fen --games 40 --nodes-per-move 18000 --max-plies 240 --out q/nodes.json | tee q/nodes.log
+      - name: 40 fixed-time games
+        working-directory: leviathan
+        run: |
+          python3 tools/run_match.py --engine-a "$GITHUB_WORKSPACE/leviathan/src/leviathan" --engine-b "$GITHUB_WORKSPACE/stockfish/src/parent" --options-a q/a.json --options-b q/b.json --openings q/openings.fen --games 40 --movetime-ms 100 --max-plies 240 --out q/time.json | tee q/time.log
+      - uses: actions/upload-artifact@v4
+        with:
+          name: probcut-${{ matrix.profile }}
+          path: |
+            leviathan/q/bench.txt
+            leviathan/q/nodes.json
+            leviathan/q/time.json
+            leviathan/q/openings.fen
