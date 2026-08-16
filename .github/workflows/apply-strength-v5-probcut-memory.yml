@@ -1,0 +1,66 @@
+name: Apply strength v5 ProbCut memory
+
+on:
+  push:
+    branches:
+      - leviathan/strength-v5-margin-skeptic
+    paths:
+      - '.github/workflows/apply-strength-v5-probcut-memory.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout strength branch
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: leviathan/strength-v5-margin-skeptic
+
+      - name: Preserve ProbCut near-miss evidence
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('src/search.cpp')
+          s = p.read_text()
+
+          old_decl = "    Move  move, excludedMove, bestMove;\n    Depth extension, newDepth;\n    Value bestValue, value, eval, maxValue, probCutBeta;"
+          new_decl = "    Move  move, excludedMove, bestMove, probCutNearMiss;\n    Depth extension, newDepth;\n    Value bestValue, value, eval, maxValue, probCutBeta, probCutNearValue;"
+
+          old_init = "    bestMove       = Move::none();\n    priorReduction = (ss - 1)->reduction;"
+          new_init = "    bestMove         = Move::none();\n    probCutNearMiss  = Move::none();\n    probCutNearValue = -VALUE_INFINITE;\n    priorReduction   = (ss - 1)->reduction;"
+
+          old_after = "            if (value >= probCutBeta)\n            {\n                // Save ProbCut data into transposition table\n                ttWriter.write(posKey, value_to_tt(value, ss->ply), ss->ttPv, BOUND_LOWER,\n                               probCutDepth + 1, move, unadjustedStaticEval, tt.generation());\n\n                if (!is_decisive(value))\n                    return value - (probCutBeta - beta);\n            }"
+          new_after = "            if (value >= probCutBeta)\n            {\n                // Save ProbCut data into transposition table\n                ttWriter.write(posKey, value_to_tt(value, ss->ply), ss->ttPv, BOUND_LOWER,\n                               probCutDepth + 1, move, unadjustedStaticEval, tt.generation());\n\n                if (!is_decisive(value))\n                    return value - (probCutBeta - beta);\n            }\n            // Leviathan strength v5 - ProbCut Near-Miss Memory. A reduced\n            // tactical search that clears beta but not ProbCut's safety margin\n            // is useful evidence even though it has no pruning authority. Keep\n            // the strongest such move for the full search instead of forgetting it.\n            else if (value >= beta && !is_decisive(value) && value > probCutNearValue)\n            {\n                probCutNearValue = value;\n                probCutNearMiss  = move;\n            }"
+
+          old_mp = "    MovePicker mp(pos, ttData.move, depth, &mainHistory, &lowPlyHistory, &captureHistory, contHist,\n                  &sharedHistory, ss->ply);"
+          new_mp = "    // If the TT has no principal move, reuse the strongest tactical near-proof\n    // that ProbCut already paid to discover. It still receives a normal alpha-beta search.\n    const Move leviathanPreferredMove = ttData.move ? ttData.move : probCutNearMiss;\n    MovePicker mp(pos, leviathanPreferredMove, depth, &mainHistory, &lowPlyHistory, &captureHistory,\n                  contHist, &sharedHistory, ss->ply);"
+
+          old_base = "        r += 697;  // Base reduction offset to compensate for other tweaks\n        r -= moveCount * 65;"
+          new_base = "        r += 697;  // Base reduction offset to compensate for other tweaks\n\n        // ProbCut near-miss evidence means this move already survived a reduced\n        // tactical proof attempt above beta. Give that paid-for evidence a bounded\n        // depth buyback when the normal search reaches the same move.\n        if (move == probCutNearMiss)\n            r -= 768;\n\n        r -= moveCount * 65;"
+
+          for label, old, new in [
+              ('decl', old_decl, new_decl),
+              ('init', old_init, new_init),
+              ('near', old_after, new_after),
+              ('mp', old_mp, new_mp),
+              ('lmr', old_base, new_base),
+          ]:
+              if s.count(old) != 1:
+                  raise SystemExit(f'{label} anchor count {s.count(old)}')
+              s = s.replace(old, new, 1)
+
+          p.write_text(s)
+          PY
+          git diff --check
+          git diff -- src/search.cpp
+
+      - name: Commit ProbCut memory
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add src/search.cpp
+          git commit -m 'Strength v5: reuse ProbCut near-miss evidence'
+          git push origin HEAD:leviathan/strength-v5-margin-skeptic
