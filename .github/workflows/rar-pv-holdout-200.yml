@@ -1,0 +1,115 @@
+name: Leviathan PV-only RAR fresh 200-game holdout
+
+on:
+  push:
+    branches: [leviathan/strength-v3-rar-pv]
+    paths: ['.github/workflows/rar-pv-holdout-200.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  shard:
+    runs-on: ubuntu-22.04
+    strategy:
+      fail-fast: false
+      matrix:
+        mode: [nodes, time]
+        shard: [0,1,2,3,4]
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with: {ref: leviathan/strength-v3-rar-pv, path: leviathan}
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with: {repository: official-stockfish/Stockfish, ref: 5062aee519a1ba262d472d8ab139851ced56573e, path: stockfish}
+      - run: python3 -m pip install --disable-pip-version-check 'python-chess>=1.999,<2'
+      - name: Build AVX2
+        run: |
+          cd leviathan/src && make net && make -j2 ARCH=x86-64-avx2 build && mv stockfish leviathan
+          cd ../../stockfish/src && make net && make -j2 ARCH=x86-64-avx2 build && mv stockfish parent
+      - name: Configure and create fresh paired openings
+        working-directory: leviathan
+        env:
+          SHARD: ${{ matrix.shard }}
+        run: |
+          mkdir -p q
+          cat > q/a.json <<'EOF'
+          {"Threads":1,"Hash":64,"Leviathan Fundamentals":true,"Leviathan Fundamentals Authority":2,"Leviathan Forcing Buyback":384,"Leviathan Recapture Buyback":256,"Leviathan Passer Buyback":320,"Leviathan Endgame Buyback":128,"Leviathan Quiet Overdrive":160,"Leviathan Rule50 Pawn Bonus":3072,"Leviathan Zugzwang Guard":true,"Leviathan Sacrifice Rescue":true,"Leviathan Rule50 Pressure":true,"Leviathan Policy":false,"Leviathan MetaSearch":false,"Leviathan Risk":false,"Leviathan Specialist":false,"Leviathan Atlas":false,"Leviathan Search DSL":false}
+          EOF
+          echo '{"Threads":1,"Hash":64}' > q/b.json
+          python3 - <<'PY'
+          import os,random,chess,chess.engine
+          from pathlib import Path
+          sh=int(os.environ['SHARD']);r=random.Random(830017+sh*65537)
+          sf=chess.engine.SimpleEngine.popen_uci('../stockfish/src/parent');sf.configure({'Threads':1,'Hash':64});out=[];seen=set()
+          try:
+            while len(out)<10:
+              b=chess.Board()
+              for _ in range(r.randint(8,24)):
+                if b.is_game_over():break
+                I=sf.analyse(b,chess.engine.Limit(nodes=1500),multipv=min(6,b.legal_moves.count()));I=I if isinstance(I,list) else [I];R=[]
+                for z in I:
+                  if z.get('pv'):
+                    cp=z['score'].pov(b.turn).score(mate_score=100000);R.append((z['pv'][0],int(cp or 0)))
+                if not R:break
+                best=R[0][1];V=[x for x in R if best-x[1]<=100] or R[:1]
+                b.push(r.choices([m for m,_ in V],weights=list(range(len(V),0,-1)),k=1)[0])
+              k=' '.join(b.fen().split()[:4])
+              if b.is_game_over() or k in seen:continue
+              seen.add(k);out.append(b.fen())
+          finally:sf.quit()
+          Path('q/openings.fen').write_text('\n'.join(out)+'\n')
+          PY
+      - name: Verify parent-compatible baseline and play 20 games
+        working-directory: leviathan
+        env:
+          MODE: ${{ matrix.mode }}
+          SHARD: ${{ matrix.shard }}
+        run: |
+          if [ "$MODE" = nodes ]; then
+            python3 tools/run_match.py --engine-a "$GITHUB_WORKSPACE/leviathan/src/leviathan" --engine-b "$GITHUB_WORKSPACE/stockfish/src/parent" --options-a q/a.json --options-b q/b.json --openings q/openings.fen --games 20 --nodes-per-move 18000 --max-plies 240 --out q/result.json | tee q/result.log
+          else
+            python3 tools/run_match.py --engine-a "$GITHUB_WORKSPACE/leviathan/src/leviathan" --engine-b "$GITHUB_WORKSPACE/stockfish/src/parent" --options-a q/a.json --options-b q/b.json --openings q/openings.fen --games 20 --movetime-ms 100 --max-plies 240 --out q/result.json | tee q/result.log
+          fi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rar-${{ matrix.mode }}-shard-${{ matrix.shard }}
+          path: |
+            leviathan/q/result.json
+            leviathan/q/result.log
+            leviathan/q/openings.fen
+
+  aggregate:
+    needs: shard
+    runs-on: ubuntu-22.04
+    strategy:
+      matrix:
+        mode: [nodes, time]
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: rar-${{ matrix.mode }}-shard-*
+          path: shards
+      - name: Aggregate 100 games
+        env:
+          MODE: ${{ matrix.mode }}
+        run: |
+          python3 - <<'PY'
+          import os,json,math,statistics
+          from pathlib import Path
+          mode=os.environ['MODE'];G=[]
+          for f in sorted(Path('shards').glob(f'rar-{mode}-shard-*/result.json')):G+=json.loads(f.read_text())['games']
+          assert len(G)==100,len(G)
+          w=sum(g['score_a']==1 for g in G);d=sum(g['score_a']==.5 for g in G);l=sum(g['score_a']==0 for g in G);s=sum(g['score_a'] for g in G)/100
+          elo=lambda x:400*math.log10(x/(1-x)) if 0<x<1 else None
+          P=[(G[i]['score_a']+G[i+1]['score_a'])/2 for i in range(0,100,2)];se=statistics.stdev(P)/math.sqrt(50);lo=max(.001,s-1.96*se);hi=min(.999,s+1.96*se)
+          W=[g for g in G if g['a_white']];B=[g for g in G if not g['a_white']]
+          r={'mode':mode,'games':100,'wins':w,'draws':d,'losses':l,'score':s,'naive_elo':elo(s),'pair_cluster_approx_95pct_elo_interval':[elo(lo),elo(hi)],'white_score':sum(g['score_a'] for g in W)/50,'black_score':sum(g['score_a'] for g in B)/50}
+          Path(f'rar-{mode}-report.json').write_text(json.dumps(r,indent=2)+'\n');Path(f'rar-{mode}-games.json').write_text(json.dumps(G,indent=2)+'\n');print(json.dumps(r,indent=2))
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rar-pv-${{ matrix.mode }}-100games
+          path: |
+            rar-${{ matrix.mode }}-report.json
+            rar-${{ matrix.mode }}-games.json
