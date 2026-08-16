@@ -256,9 +256,10 @@ void Search::Worker::start_searching() {
                     e.debt -= decay;
                     if (e.debt < 3)
                     {
-                        e.evidence     = 0;
-                        e.witness      = Move::none();
-                        e.witnessDepth = 0;
+                        e.evidence        = 0;
+                        e.witness         = Move::none();
+                        e.witnessEvidence = 0;
+                        e.witnessDepth    = 0;
                     }
                 }
             }
@@ -869,6 +870,7 @@ Value Search::Worker::search(
     bool  capture, ttCapture;
     int   priorReduction, leviathanWitnessCertifiedDepth;
     Leviathan::Evidence::State leviathanEvidence;
+    Leviathan::Evidence::Mask  leviathanWitnessEvidence = 0;
     int&  leviathanProofDebt = leviathanEvidence.debt;
     Piece movedPiece;
 
@@ -941,6 +943,7 @@ Value Search::Worker::search(
     leviathanEvidence.merge(leviathan_proof_memory_evidence(posKey),
                              int(leviathanPersistentDebt));
     leviathanWitness = leviathan_proof_memory_witness(posKey);
+    leviathanWitnessEvidence = leviathan_proof_memory_witness_evidence(posKey);
     leviathanWitnessCertifiedDepth = int(leviathan_proof_memory_witness_depth(posKey));
     if (leviathanWitness)
         leviathanEvidence.mask |= Leviathan::Evidence::bit(
@@ -1288,8 +1291,15 @@ Value Search::Worker::search(
     if (probCutNearMiss)
     {
         leviathanEvidence.add(Leviathan::Evidence::Kind::PROBCUT_NEAR_PROOF, 1);
+        const auto probCutWitnessEvidence =
+          Leviathan::Evidence::bit(Leviathan::Evidence::Kind::PROBCUT_NEAR_PROOF);
         if (leviathanWitness != probCutNearMiss)
+        {
             leviathanWitnessCertifiedDepth = 0;
+            leviathanWitnessEvidence = probCutWitnessEvidence;
+        }
+        else
+            leviathanWitnessEvidence |= probCutWitnessEvidence;
         leviathanWitness = probCutNearMiss;
     }
 
@@ -1622,12 +1632,14 @@ moves_loop:  // When in check, search starts here
         // that concretely exposed search error is not just a hint. Revisit that one
         // move at full depth when its causal evidence is still live. This is tightly
         // scoped: one legal witness, bounded depth threshold, no global extension.
+        constexpr auto leviathanProofWitnessCauses =
+          Leviathan::Evidence::bit(Leviathan::Evidence::Kind::LMR_COUNTEREXAMPLE)
+          | Leviathan::Evidence::bit(Leviathan::Evidence::Kind::PROBCUT_NEAR_PROOF)
+          | Leviathan::Evidence::bit(Leviathan::Evidence::Kind::RIVAL_AMBIGUITY);
         const bool leviathanWitnessNeedsFullProof =
           move == persistentWitness && leviathanEntryDepth >= 6
           && leviathanEntryDepth > leviathanWitnessCertifiedDepth
-          && (leviathanEvidence.contains(Leviathan::Evidence::Kind::LMR_COUNTEREXAMPLE)
-              || leviathanEvidence.contains(Leviathan::Evidence::Kind::PROBCUT_NEAR_PROOF)
-              || leviathanEvidence.contains(Leviathan::Evidence::Kind::RIVAL_AMBIGUITY));
+          && (leviathanWitnessEvidence & leviathanProofWitnessCauses);
         if (leviathanWitnessNeedsFullProof)
         {
             newDepth = std::max(newDepth, leviathanEntryDepth - 1);
@@ -1761,8 +1773,15 @@ moves_loop:  // When in check, search starts here
                                   evidenceBoost);
             if (boundaryFlip || lmrError >= 160)
             {
+                const auto lmrWitnessEvidence =
+                  Leviathan::Evidence::bit(Leviathan::Evidence::Kind::LMR_COUNTEREXAMPLE);
                 if (leviathanWitness != move)
+                {
                     leviathanWitnessCertifiedDepth = 0;
+                    leviathanWitnessEvidence = lmrWitnessEvidence;
+                }
+                else
+                    leviathanWitnessEvidence |= lmrWitnessEvidence;
                 leviathanWitness = move;
             }
         }
@@ -1909,8 +1928,15 @@ moves_loop:  // When in check, search starts here
                     && !is_decisive(value) && !is_decisive(leviathanDisplacedValue)
                     && int(value - leviathanDisplacedValue) <= 72)
                 {
+                    const auto rivalWitnessEvidence =
+                      Leviathan::Evidence::bit(Leviathan::Evidence::Kind::RIVAL_AMBIGUITY);
                     if (leviathanWitness != leviathanDisplacedMove)
+                    {
                         leviathanWitnessCertifiedDepth = 0;
+                        leviathanWitnessEvidence = rivalWitnessEvidence;
+                    }
+                    else
+                        leviathanWitnessEvidence |= rivalWitnessEvidence;
                     leviathanWitness = leviathanDisplacedMove;
                     leviathanEvidence.add(Leviathan::Evidence::Kind::RIVAL_AMBIGUITY, 1);
                 }
@@ -2028,6 +2054,7 @@ moves_loop:  // When in check, search starts here
     if (!excludedMove && (leviathanProofDebt >= 3 || leviathanWitness))
         leviathan_proof_memory_store(posKey, leviathanProofDebt,
                                      leviathanEvidence.mask, leviathanWitness,
+                                     leviathanWitnessEvidence,
                                      leviathanWitnessCertifiedDepth);
 
     // Write gathered information in transposition table. Note that the
