@@ -1,0 +1,143 @@
+name: Leviathan v2.3 evaluation-pressure screen
+
+on:
+  push:
+    branches: [leviathan/h2h-v22-100-20260815]
+    paths: ['.github/workflows/v23-pressure-screen.yml']
+
+permissions:
+  contents: read
+
+jobs:
+  screen:
+    runs-on: ubuntu-22.04
+    strategy:
+      fail-fast: false
+      matrix:
+        profile: [pressure, pressurepiece]
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: b8cbdcbed9bb8bc28b62b3a7b98a5a07d3442f3e
+          path: leviathan
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          repository: official-stockfish/Stockfish
+          ref: 5062aee519a1ba262d472d8ab139851ced56573e
+          path: stockfish
+
+      - name: Apply evaluation-pressure dimension
+        working-directory: leviathan
+        env:
+          PROFILE: ${{ matrix.profile }}
+        run: |
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+          q=os.environ['PROFILE']
+          h=Path('src/leviathan_fundamentals.h'); s=h.read_text()
+          oldsig='''                          Depth depth,\n                          int moveCount,'''
+          newsig='''                          Depth depth,\n                          Value staticEval,\n                          int moveCount,'''
+          if s.count(oldsig)!=1: raise SystemExit('signature anchor')
+          s=s.replace(oldsig,newsig,1)
+          oldblock='''        delta += 1024 + state().quietOverdrive * lateness * depthScale / 24;\n        if (moveCount >= 10 && depth >= 7)\n            delta += 256;'''
+          if q=='pressure':
+            newblock='''        const int evalCp = staticEval == VALUE_NONE ? 0 : int(staticEval);\n        int hardBudget = evalCp >= 150 ? 896 : evalCp >= 0 ? 640 : evalCp >= -150 ? 384 : 160;\n        if (moveCount < 8 || depth < 6)\n            hardBudget = std::min(hardBudget, 384);\n        delta += hardBudget + state().quietOverdrive * lateness * depthScale / 24;\n        if (evalCp >= 0 && moveCount >= 11 && depth >= 8)\n            delta += 128;'''
+          else:
+            newblock='''        const int evalCp = staticEval == VALUE_NONE ? 0 : int(staticEval);\n        int evalBudget = evalCp >= 150 ? 960 : evalCp >= 0 ? 672 : evalCp >= -150 ? 384 : 128;\n        const int pieceCap =\n          (m.pt == KNIGHT || m.pt == BISHOP) ? 896 :\n          (m.pt == ROOK || m.pt == QUEEN)    ? 384 :\n          m.king                              ? 128 : 512;\n        int hardBudget = std::min(evalBudget, pieceCap);\n        if (moveCount < 8 || depth < 6)\n            hardBudget = std::min(hardBudget, 320);\n        delta += hardBudget + state().quietOverdrive * lateness * depthScale / 24;\n        if (evalCp >= 100 && (m.pt == KNIGHT || m.pt == BISHOP) && moveCount >= 11 && depth >= 8)\n            delta += 128;'''
+          if s.count(oldblock)!=1: raise SystemExit('funding anchor')
+          h.write_text(s.replace(oldblock,newblock,1))
+
+          p=Path('src/search.cpp'); t=p.read_text()
+          oldcall='''        r += Leviathan::Fundamentals::lmr_adjustment(\n          pos, move, prevSq, depth, moveCount, PvNode, capture, givesCheck);'''
+          newcall='''        r += Leviathan::Fundamentals::lmr_adjustment(\n          pos, move, prevSq, depth, ss->staticEval, moveCount, PvNode, capture, givesCheck);'''
+          if t.count(oldcall)!=1: raise SystemExit(f'call anchor {t.count(oldcall)}')
+          p.write_text(t.replace(oldcall,newcall,1))
+          PY
+          git diff --check
+          git diff -- src/leviathan_fundamentals.h src/search.cpp
+
+      - run: python3 -m pip install --disable-pip-version-check 'python-chess>=1.999,<2'
+      - name: Build
+        run: |
+          cd leviathan/src && make net && make clean && make -j2 ARCH=x86-64-avx2 build && mv stockfish stockfish-leviathan
+          cd ../../stockfish/src && make net && make clean && make -j2 ARCH=x86-64-avx2 build && mv stockfish stockfish-parent
+      - name: Configure
+        working-directory: leviathan
+        run: |
+          mkdir -p pressure
+          cat > pressure/a.json <<'EOF'
+          {"Threads":1,"Hash":64,"Leviathan Fundamentals":true,"Leviathan Fundamentals Authority":2,"Leviathan Forcing Buyback":384,"Leviathan Recapture Buyback":256,"Leviathan Passer Buyback":320,"Leviathan Endgame Buyback":128,"Leviathan Quiet Overdrive":160,"Leviathan Rule50 Pawn Bonus":3072,"Leviathan Zugzwang Guard":true,"Leviathan Sacrifice Rescue":true,"Leviathan Rule50 Pressure":true,"Leviathan Policy":false,"Leviathan MetaSearch":false,"Leviathan Risk":false,"Leviathan Specialist":false,"Leviathan Atlas":false,"Leviathan Search DSL":false}
+          EOF
+          echo '{"Threads":1,"Hash":64}' > pressure/b.json
+      - name: Generate mixed good/failure opening panel
+        working-directory: leviathan
+        run: |
+          python3 - <<'PY'
+          import random
+          from pathlib import Path
+          import chess,chess.engine
+          sf=chess.engine.SimpleEngine.popen_uci('../stockfish/src/stockfish-parent'); sf.configure({'Threads':1,'Hash':64})
+          out=[]; seen=set()
+          try:
+            for shard in (0,3):
+              rng=random.Random(8910+shard*100003); local=[]; attempts=0
+              while len(local)<5:
+                attempts+=1
+                b=chess.Board(); target=rng.randint(6,12)
+                for _ in range(target):
+                  infos=sf.analyse(b,chess.engine.Limit(nodes=1800),multipv=min(6,b.legal_moves.count()))
+                  if not isinstance(infos,list): infos=[infos]
+                  ranked=[]
+                  for info in infos:
+                    pv=info.get('pv',[])
+                    if pv:
+                      cp=info['score'].pov(b.turn).score(mate_score=100000); ranked.append((pv[0],int(cp or 0)))
+                  if not ranked: break
+                  best=ranked[0][1]; viable=[x for x in ranked if best-x[1]<=100] or ranked[:1]
+                  b.push(rng.choices([m for m,_ in viable],weights=list(range(len(viable),0,-1)),k=1)[0])
+                if b.is_game_over(): continue
+                key=' '.join(b.fen().split()[:4])
+                if key in seen: continue
+                seen.add(key); local.append(b.fen())
+              out.extend(local)
+          finally: sf.quit()
+          Path('pressure/openings.fen').write_text('\n'.join(out)+'\n')
+          PY
+      - name: Speed bench
+        working-directory: leviathan/src
+        env:
+          PROFILE: ${{ matrix.profile }}
+        run: |
+          ./stockfish-leviathan bench 2>&1 | tee ../pressure/off-${PROFILE}.txt
+          printf 'setoption name Leviathan Fundamentals value true\nsetoption name Leviathan Fundamentals Authority value 2\nbench\nquit\n' | ./stockfish-leviathan 2>&1 | tee ../pressure/on-${PROFILE}.txt
+      - name: Run 20 mixed paired games
+        working-directory: leviathan
+        env:
+          PROFILE: ${{ matrix.profile }}
+        run: |
+          python3 tools/run_match.py --engine-a "$GITHUB_WORKSPACE/leviathan/src/stockfish-leviathan" --engine-b "$GITHUB_WORKSPACE/stockfish/src/stockfish-parent" --options-a pressure/a.json --options-b pressure/b.json --openings pressure/openings.fen --games 20 --movetime-ms 100 --max-plies 220 --out pressure/${PROFILE}.json | tee pressure/${PROFILE}.log
+      - name: Summarize
+        working-directory: leviathan
+        env:
+          PROFILE: ${{ matrix.profile }}
+        run: |
+          python3 - <<'PY'
+          import json,os,re
+          from pathlib import Path
+          q=os.environ['PROFILE']; d=json.loads(Path(f'pressure/{q}.json').read_text())
+          off=Path(f'pressure/off-{q}.txt').read_text(); on=Path(f'pressure/on-{q}.txt').read_text()
+          def x(p,s): return int(re.findall(p,s)[-1])
+          om=x(r'Total time \(ms\)\s*:\s*(\d+)',off); am=x(r'Total time \(ms\)\s*:\s*(\d+)',on); onodes=x(r'Nodes searched\s*:\s*(\d+)',off); anodes=x(r'Nodes searched\s*:\s*(\d+)',on)
+          r={'profile':q,'summary':d['summary'],'speedup_ratio':om/am,'off_ms':om,'active_ms':am,'node_reduction_pct':(1-anodes/onodes)*100,'active_nodes':anodes}
+          Path(f'pressure/report-{q}.json').write_text(json.dumps(r,indent=2)+'\n'); print(json.dumps(r,indent=2))
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: v23-pressure-${{ matrix.profile }}
+          path: |
+            leviathan/pressure/report-${{ matrix.profile }}.json
+            leviathan/pressure/${{ matrix.profile }}.json
+            leviathan/pressure/off-${{ matrix.profile }}.txt
+            leviathan/pressure/on-${{ matrix.profile }}.txt
+            leviathan/pressure/openings.fen
