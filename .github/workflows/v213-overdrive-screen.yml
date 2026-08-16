@@ -1,0 +1,71 @@
+name: Leviathan v2.1.3 imminent-pawn overdrive screen
+on:
+  push:
+    branches: [leviathan/fundamentals-v2.1.3-imminent-pawn]
+    paths: ['.github/workflows/v213-overdrive-screen.yml']
+permissions: {contents: read}
+jobs:
+  screen:
+    runs-on: ubuntu-22.04
+    strategy:
+      fail-fast: false
+      matrix: {overdrive: [160,224,288,352]}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with: {ref: 8307ff677e0abcbad446343f00903c361f4ed26c, path: leviathan}
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with: {repository: official-stockfish/Stockfish, ref: 5062aee519a1ba262d472d8ab139851ced56573e, path: stockfish}
+      - run: python3 -m pip install --disable-pip-version-check 'python-chess>=1.999,<2'
+      - name: Build
+        run: |
+          cd leviathan/src && make net && make -j2 ARCH=x86-64-avx2 build && mv stockfish leviathan
+          cd ../../stockfish/src && make net && make -j2 ARCH=x86-64-avx2 build && mv stockfish parent
+      - name: Configure and diverse 10 openings
+        working-directory: leviathan
+        env: {OD: '${{ matrix.overdrive }}'}
+        run: |
+          mkdir q
+          python3 - <<'PY'
+          import json,os
+          a={'Threads':1,'Hash':64,'Leviathan Fundamentals':True,'Leviathan Fundamentals Authority':2,'Leviathan Forcing Buyback':384,'Leviathan Recapture Buyback':256,'Leviathan Passer Buyback':320,'Leviathan Endgame Buyback':128,'Leviathan Quiet Overdrive':int(os.environ['OD']),'Leviathan Rule50 Pawn Bonus':3072,'Leviathan Zugzwang Guard':True,'Leviathan Sacrifice Rescue':True,'Leviathan Rule50 Pressure':True,'Leviathan Policy':False,'Leviathan MetaSearch':False,'Leviathan Risk':False,'Leviathan Specialist':False,'Leviathan Atlas':False,'Leviathan Search DSL':False}
+          open('q/a.json','w').write(json.dumps(a));open('q/b.json','w').write('{"Threads":1,"Hash":64}')
+          PY
+          python3 - <<'PY'
+          import random,chess,chess.engine
+          from pathlib import Path
+          sf=chess.engine.SimpleEngine.popen_uci('../stockfish/src/parent');sf.configure({'Threads':1,'Hash':64});O=[];seen=set()
+          try:
+            for sh in range(5):
+              r=random.Random(8910+sh*100003);local=[]
+              while len(local)<2:
+                b=chess.Board()
+                for _ in range(r.randint(6,12)):
+                  I=sf.analyse(b,chess.engine.Limit(nodes=1800),multipv=min(6,b.legal_moves.count()));I=I if isinstance(I,list) else [I];R=[]
+                  for z in I:
+                    pv=z.get('pv',[])
+                    if pv:R.append((pv[0],int(z['score'].pov(b.turn).score(mate_score=100000) or 0)))
+                  if not R:break
+                  best=R[0][1];V=[z for z in R if best-z[1]<=100] or R[:1];b.push(r.choices([m for m,_ in V],weights=list(range(len(V),0,-1)),k=1)[0])
+                k=' '.join(b.fen().split()[:4])
+                if b.is_game_over() or k in seen:continue
+                seen.add(k);local.append(b.fen())
+              O+=local
+          finally:sf.quit()
+          Path('q/openings.fen').write_text('\n'.join(O)+'\n')
+          PY
+      - name: Bench and 20 games
+        working-directory: leviathan
+        env: {OD: '${{ matrix.overdrive }}'}
+        run: |
+          ./src/leviathan bench 2>&1 | tee q/off.txt
+          printf 'setoption name Leviathan Fundamentals value true\nsetoption name Leviathan Fundamentals Authority value 2\nsetoption name Leviathan Quiet Overdrive value %s\nbench\nquit\n' "$OD" | ./src/leviathan 2>&1 | tee q/on.txt
+          python3 tools/run_match.py --engine-a "$GITHUB_WORKSPACE/leviathan/src/leviathan" --engine-b "$GITHUB_WORKSPACE/stockfish/src/parent" --options-a q/a.json --options-b q/b.json --openings q/openings.fen --games 20 --movetime-ms 100 --max-plies 220 --out q/match.json | tee q/match.log
+          python3 - <<'PY'
+          import json,re,os
+          from pathlib import Path
+          d=json.loads(Path('q/match.json').read_text());off=Path('q/off.txt').read_text();on=Path('q/on.txt').read_text();x=lambda p,s:int(re.findall(p,s)[-1]);om=x(r'Total time \(ms\)\s*:\s*(\d+)',off);am=x(r'Total time \(ms\)\s*:\s*(\d+)',on);onodes=x(r'Nodes searched\s*:\s*(\d+)',off);anodes=x(r'Nodes searched\s*:\s*(\d+)',on);r={'overdrive':int(os.environ['OD']),'summary':d['summary'],'speedup':om/am,'node_change_pct':(anodes/onodes-1)*100,'off_ms':om,'active_ms':am,'active_nodes':anodes};Path('q/report.json').write_text(json.dumps(r,indent=2)+'\n');print(json.dumps(r,indent=2))
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: v213-od-${{ matrix.overdrive }}
+          path: leviathan/q/
