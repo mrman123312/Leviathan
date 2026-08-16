@@ -1,0 +1,58 @@
+name: Leviathan speed v3 TT cutoff before NNUE
+
+on:
+  push:
+    branches: [leviathan/speed-v3-profile]
+    paths: ['.github/workflows/speed-v3-tt-before-eval.yml']
+  workflow_dispatch:
+
+permissions: {contents: read}
+
+jobs:
+  exact-speed:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with: {ref: fbccfb6eb5cd335b1ce8fc5c5efad9e36be4e19d, path: candidate}
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with: {ref: fbccfb6eb5cd335b1ce8fc5c5efad9e36be4e19d, path: reference}
+      - name: Add early TT-return path only when static eval is missing
+        working-directory: candidate
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path('src/search.cpp');s=p.read_text()
+          anchor='''    ttCapture    = ttData.move && pos.capture_stage(ttData.move);\n\n    // Step 5. Static evaluation of the position'''
+          block='''    ttCapture    = ttData.move && pos.capture_stage(ttData.move);\n\n    // Leviathan lossless fast path: if this TT hit has no stored static eval,\n    // Step 5 would invoke NNUE even when the TT proof will immediately return.\n    // Determine that return first. If it is not guaranteed, fall through to\n    // untouched Stockfish semantics below.\n    if (ttHit && !is_valid(ttData.eval) && !PvNode && !excludedMove\n        && ttData.depth > depth - (ttData.value <= beta) && is_valid(ttData.value)\n        && (ttData.bound & (ttData.value >= beta ? BOUND_LOWER : BOUND_UPPER))\n        && (cutNode == (ttData.value >= beta) || depth > 4) && pos.rule50_count() < 96)\n    {\n        bool leviathanTTReturn = false;\n\n        if (depth >= 7 && ttData.move && pos.pseudo_legal(ttData.move) && pos.legal(ttData.move)\n            && !is_decisive(ttData.value))\n        {\n            pos.do_move(ttData.move, st);\n            Key nextPosKey                             = pos.key();\n            auto [ttHitNext, ttDataNext, ttWriterNext] = tt.probe(nextPosKey);\n            pos.undo_move(ttData.move);\n\n            leviathanTTReturn = !is_valid(ttDataNext.value)\n                              || ((ttData.value >= beta) == (-ttDataNext.value >= beta));\n        }\n        else\n            leviathanTTReturn = true;\n\n        if (leviathanTTReturn)\n        {\n            if (ttData.move && ttData.value >= beta)\n            {\n                if (!ttCapture)\n                    update_quiet_histories(pos, ss, *this, ttData.move, std::min(112 * depth, 695));\n\n                if (prevSq != SQ_NONE && (ss - 1)->moveCount < 5 && !priorCapture)\n                    update_continuation_histories(ss - 1, pos.piece_on(prevSq), prevSq, -2210);\n            }\n            return ttData.value;\n        }\n    }\n\n    // Step 5. Static evaluation of the position'''
+          if s.count(anchor)!=1:raise SystemExit('anchor missing')
+          p.write_text(s.replace(anchor,block,1))
+          PY
+      - name: Build AVX2
+        run: |
+          cd candidate/src && make net && make -j2 ARCH=x86-64-avx2 build && mv stockfish candidate
+          cd ../../reference/src && make net && make -j2 ARCH=x86-64-avx2 build && mv stockfish reference
+      - name: Exact-node 31-pair panel
+        run: |
+          python3 - <<'PY' | tee tt-before-eval.txt
+          import json,re,statistics,subprocess
+          opts=['setoption name Threads value 1','setoption name Hash value 64','setoption name Leviathan Fundamentals value true','setoption name Leviathan Fundamentals Authority value 2','setoption name Leviathan Forcing Buyback value 384','setoption name Leviathan Recapture Buyback value 256','setoption name Leviathan Passer Buyback value 320','setoption name Leviathan Endgame Buyback value 128','setoption name Leviathan Quiet Overdrive value 160','setoption name Leviathan Rule50 Pawn Bonus value 3072','setoption name Leviathan Zugzwang Guard value true','setoption name Leviathan Sacrifice Rescue value true','setoption name Leviathan Rule50 Pressure value true','setoption name Leviathan Policy value false','setoption name Leviathan MetaSearch value false','setoption name Leviathan Risk value false','setoption name Leviathan Specialist value false','setoption name Leviathan Atlas value false','setoption name Leviathan Search DSL value false']
+          cfg='\n'.join(opts)+'\n'
+          def R(path):
+            z=subprocess.run([path],input=cfg+'bench\nquit\n',text=True,capture_output=True,check=True);o=z.stdout+z.stderr
+            return {'ms':int(re.findall(r'Total time \(ms\)\s*:\s*(\d+)',o)[-1]),'nodes':int(re.findall(r'Nodes searched\s*:\s*(\d+)',o)[-1]),'nps':int(re.findall(r'Nodes/second\s*:\s*(\d+)',o)[-1])}
+          ref='./reference/src/reference';cand='./candidate/src/candidate';R(ref);R(cand);P=[]
+          for i in range(31):
+            if i%2:c=R(cand);r=R(ref)
+            else:r=R(ref);c=R(cand)
+            if r['nodes']!=c['nodes']:raise SystemExit(f'FUNCTIONAL DIVERGENCE {r} {c}')
+            P.append({'reference':r,'candidate':c});print(i+1,r,c,r['ms']/c['ms'])
+          q=[x['reference']['ms']/x['candidate']['ms'] for x in P]
+          out={'pairs':P,'nodes':P[0]['reference']['nodes'],'median_speedup':statistics.median(q),'mean_speedup':statistics.mean(q),'reference_median_ms':statistics.median(x['reference']['ms'] for x in P),'candidate_median_ms':statistics.median(x['candidate']['ms'] for x in P),'candidate_faster_pairs':sum(x['candidate']['ms']<x['reference']['ms'] for x in P)}
+          open('tt-before-eval.json','w').write(json.dumps(out,indent=2)+'\n');print(json.dumps(out,indent=2))
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: speed-v3-tt-before-eval
+          path: |
+            tt-before-eval.json
+            tt-before-eval.txt
