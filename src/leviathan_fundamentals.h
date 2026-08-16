@@ -98,7 +98,13 @@ inline Color mover_color(const Position& pos, Move move) {
 }
 
 inline bool advanced_pawn_move(const Position& pos, Move move) {
-    return pawn_move(pos, move) && relative_rank(mover_color(pos, move), move.to_sq()) >= RANK_6;
+    if (!pawn_move(pos, move))
+        return false;
+    const Rank rr = relative_rank(mover_color(pos, move), move.to_sq());
+    // Imminence is contextual: seventh-rank moves are always critical; a
+    // sixth-rank pawn becomes critical in sparse positions where promotion
+    // timing and king routes dominate. Ordinary pawn moves still fund speed.
+    return rr >= RANK_7 || (rr >= RANK_6 && low_material(pos));
 }
 
 inline bool recapture(Move move, Square prevSq, bool capture) {
@@ -170,14 +176,12 @@ inline int lmr_adjustment(const Position& pos,
     if (low_material(pos) && (moveCount <= 4 || capture || givesCheck))
         delta -= state().endgameBuyback;
 
-    // Authority 2 is the funding mechanism. v2.1 deliberately avoids
-    // overdriving pawn moves: even a quiet pawn move irreversibly changes the
-    // position and is a poor place to buy generic speed. We also start one move
-    // later and one ply deeper than v2 to concentrate the extra reduction on
-    // genuinely late, stable-looking branches.
+    // Authority 2 funds rescued scope from late stable branches. v2.1.3
+    // restores useful compression on ordinary pawn moves while excluding the
+    // contextual imminent-pawn class above.
     if (state().authority >= 2 && depth >= 5 && moveCount >= 6 && !pvNode && !capture
         && !givesCheck && move.type_of() != PROMOTION && !advanced_pawn_move(pos, move)
-        && !zeroing_quiet(pos, move, capture) && pos.rule50_count() < 70 && !low_material(pos))
+        && pos.rule50_count() < 70 && !low_material(pos))
     {
         const int lateness   = std::min(moveCount - 5, 8);
         const int depthScale = std::min(int(depth), 10) + 2;
