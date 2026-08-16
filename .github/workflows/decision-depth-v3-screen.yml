@@ -1,0 +1,112 @@
+name: Leviathan Decision Depth v3 screen
+
+on:
+  push:
+    branches: [leviathan/speed-v3-profile]
+    paths: ['.github/workflows/decision-depth-v3-screen.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  screen:
+    runs-on: ubuntu-22.04
+    strategy:
+      fail-fast: false
+      matrix:
+        profile: [control, forced-check, forced-any]
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: fbccfb6eb5cd335b1ce8fc5c5efad9e36be4e19d
+          path: leviathan
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          repository: official-stockfish/Stockfish
+          ref: 5062aee519a1ba262d472d8ab139851ced56573e
+          path: stockfish
+      - run: python3 -m pip install --disable-pip-version-check 'python-chess>=1.999,<2'
+      - name: Apply exact decision-depth profile
+        if: matrix.profile != 'control'
+        working-directory: leviathan
+        env:
+          PROFILE: ${{ matrix.profile }}
+        run: |
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+          p=Path('src/search.cpp'); s=p.read_text()
+          needle='''    assert(0 <= ss->ply && ss->ply < MAX_PLY);\n\n    Square prevSq'''
+          profile=os.environ['PROFILE']
+          if profile=='forced-check':
+              cond='ss->inCheck && !ss->excludedMove && MoveList<LEGAL>(pos).size() == 1'
+          elif profile=='forced-any':
+              cond='!ss->excludedMove && MoveList<LEGAL>(pos).size() == 1'
+          else:
+              raise SystemExit(profile)
+          repl=f'''    // Leviathan Decision Depth: a branching-factor-one node is chronology, not a decision.\n    if (!rootNode && {cond})\n        depth = std::min(depth + 1, MAX_PLY - 1);\n\n    assert(0 <= ss->ply && ss->ply < MAX_PLY);\n\n    Square prevSq'''
+          if needle not in s: raise SystemExit('patch anchor missing')
+          p.write_text(s.replace(needle,repl,1))
+          PY
+      - name: Build
+        run: |
+          cd leviathan/src && make net && make -j2 ARCH=x86-64-avx2 build && mv stockfish leviathan
+          cd ../../stockfish/src && make net && make -j2 ARCH=x86-64-avx2 build && mv stockfish parent
+      - name: Correctness and bench
+        working-directory: leviathan
+        run: |
+          ./src/leviathan bench 2>&1 | tee bench.txt
+          ./src/leviathan go perft 5 2>&1 | tee perft.txt
+      - name: Generate deterministic diverse openings
+        working-directory: leviathan
+        run: |
+          mkdir -p q
+          python3 - <<'PY'
+          import random,chess,chess.engine
+          from pathlib import Path
+          r=random.Random(37193)
+          sf=chess.engine.SimpleEngine.popen_uci('../stockfish/src/parent'); sf.configure({'Threads':1,'Hash':64})
+          out=[];seen=set()
+          try:
+            while len(out)<20:
+              b=chess.Board()
+              for _ in range(r.randint(8,24)):
+                if b.is_game_over(): break
+                I=sf.analyse(b,chess.engine.Limit(nodes=1200),multipv=min(5,b.legal_moves.count())); I=I if isinstance(I,list) else [I]
+                R=[]
+                for z in I:
+                  if z.get('pv'):
+                    cp=z['score'].pov(b.turn).score(mate_score=100000); R.append((z['pv'][0],int(cp or 0)))
+                if not R: break
+                best=R[0][1]; V=[x for x in R if best-x[1]<=110] or R[:1]
+                b.push(r.choices([m for m,_ in V],weights=list(range(len(V),0,-1)),k=1)[0])
+              k=' '.join(b.fen().split()[:4])
+              if b.is_game_over() or k in seen: continue
+              seen.add(k); out.append(b.fen())
+          finally: sf.quit()
+          Path('q/openings.fen').write_text('\n'.join(out)+'\n')
+          PY
+          cat > q/a.json <<'EOF'
+          {"Threads":1,"Hash":64,"Leviathan Fundamentals":true,"Leviathan Fundamentals Authority":2,"Leviathan Forcing Buyback":384,"Leviathan Recapture Buyback":256,"Leviathan Passer Buyback":320,"Leviathan Endgame Buyback":128,"Leviathan Quiet Overdrive":160,"Leviathan Rule50 Pawn Bonus":3072,"Leviathan Zugzwang Guard":true,"Leviathan Sacrifice Rescue":true,"Leviathan Rule50 Pressure":true,"Leviathan Policy":false,"Leviathan MetaSearch":false,"Leviathan Risk":false,"Leviathan Specialist":false,"Leviathan Atlas":false,"Leviathan Search DSL":false}
+          EOF
+          echo '{"Threads":1,"Hash":64}' > q/b.json
+      - name: 40 equal-node games
+        working-directory: leviathan
+        run: |
+          python3 tools/run_match.py --engine-a "$GITHUB_WORKSPACE/leviathan/src/leviathan" --engine-b "$GITHUB_WORKSPACE/stockfish/src/parent" --options-a q/a.json --options-b q/b.json --openings q/openings.fen --games 40 --nodes-per-move 12000 --max-plies 220 --out equal-node.json | tee equal-node.log
+      - name: 40 fixed-time games
+        working-directory: leviathan
+        run: |
+          python3 tools/run_match.py --engine-a "$GITHUB_WORKSPACE/leviathan/src/leviathan" --engine-b "$GITHUB_WORKSPACE/stockfish/src/parent" --options-a q/a.json --options-b q/b.json --openings q/openings.fen --games 40 --movetime-ms 50 --max-plies 220 --out fixed-time.json | tee fixed-time.log
+      - uses: actions/upload-artifact@v4
+        with:
+          name: decision-depth-${{ matrix.profile }}
+          path: |
+            leviathan/bench.txt
+            leviathan/perft.txt
+            leviathan/equal-node.json
+            leviathan/equal-node.log
+            leviathan/fixed-time.json
+            leviathan/fixed-time.log
+            leviathan/q/openings.fen
