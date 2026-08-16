@@ -1,0 +1,66 @@
+name: NNUE exact incremental-refresh crossover
+
+on:
+  push:
+    branches: [leviathan/speed-v4-nnue-routing]
+    paths: ['.github/workflows/nnue-refresh-crossover.yml']
+  workflow_dispatch:
+
+permissions: {contents: read}
+
+jobs:
+  paired:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with: {repository: official-stockfish/Stockfish, ref: 5062aee519a1ba262d472d8ab139851ced56573e, path: base}
+      - name: Clone candidate trees
+        run: |
+          for p in t24 t40 t56 t72; do cp -a base "$p"; done
+
+      - name: Add exact threat-workload routing
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          for name,threshold in [('t24',24),('t40',40),('t56',56),('t72',72)]:
+            p=Path(name)/'src/nnue/nnue_accumulator.cpp'; s=p.read_text()
+            anchor='''    if (accumulators[last_white].computed[WHITE] && accumulators[last_black].computed[BLACK])\n        forward_update_incremental_both(pos, featureTransformer, last_white, last_black);\n    else\n    {'''
+            repl=f'''    if (accumulators[last_white].computed[WHITE] && accumulators[last_black].computed[BLACK])\n    {{\n        // Leviathan lossless routing experiment: Stockfish normally replays every\n        // incremental dirty-threat update whenever both perspectives have a computed\n        // ancestor. For a heavy suffix, rebuilding ONLY the latest state from the\n        // Finny cache can move less memory. Both paths are exact; the frozen bench\n        // signature below is the semantic oracle.\n        const usize sharedBegin = std::max(last_white, last_black);\n        int threatWork = 0;\n        for (usize i = sharedBegin + 1; i < size && threatWork < {threshold}; ++i)\n            threatWork += accumulators[i].dirtyThreats.list.ssize();\n\n        if (threatWork >= {threshold} && size - sharedBegin > 1)\n        {{\n            update_accumulator_refresh_cache(WHITE, featureTransformer, pos, mut_latest(), cache);\n            update_accumulator_refresh_cache(BLACK, featureTransformer, pos, mut_latest(), cache);\n        }}\n        else\n            forward_update_incremental_both(pos, featureTransformer, last_white, last_black);\n    }}\n    else\n    {{'''
+            if s.count(anchor)!=1: raise SystemExit(f'anchor {name}')
+            p.write_text(s.replace(anchor,repl,1))
+          PY
+          for p in t24 t40 t56 t72; do git -C "$p" diff --check; done
+
+      - name: Build identical AVX2 binaries
+        run: |
+          for p in base t24 t40 t56 t72; do
+            (cd "$p/src" && make net && make clean && make -j2 ARCH=x86-64-avx2 build && mv stockfish "$p-fish")
+          done
+
+      - name: Exact node-signature gate and same-runner timing
+        run: |
+          python3 - <<'PY' | tee nnue-crossover.json
+          import subprocess,re,json,statistics
+          names=['base','t24','t40','t56','t72']; paths={n:f'./{n}/src/{n}-fish' for n in names}
+          def run(path):
+            p=subprocess.run([path],input='bench\nquit\n',text=True,capture_output=True,check=True);o=p.stdout+p.stderr
+            return {'nodes':int(re.findall(r'Nodes searched\s*:\s*(\d+)',o)[-1]),'ms':int(re.findall(r'Total time \(ms\)\s*:\s*(\d+)',o)[-1]),'nps':int(re.findall(r'Nodes/second\s*:\s*(\d+)',o)[-1])}
+          for p in paths.values(): run(p)
+          rows=[]
+          orderA=names; orderB=list(reversed(names))
+          for i in range(25):
+            row={}
+            for n in (orderA if i%2==0 else orderB):
+              row[n]=run(paths[n])
+              if row[n]['nodes'] != 2884956:
+                raise SystemExit(f'LOSSLESS NODE GATE FAILED {n}: {row[n]}')
+            rows.append(row)
+          out={'rows':rows}
+          for n in names[1:]:
+            nr=[r[n]['nps']/r['base']['nps'] for r in rows]; tr=[r['base']['ms']/r[n]['ms'] for r in rows]
+            out[n]={'median_nps_ratio':statistics.median(nr),'mean_nps_ratio':statistics.mean(nr),'median_time_speedup':statistics.median(tr),'faster_pairs':sum(r[n]['ms']<r['base']['ms'] for r in rows)}
+          print(json.dumps(out,indent=2))
+          PY
+
+      - uses: actions/upload-artifact@v4
+        with: {name: nnue-refresh-crossover, path: nnue-crossover.json}
