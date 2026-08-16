@@ -170,14 +170,15 @@ inline int lmr_adjustment(const Position& pos,
     if (low_material(pos) && (moveCount <= 4 || capture || givesCheck))
         delta -= state().endgameBuyback;
 
-    // Authority 2 is the funding mechanism. v2.1 deliberately avoids
-    // overdriving pawn moves: even a quiet pawn move irreversibly changes the
-    // position and is a poor place to buy generic speed. We also start one move
-    // later and one ply deeper than v2 to concentrate the extra reduction on
-    // genuinely late, stable-looking branches.
+    // v2.1.2: the v2.1 post-move identity bug accidentally let ordinary pawn
+    // moves participate in the speed budget, and the 100-game phase-fix showed
+    // that globally excluding every pawn was too expensive at 100 ms. Preserve
+    // that useful selectivity, but now classify the mover correctly so sixth-
+    // rank/seventh-rank pawn moves and promotions are explicitly protected.
+    // This creates a real irreversibility gradient instead of all-pawn/all-safe.
     if (state().authority >= 2 && depth >= 5 && moveCount >= 6 && !pvNode && !capture
         && !givesCheck && move.type_of() != PROMOTION && !advanced_pawn_move(pos, move)
-        && !zeroing_quiet(pos, move, capture) && pos.rule50_count() < 70 && !low_material(pos))
+        && pos.rule50_count() < 70 && !low_material(pos))
     {
         const int lateness   = std::min(moveCount - 5, 8);
         const int depthScale = std::min(int(depth), 10) + 2;
