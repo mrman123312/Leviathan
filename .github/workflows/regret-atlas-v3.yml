@@ -28,7 +28,7 @@ jobs:
       - name: Build v2.1.2-equivalent Leviathan and oracle
         run: |
           cd leviathan/src && make net && make -j2 ARCH=x86-64-avx2 build && mv stockfish leviathan
-          cd ../../stockfish/src && make net && make -j2 ARCH=x86-64-avx2 build && mv stockfish stockfish
+          cd ../../stockfish/src && make net && make -j2 ARCH=x86-64-avx2 build
       - name: Build regret atlas
         working-directory: leviathan
         run: |
