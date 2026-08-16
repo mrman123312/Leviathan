@@ -1,0 +1,218 @@
+name: Leviathan V8.3 vs V7.4 strength gate
+
+on:
+  push:
+    branches:
+      - leviathan/strength-v8-evidence-lattice
+    paths:
+      - '.github/workflows/strength-v8-vs-v7.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  strength-gate:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout exact V8.3 source
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: 5f443b0e3428c4b31313e46203f21958b42eb8c2
+          path: v8
+
+      - name: Checkout exact V7.4 source
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: 9ffe3f2c43972fc55163300449e97a981a01e358
+          path: v7
+
+      - name: Install deterministic match dependency
+        run: python3 -m pip install --disable-pip-version-check 'python-chess==1.999'
+
+      - name: Build both engines identically
+        run: |
+          set -euo pipefail
+          for D in v8 v7; do
+            cd "$GITHUB_WORKSPACE/$D/src"
+            make net
+            make clean
+            make -j2 ARCH=x86-64-avx2 build
+            mv stockfish "stockfish-$D"
+          done
+
+      - name: Verify exact engine identities and UCI surface
+        run: |
+          set -euo pipefail
+          test "$(git -C v8 rev-parse HEAD)" = '5f443b0e3428c4b31313e46203f21958b42eb8c2'
+          test "$(git -C v7 rev-parse HEAD)" = '9ffe3f2c43972fc55163300449e97a981a01e358'
+          printf 'uci\nquit\n' | ./v8/src/stockfish-v8 > v8-uci.txt
+          printf 'uci\nquit\n' | ./v7/src/stockfish-v7 > v7-uci.txt
+          for F in v8-uci.txt v7-uci.txt; do
+            grep -q 'option name Leviathan Fundamentals ' "$F"
+            grep -q 'option name Leviathan Fundamentals Authority ' "$F"
+            grep -q 'option name Leviathan Quiet Overdrive ' "$F"
+          done
+
+      - name: Create identical engine configuration
+        run: |
+          set -euo pipefail
+          mkdir -p match
+          cat > match/options.json <<'EOF'
+          {
+            "Threads": 1,
+            "Hash": 64,
+            "Leviathan Fundamentals": true,
+            "Leviathan Fundamentals Authority": 1,
+            "Leviathan Quiet Overdrive": 0,
+            "Leviathan Policy": false,
+            "Leviathan MetaSearch": false,
+            "Leviathan Risk": false,
+            "Leviathan Specialist": false,
+            "Leviathan Atlas": false,
+            "Leviathan Search DSL": false
+          }
+          EOF
+
+      - name: Generate deterministic paired opening bank
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import chess, random, hashlib
+          from pathlib import Path
+
+          seeds = [
+              ['e2e4','e7e5','g1f3','b8c6'],
+              ['e2e4','c7c5','g1f3','d7d6'],
+              ['e2e4','e7e6','d2d4','d7d5'],
+              ['e2e4','c7c6','d2d4','d7d5'],
+              ['d2d4','d7d5','c2c4','e7e6'],
+              ['d2d4','g8f6','c2c4','g7g6'],
+              ['d2d4','g8f6','c2c4','e7e6'],
+              ['c2c4','e7e5','b1c3','g8f6'],
+              ['g1f3','d7d5','g2g3','g8f6'],
+              ['e2e4','g8f6','e4e5','f6d5'],
+              ['c2c4','c7c5','g1f3','g8f6'],
+              ['d2d4','f7f5','g2g3','g8f6'],
+          ]
+          rng = random.Random(89108083)
+          out=[]
+          for i in range(20):
+              b=chess.Board()
+              for u in seeds[i % len(seeds)]:
+                  m=chess.Move.from_uci(u)
+                  if m in b.legal_moves:
+                      b.push(m)
+              for _ in range(4 + (i % 7)):
+                  moves=sorted(b.legal_moves, key=lambda m:m.uci())
+                  if not moves or b.is_game_over():
+                      break
+                  b.push(moves[rng.randrange(len(moves))])
+              if b.is_game_over():
+                  raise SystemExit(f'generated terminal opening {i}')
+              out.append(b.fen())
+          text='\n'.join(out)+'\n'
+          Path('match/openings.fen').write_text(text)
+          Path('match/openings.sha256').write_text(hashlib.sha256(text.encode()).hexdigest()+'\n')
+          print('opening_sha256', hashlib.sha256(text.encode()).hexdigest())
+          PY
+          test "$(wc -l < match/openings.fen)" -eq 20
+
+      - name: Equal-node gate - 40 paired games
+        id: equalnode
+        run: |
+          set -euo pipefail
+          python3 v8/tools/run_match.py \
+            --engine-a "$GITHUB_WORKSPACE/v8/src/stockfish-v8" \
+            --engine-b "$GITHUB_WORKSPACE/v7/src/stockfish-v7" \
+            --options-a match/options.json \
+            --options-b match/options.json \
+            --openings match/openings.fen \
+            --games 40 \
+            --nodes-per-move 20000 \
+            --max-plies 220 \
+            --out match/equal-node.json | tee match/equal-node.log
+          python3 - <<'PY' >> "$GITHUB_OUTPUT"
+          import json
+          d=json.load(open('match/equal-node.json'))['summary']
+          print('score='+str(d['score_a']))
+          print('survives='+('true' if d['score_a'] >= 0.5 else 'false'))
+          PY
+
+      - name: Fixed-time economics - 40 paired games
+        if: steps.equalnode.outputs.survives == 'true'
+        run: |
+          set -euo pipefail
+          python3 v8/tools/run_match.py \
+            --engine-a "$GITHUB_WORKSPACE/v8/src/stockfish-v8" \
+            --engine-b "$GITHUB_WORKSPACE/v7/src/stockfish-v7" \
+            --options-a match/options.json \
+            --options-b match/options.json \
+            --openings match/openings.fen \
+            --games 40 \
+            --movetime-ms 50 \
+            --max-plies 220 \
+            --out match/fixed-time.json | tee match/fixed-time.log
+
+      - name: Produce auditable decision report
+        if: always() && steps.equalnode.outcome == 'success'
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json, math
+          from pathlib import Path
+
+          def summarize(path):
+              d=json.loads(Path(path).read_text())
+              s=d['summary']
+              n=s['games']; w=s['wins_a']; dr=s['draws']; l=s['losses_a']; p=s['score_a']
+              vals=[g['score_a'] for g in d['games']]
+              mean=sum(vals)/n
+              var=sum((x-mean)**2 for x in vals)/(n-1) if n>1 else 0.0
+              se=(var/n)**0.5
+              ci=[max(0.0,mean-1.96*se), min(1.0,mean+1.96*se)]
+              elo=400*math.log10(p/(1-p)) if 0<p<1 else None
+              return {'games':n,'wins':w,'draws':dr,'losses':l,'score':p,
+                      'naive_elo':elo,'normal_95_score_ci':ci,'resource':s['resource']}
+
+          en=summarize('match/equal-node.json')
+          ft=summarize('match/fixed-time.json') if Path('match/fixed-time.json').exists() else None
+          if en['score'] < 0.5:
+              decision='KILL_OR_REDESIGN'
+              reason='V8.3 failed the equal-node quality gate against V7.4.'
+          elif ft is None:
+              decision='RETEST'
+              reason='V8.3 survived equal-node but fixed-time data is unavailable.'
+          elif ft['score'] < 0.5:
+              decision='REDESIGN_FOR_ECONOMICS'
+              reason='V8.3 survived equal-node but lost the fixed-time economics gate.'
+          else:
+              decision='KEEP_AND_SCALE_TEST'
+              reason='V8.3 survived both first-pass equal-node and fixed-time gates; sample is not proof of Elo.'
+          report={
+              'candidate':'V8.3 Evidence Lattice + Proof Certificates + Witness Provenance',
+              'candidate_source':'5f443b0e3428c4b31313e46203f21958b42eb8c2',
+              'reference':'V7.4 Persistent Proof',
+              'reference_source':'9ffe3f2c43972fc55163300449e97a981a01e358',
+              'opening_sha256':Path('match/openings.sha256').read_text().strip(),
+              'configuration':json.loads(Path('match/options.json').read_text()),
+              'equal_node':en,
+              'fixed_time':ft,
+              'decision':decision,
+              'reason':reason,
+              'statistical_status':'first-pass screen only; not statistically established'
+          }
+          Path('match/report.json').write_text(json.dumps(report,indent=2)+'\n')
+          print(json.dumps(report,indent=2))
+          PY
+
+      - name: Archive strength evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: v8-3-vs-v7-4-strength-gate
+          path: |
+            match/
+            v8-uci.txt
+            v7-uci.txt
+          if-no-files-found: error
