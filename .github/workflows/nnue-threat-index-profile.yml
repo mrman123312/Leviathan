@@ -1,0 +1,78 @@
+name: Leviathan NNUE threat-index profile
+
+on:
+  push:
+    branches: [leviathan/speed-v3-profile]
+    paths: ['.github/workflows/nnue-threat-index-profile.yml']
+  workflow_dispatch:
+
+permissions: {contents: read}
+
+jobs:
+  profile:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with: {ref: fbccfb6eb5cd335b1ce8fc5c5efad9e36be4e19d}
+      - name: Instrument threat and pawn-pair feature accesses
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path('src/nnue/nnue_accumulator.cpp');s=p.read_text()
+          s=s.replace('#include <new>','#include <new>\n#include <cstdio>\n#include <cstdlib>\n#include <cstdint>')
+          anchor='void apply_combined(Color                              perspective,'
+          helper=r'''
+struct LeviathanThreatAccessStats {
+    static constexpr int N = 64368;
+    std::uint64_t counts[N]{};
+    std::uint64_t total = 0;
+    ~LeviathanThreatAccessStats() {
+        if (!std::getenv("LEVIATHAN_THREAT_INDEX_PROFILE")) return;
+        std::fprintf(stderr,"LVTHREAT_TOTAL %llu\n",(unsigned long long)total);
+        for(int i=0;i<N;++i) if(counts[i])
+            std::fprintf(stderr,"LVTHREAT %d %llu\n",i,(unsigned long long)counts[i]);
+    }
+};
+LeviathanThreatAccessStats leviathanThreatStats;
+
+'''
+          if anchor not in s:raise SystemExit('anchor')
+          s=s.replace(anchor,helper+anchor,1)
+          body='    const auto& fromAcc = from.accumulation[perspective];'
+          repl=r'''    if (std::getenv("LEVIATHAN_THREAT_INDEX_PROFILE")) {
+        for (auto idx : thrRemoved) { ++leviathanThreatStats.counts[idx]; ++leviathanThreatStats.total; }
+        for (auto idx : thrAdded)   { ++leviathanThreatStats.counts[idx]; ++leviathanThreatStats.total; }
+    }
+
+    const auto& fromAcc = from.accumulation[perspective];'''
+          if body not in s:raise SystemExit('body')
+          p.write_text(s.replace(body,repl,1))
+          PY
+      - name: Build and profile several deterministic benches
+        working-directory: src
+        run: |
+          make net && make -j2 ARCH=x86-64-avx2 build
+          LEVIATHAN_THREAT_INDEX_PROFILE=1 ./stockfish bench 32 1 13 default depth 2>&1 | tee ../threat-index.log
+      - name: Analyze access concentration
+        run: |
+          python3 - <<'PY' | tee threat-index-summary.txt
+          import json
+          total=0;rows=[]
+          for line in open('threat-index.log',errors='ignore'):
+            if line.startswith('LVTHREAT_TOTAL '):total=int(line.split()[1])
+            elif line.startswith('LVTHREAT '):
+              _,i,c=line.split();rows.append((int(i),int(c)))
+          rows.sort(key=lambda x:x[1],reverse=True)
+          summary={'total':total,'unique':len(rows),'coverage':{}}
+          for k in [64,128,256,512,1024,2048,4096,8192,16384]:
+            n=sum(c for _,c in rows[:k]);summary['coverage'][str(k)]={'accesses':n,'fraction':n/total if total else 0,'extra_expanded_mib':k*1024/1024/1024}
+          summary['top100']=[{'index':i,'count':c,'fraction':c/total if total else 0} for i,c in rows[:100]]
+          open('threat-index.json','w').write(json.dumps(summary,indent=2)+'\n');print(json.dumps(summary,indent=2))
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: nnue-threat-index-profile
+          path: |
+            threat-index.json
+            threat-index-summary.txt
+            threat-index.log
