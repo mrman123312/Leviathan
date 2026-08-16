@@ -1,0 +1,44 @@
+name: Leviathan trajectory v3 oracle test
+
+on:
+  push:
+    branches: [leviathan/speed-v3-profile]
+    paths: ['.github/workflows/trajectory-v3-oracle.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  trajectory:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: leviathan/speed-v3-profile
+          path: leviathan
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          repository: official-stockfish/Stockfish
+          ref: 5062aee519a1ba262d472d8ab139851ced56573e
+          path: stockfish
+      - run: python3 -m pip install --disable-pip-version-check 'python-chess>=1.999,<2'
+      - name: Build local oracle and Leviathan
+        run: |
+          cd leviathan/src && make net && make -j2 ARCH=x86-64-avx2 build && mv stockfish leviathan
+          cd ../../stockfish/src && make net && make -j2 ARCH=x86-64-avx2 build && mv stockfish oracle
+      - name: Compare ordinary node budget with 16/64/246-ply trajectory projections
+        working-directory: leviathan
+        run: |
+          PYTHONPATH=. python3 tools/trajectory_oracle_bench.py \
+            --engine "$GITHUB_WORKSPACE/leviathan/src/leviathan" \
+            --oracle "$GITHUB_WORKSPACE/stockfish/src/oracle" \
+            --positions 12 --seed 29017 --budget-nodes 30000 --oracle-nodes 200000 \
+            --horizons 16,64,246 --out trajectory-oracle.json | tee trajectory-oracle.log
+      - uses: actions/upload-artifact@v4
+        with:
+          name: trajectory-v3-oracle
+          path: |
+            leviathan/trajectory-oracle.json
+            leviathan/trajectory-oracle.log
