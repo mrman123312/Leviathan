@@ -1,0 +1,33 @@
+name: Apply strength v8.5A witness hygiene
+
+on:
+  push:
+    branches:
+      - leviathan/strength-v8-5a-witness-hygiene
+    paths:
+      - '.github/workflows/apply-strength-v8-5a-hygiene.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout V8.5A
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: leviathan/strength-v8-5a-witness-hygiene
+      - name: Apply witness hygiene only
+        run: |
+          set -euo pipefail
+          python3 tools/leviathan_apply_v8_5a_hygiene.py
+          git diff --check
+          git diff -- src/search.cpp
+      - name: Commit V8.5A source
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add src/search.cpp
+          git commit -m 'Strength v8.5A: retire stale proof witnesses'
+          git push origin HEAD:leviathan/strength-v8-5a-witness-hygiene
