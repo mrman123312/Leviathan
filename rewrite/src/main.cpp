@@ -62,6 +62,24 @@ static bool selftest(){
     auto round=Position::from_fen(p.fen());
     if(!round || round->fen()!=p.fen()){std::cerr<<"selftest FEN roundtrip failed\n";return false;}
 
+    // Exact C++/Python feature-contract checks from the untouched distillation holdout.
+    // Expected values here are side-to-move scores; the archived JSONL stores White POV.
+    struct EvalCase { const char* fen; int expected; };
+    const EvalCase evalCases[] = {
+        {"r3kb1r/pp1n1ppp/2p5/3PP3/2P1b1n1/N1B5/PP1NBPPP/R3K2R b KQkq - 4 14", -140},
+        {"r3kb1r/pp1n1ppp/2p3b1/3Pn3/2P4P/2B1N3/PP1NBPP1/R3K2R b KQkq - 0 17", -93},
+        {"r3kb1r/pp1n1pp1/2p3b1/3Pn2p/2P4P/2B1N3/PP1NBPP1/R4RK1 b kq - 1 18", -114}
+    };
+    for(const auto& test : evalCases){
+        auto pos=Position::from_fen(test.fen);
+        if(!pos){std::cerr<<"selftest distilled eval FEN parse failed\n";return false;}
+        const int got=distilled_evaluator().evaluate(*pos).mean_cp;
+        if(got!=test.expected){
+            std::cerr<<"selftest distilled eval mismatch expected "<<test.expected<<" got "<<got<<" fen "<<test.fen<<"\n";
+            return false;
+        }
+    }
+
     SearchEngine engine;
     auto report=engine.search(Position::startpos(),SearchLimits{3,0},{Position::startpos().key()});
     if(report.best.is_null() || report.completed_depth!=3 || report.nodes<100){
@@ -85,7 +103,7 @@ int main(int argc,char** argv){
     while(std::getline(std::cin,line)){
         std::istringstream in(line); std::string cmd; in>>cmd;
         if(cmd=="uci"){
-            std::cout<<"id name Leviathan Rewrite v1\n";
+            std::cout<<"id name Leviathan Rewrite v2\n";
             std::cout<<"id author Leviathan Project\n";
             std::cout<<"option name SyzygyPath type string default <empty>\n";
             std::cout<<"uciok\n"<<std::flush;
@@ -128,6 +146,10 @@ int main(int argc,char** argv){
             std::cout<<"info depth "<<r.completed_depth<<" score cp "<<r.score<<" nodes "<<r.nodes<<" pv";
             for(auto m:r.pv) std::cout<<' '<<move_to_uci(m);
             std::cout<<"\nbestmove "<<(r.best.is_null()?"0000":move_to_uci(r.best))<<"\n"<<std::flush;
+        } else if(cmd=="eval"){
+            const auto e=default_evaluator().evaluate(pos);
+            const auto& d=default_evaluator().descriptor();
+            std::cout<<"info string evaluator "<<d.id<<" score "<<e.mean_cp<<" provenance "<<e.provenance<<"\n"<<std::flush;
         } else if(cmd=="perft"){
             int d=1; in>>d; std::cout<<"nodes "<<perft(pos,d)<<"\n"<<std::flush;
         } else if(cmd=="tbprobe"){
