@@ -1,0 +1,110 @@
+name: Leviathan v2.1 loss postmortem parallel
+
+on:
+  push:
+    branches:
+      - leviathan/h2h-100-20260815
+    paths:
+      - .github/workflows/postmortem-v21-losses-parallel.yml
+
+jobs:
+  analyze-loss:
+    strategy:
+      fail-fast: false
+      max-parallel: 6
+      matrix:
+        game_index: [4, 21, 24, 29, 36, 38, 50, 54, 56, 94, 96]
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: official-stockfish/Stockfish
+          ref: 5062aee519a1ba262d472d8ab139851ced56573e
+          path: stockfish-src
+      - uses: actions/download-artifact@v4
+        with:
+          name: leviathan-v21-vs-stockfish-100games-20260815
+          path: evidence
+          run-id: 31918850106
+          github-token: ${{ github.token }}
+      - run: python3 -m pip install python-chess
+      - run: |
+          make -C stockfish-src/src -j2 build ARCH=x86-64-avx2
+          cp stockfish-src/src/stockfish ./stockfish-exact
+          chmod +x ./stockfish-exact
+      - name: Analyze loss ${{ matrix.game_index }}
+        env:
+          GAME_INDEX: ${{ matrix.game_index }}
+        run: |
+          cat > one.py <<'PY'
+          import os,json,chess,chess.engine
+          from pathlib import Path
+          idx=int(os.environ['GAME_INDEX'])
+          data=json.loads(Path('evidence/all-games.json').read_text())
+          g=data['games'][idx-1]
+          assert g['score_a']==0.0
+          lev=chess.WHITE if g['a_white'] else chess.BLACK
+          e=chess.engine.SimpleEngine.popen_uci('./stockfish-exact'); e.configure({'Threads':1,'Hash':128})
+          def cp(info):
+              x=info['score'].pov(lev).score(mate_score=100000)
+              return int(x if x is not None else 0)
+          def pv_san(board,pv,n=10):
+              b=board.copy(stack=False); a=[]
+              for m in pv[:n]:
+                  if m not in b.legal_moves: break
+                  a.append(b.san(m)); b.push(m)
+              return a
+          b=chess.Board(g['fen']); cand=[]
+          for ply,u in enumerate(g['moves']):
+              m=chess.Move.from_uci(u)
+              if b.turn==lev:
+                  bef=e.analyse(b,chess.engine.Limit(nodes=15000))
+                  best=bef['pv'][0]; bestcp=cp(bef); fen=b.fen(); actualsan=b.san(m); bestsan=b.san(best); move_no=b.fullmove_number
+                  b.push(m)
+                  aft=e.analyse(b,chess.engine.Limit(nodes=15000)); actcp=cp(aft)
+                  cand.append({'move_number':move_no,'ply':ply+1,'actual_uci':u,'actual_san':actualsan,'best_uci':best.uci(),'best_san':bestsan,'quick_best_cp':bestcp,'quick_actual_cp':actcp,'quick_drop_cp':bestcp-actcp,'fen_before':fen})
+              else: b.push(m)
+          top=sorted(cand,key=lambda x:x['quick_drop_cp'],reverse=True)[:5]
+          deep=[]
+          for x in top:
+              b=chess.Board(x['fen_before']); bef=e.analyse(b,chess.engine.Limit(nodes=250000)); best=bef['pv'][0]; bestcp=cp(bef); actual=chess.Move.from_uci(x['actual_uci']); bestsan=b.san(best); actualsan=b.san(actual); bestpv=pv_san(b,bef.get('pv',[]),12); b.push(actual); aft=e.analyse(b,chess.engine.Limit(nodes=250000)); actcp=cp(aft); afterpv=pv_san(b,aft.get('pv',[]),12)
+              deep.append({**x,'deep_best_cp':bestcp,'deep_actual_cp':actcp,'deep_drop_cp':bestcp-actcp,'deep_best_san':bestsan,'deep_actual_san':actualsan,'deep_best_pv_san':bestpv,'deep_after_pv_san':afterpv})
+          e.quit()
+          out={'global_game_index':idx,'leviathan_color':'White' if g['a_white'] else 'Black','start_fen':g['fen'],'plies':g['plies'],'termination':g['termination'],'critical':sorted(deep,key=lambda x:x['deep_drop_cp'],reverse=True)}
+          Path(f'loss-{idx}.json').write_text(json.dumps(out,indent=2)+'\n')
+          print(json.dumps(out,indent=2))
+          PY
+          python3 one.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: loss-${{ matrix.game_index }}
+          path: loss-${{ matrix.game_index }}.json
+
+  aggregate:
+    needs: analyze-loss
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: loss-*
+          path: losses
+          merge-multiple: true
+      - run: |
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          files=sorted(Path('losses').glob('loss-*.json'), key=lambda p:int(p.stem.split('-')[1]))
+          data=[json.loads(p.read_text()) for p in files]
+          Path('parallel-loss-postmortem.json').write_text(json.dumps({'losses':data},indent=2)+'\n')
+          for r in data:
+              print(f"GAME {r['global_game_index']} Leviathan {r['leviathan_color']} {r['plies']} plies")
+              for x in r['critical'][:3]:
+                  print(f"  {x['move_number']}. {x['deep_actual_san']} best {x['deep_best_san']} {x['deep_best_cp']/100:+.2f}->{x['deep_actual_cp']/100:+.2f} drop {x['deep_drop_cp']/100:+.2f}")
+                  print('    best:', ' '.join(x['deep_best_pv_san']))
+                  print('    after:', ' '.join(x['deep_after_pv_san']))
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: leviathan-v21-loss-postmortem-parallel
+          path: parallel-loss-postmortem.json
