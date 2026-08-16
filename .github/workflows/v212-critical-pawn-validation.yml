@@ -1,0 +1,120 @@
+name: Leviathan v2.1.2 critical-pawn validation
+on:
+  push:
+    branches: [leviathan/fundamentals-v2.1.2-critical-pawn]
+    paths: ['.github/workflows/v212-critical-pawn-validation.yml']
+permissions: {contents: read}
+jobs:
+  shard:
+    runs-on: ubuntu-22.04
+    strategy:
+      fail-fast: false
+      matrix: {shard: [0,1,2,3,4]}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with: {ref: fbccfb6eb5cd335b1ce8fc5c5efad9e36be4e19d, path: leviathan}
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with: {repository: official-stockfish/Stockfish, ref: 5062aee519a1ba262d472d8ab139851ced56573e, path: stockfish}
+      - run: python3 -m pip install --disable-pip-version-check 'python-chess>=1.999,<2'
+      - name: Build
+        run: |
+          cd leviathan/src && make net && make -j2 ARCH=x86-64-avx2 build && mv stockfish leviathan
+          cd ../../stockfish/src && make net && make -j2 ARCH=x86-64-avx2 build && mv stockfish parent
+      - name: Configure and generate openings
+        working-directory: leviathan
+        env: {SHARD: '${{ matrix.shard }}'}
+        run: |
+          mkdir q
+          cat > q/a.json <<'EOF'
+          {"Threads":1,"Hash":64,"Leviathan Fundamentals":true,"Leviathan Fundamentals Authority":2,"Leviathan Forcing Buyback":384,"Leviathan Recapture Buyback":256,"Leviathan Passer Buyback":320,"Leviathan Endgame Buyback":128,"Leviathan Quiet Overdrive":160,"Leviathan Rule50 Pawn Bonus":3072,"Leviathan Zugzwang Guard":true,"Leviathan Sacrifice Rescue":true,"Leviathan Rule50 Pressure":true,"Leviathan Policy":false,"Leviathan MetaSearch":false,"Leviathan Risk":false,"Leviathan Specialist":false,"Leviathan Atlas":false,"Leviathan Search DSL":false}
+          EOF
+          echo '{"Threads":1,"Hash":64}' > q/b.json
+          python3 - <<'PY'
+          import os,random,chess,chess.engine
+          from pathlib import Path
+          sh=int(os.environ['SHARD']);r=random.Random(8910+sh*100003);sf=chess.engine.SimpleEngine.popen_uci('../stockfish/src/parent');sf.configure({'Threads':1,'Hash':64});O=[];seen=set()
+          try:
+            while len(O)<10:
+              b=chess.Board()
+              for _ in range(r.randint(6,12)):
+                I=sf.analyse(b,chess.engine.Limit(nodes=1800),multipv=min(6,b.legal_moves.count()));I=I if isinstance(I,list) else [I];R=[]
+                for z in I:
+                  pv=z.get('pv',[])
+                  if pv:R.append((pv[0],int(z['score'].pov(b.turn).score(mate_score=100000) or 0)))
+                if not R:break
+                best=R[0][1];V=[z for z in R if best-z[1]<=100] or R[:1];b.push(r.choices([m for m,_ in V],weights=list(range(len(V),0,-1)),k=1)[0])
+              k=' '.join(b.fen().split()[:4])
+              if b.is_game_over() or k in seen:continue
+              seen.add(k);O.append(b.fen())
+          finally:sf.quit()
+          Path('q/openings.fen').write_text('\n'.join(O)+'\n')
+          PY
+      - name: Verify baseline and run 20 games
+        working-directory: leviathan
+        run: |
+          ./src/leviathan bench 2>&1 | tee q/bench-off.txt
+          grep -q '2884956' q/bench-off.txt
+          python3 tools/run_match.py --engine-a "$GITHUB_WORKSPACE/leviathan/src/leviathan" --engine-b "$GITHUB_WORKSPACE/stockfish/src/parent" --options-a q/a.json --options-b q/b.json --openings q/openings.fen --games 20 --movetime-ms 100 --max-plies 220 --out q/shard-${{ matrix.shard }}.json | tee q/shard-${{ matrix.shard }}.log
+      - uses: actions/upload-artifact@v4
+        with:
+          name: v212-shard-${{ matrix.shard }}
+          path: |
+            leviathan/q/shard-${{ matrix.shard }}.json
+            leviathan/q/shard-${{ matrix.shard }}.log
+            leviathan/q/openings.fen
+  aggregate:
+    needs: shard
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/download-artifact@v4
+        with: {pattern: 'v212-shard-*', path: shards}
+      - name: Aggregate
+        run: |
+          python3 - <<'PY'
+          import json,math,statistics
+          from pathlib import Path
+          G=[];S=[]
+          for f in sorted(Path('shards').glob('v212-shard-*/shard-*.json')):
+            d=json.loads(f.read_text());G+=d['games'];S.append(d['summary'])
+          assert len(G)==100
+          w=sum(g['score_a']==1 for g in G);d=sum(g['score_a']==.5 for g in G);l=sum(g['score_a']==0 for g in G);s=sum(g['score_a'] for g in G)/100
+          elo=lambda x:400*math.log10(x/(1-x)) if 0<x<1 else None
+          P=[sum(G[i+j]['score_a'] for j in(0,1))/2 for i in range(0,100,2)];se=statistics.stdev(P)/math.sqrt(50);lo=max(.001,s-1.96*se);hi=min(.999,s+1.96*se);W=[g for g in G if g['a_white']];B=[g for g in G if not g['a_white']]
+          r={'profile':'v2.1.2-critical-pawn','commit':'fbccfb6eb5cd335b1ce8fc5c5efad9e36be4e19d','wins':w,'draws':d,'losses':l,'score':s,'naive_elo':elo(s),'pair_cluster_approx_95pct_elo_interval':[elo(lo),elo(hi)],'white_score':sum(g['score_a'] for g in W)/50,'black_score':sum(g['score_a'] for g in B)/50,'shards':S};Path('report.json').write_text(json.dumps(r,indent=2)+'\n');Path('all-games.json').write_text(json.dumps({'report':r,'games':G},indent=2)+'\n');print(json.dumps(r,indent=2))
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: leviathan-v212-critical-pawn-100games
+          path: |
+            report.json
+            all-games.json
+            shards/
+  speed:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with: {ref: fbccfb6eb5cd335b1ce8fc5c5efad9e36be4e19d}
+      - name: Build
+        working-directory: src
+        run: make net && make -j2 ARCH=x86-64-avx2 build
+      - name: 11 alternating bench pairs
+        working-directory: src
+        run: |
+          python3 - <<'PY' | tee ../speed.txt
+          import subprocess,re,statistics,json
+          def R(on):
+            q=('setoption name Leviathan Fundamentals value true\nsetoption name Leviathan Fundamentals Authority value 2\n' if on else '')+'bench\nquit\n';p=subprocess.run(['./stockfish'],input=q,text=True,capture_output=True,check=True);o=p.stdout+p.stderr
+            return {'ms':int(re.findall(r'Total time \(ms\)\s*:\s*(\d+)',o)[-1]),'nodes':int(re.findall(r'Nodes searched\s*:\s*(\d+)',o)[-1]),'nps':int(re.findall(r'Nodes/second\s*:\s*(\d+)',o)[-1])}
+          R(0);R(1);P=[]
+          for i in range(11):
+            if i%2:on=R(1);off=R(0)
+            else:off=R(0);on=R(1)
+            P.append({'off':off,'on':on});print(i+1,off,on)
+          sr=[x['off']['ms']/x['on']['ms'] for x in P];nr=[x['on']['nodes']/x['off']['nodes'] for x in P];r={'pairs':P,'off_median_ms':statistics.median(x['off']['ms'] for x in P),'on_median_ms':statistics.median(x['on']['ms'] for x in P),'median_speedup':statistics.median(sr),'mean_speedup':statistics.mean(sr),'median_node_ratio':statistics.median(nr),'node_change_pct':(statistics.median(nr)-1)*100};print(json.dumps(r,indent=2));open('../speed.json','w').write(json.dumps(r,indent=2)+'\n')
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: leviathan-v212-critical-pawn-speed
+          path: |
+            speed.txt
+            speed.json
