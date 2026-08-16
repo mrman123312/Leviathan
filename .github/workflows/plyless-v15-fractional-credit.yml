@@ -1,0 +1,143 @@
+name: Leviathan Plyless v1.5 fractional decision credit
+
+on:
+  push:
+    branches: [leviathan/plyless-v1.5-fractional-credit]
+    paths: ['.github/workflows/plyless-v15-fractional-credit.yml']
+  workflow_dispatch:
+
+permissions: {contents: read}
+
+jobs:
+  screen:
+    runs-on: ubuntu-22.04
+    strategy:
+      fail-fast: false
+      matrix:
+        profile: [control, c256, c384, c512, c768]
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with: {ref: fbccfb6eb5cd335b1ce8fc5c5efad9e36be4e19d, path: leviathan}
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with: {repository: official-stockfish/Stockfish, ref: 5062aee519a1ba262d472d8ab139851ced56573e, path: stockfish}
+
+      - name: Apply fixed-point decision-depth allocator
+        if: matrix.profile != 'control'
+        working-directory: leviathan
+        env: {PROFILE: '${{ matrix.profile }}'}
+        run: |
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+          q=os.environ['PROFILE']; credit=int(q[1:])
+
+          h=Path('src/search.h'); s=h.read_text()
+          a='''    int                         reduction;\n};'''
+          b='''    int                         reduction;\n    int                         leviathanDecisionCredit;  // fixed-point, 1024 = one physical ply\n};'''
+          if s.count(a)!=1: raise SystemExit('stack anchor')
+          h.write_text(s.replace(a,b,1))
+
+          p=Path('src/search.cpp'); s=p.read_text()
+          a='''namespace {\n\nconstexpr u64 NODES_LIMIT_OUTPUT'''
+          b='''namespace {\n\nstruct LVFractionalDecisionCache {\n    struct Entry { Key key=0; u16 move=0; unsigned char width=255; unsigned char depth=0; };\n    static constexpr usize Size=1u<<14;\n    std::array<Entry,Size> table{};\n    Entry& at(Key k){ return table[usize((k^(k>>32)^(k>>17))&(Size-1))]; }\n};\nthread_local LVFractionalDecisionCache lvFdc;\ninline Key lvFdcKey(const Position& pos){\n    Key k=pos.key() ^ Key(u64(pos.rule50_count())*0xD6E8FEB86659FD93ULL);\n    if(pos.has_repeated()) k ^= Key(0xA0761D6478BD642FULL);\n    return k ? k : Key(1);\n}\n\nconstexpr u64 NODES_LIMIT_OUTPUT'''
+          if s.count(a)!=1: raise SystemExit('namespace anchor')
+          s=s.replace(a,b,1)
+
+          a='''    bool  capture, ttCapture;\n    int   priorReduction;'''
+          b='''    bool  capture, ttCapture;\n    const int lvEntryDepth=int(depth); int lvSearched=0; u16 lvFirstMove=0;\n    Key lvDecisionKey=0; const LVFractionalDecisionCache::Entry* lvPriorDecision=nullptr;\n    int   priorReduction;'''
+          if s.count(a)!=1: raise SystemExit('local anchor')
+          s=s.replace(a,b,1)
+
+          a='''    excludedMove                   = ss->excludedMove;\n    posKey                         = pos.key();\n    auto [ttHit, ttData, ttWriter] = tt.probe(posKey);'''
+          b='''    excludedMove                   = ss->excludedMove;\n    posKey                         = pos.key();\n    if(Leviathan::Fundamentals::ready() && !excludedMove && lvEntryDepth>=1 && lvEntryDepth<=6){\n        lvDecisionKey=lvFdcKey(pos); auto& e=lvFdc.at(lvDecisionKey);\n        if(e.key==lvDecisionKey && int(e.depth)+1>=lvEntryDepth) lvPriorDecision=&e;\n    }\n    auto [ttHit, ttData, ttWriter] = tt.probe(posKey);'''
+          if s.count(a)!=1: raise SystemExit('probe anchor')
+          s=s.replace(a,b,1)
+
+          # At root, initialize the fixed-point account.
+          a='''    ss->pv = &pv;'''
+          b='''    ss->pv = &pv;\n    ss->leviathanDecisionCredit = 0;'''
+          if s.count(a)!=1: raise SystemExit('root credit anchor')
+          s=s.replace(a,b,1)
+
+          # Credit is granted only to the same dominant move previously observed in a
+          # width-1 node, and only in clean path contexts. Rivals retain normal search.
+          a='''        u64 nodeCount = rootNode ? u64(nodes) : 0;\n        const u64 leviathanParentKey = u64(pos.key());'''
+          b=f'''        int lvChildCredit = ss->leviathanDecisionCredit;\n        const bool lvTrustedNarrow = Leviathan::Fundamentals::ready() && lvPriorDecision\n          && lvPriorDecision->width <= 1 && lvPriorDecision->move == move.raw()\n          && !ss->inCheck && !pos.has_repeated() && pos.rule50_count() < 70\n          && ss->ply < MAX_PLY - 2;\n        if(lvTrustedNarrow) lvChildCredit += {credit};\n        if(lvChildCredit >= 1024 && extension < 1){{ extension=1; lvChildCredit-=1024; }}\n        (ss+1)->leviathanDecisionCredit = lvChildCredit;\n        if(lvEntryDepth>=1 && lvEntryDepth<=6){{ if(lvSearched==0) lvFirstMove=move.raw(); ++lvSearched; }}\n\n        u64 nodeCount = rootNode ? u64(nodes) : 0;\n        const u64 leviathanParentKey = u64(pos.key());'''
+          if s.count(a)!=1: raise SystemExit('credit anchor')
+          s=s.replace(a,b,1)
+
+          a='''    assert(bestValue > -VALUE_INFINITE && bestValue < VALUE_INFINITE);\n\n    return bestValue;\n}\n\n\n// Quiescence search function'''
+          b='''    assert(bestValue > -VALUE_INFINITE && bestValue < VALUE_INFINITE);\n    if(Leviathan::Fundamentals::ready() && !excludedMove && lvEntryDepth>=1 && lvEntryDepth<=6){\n        if(!lvDecisionKey) lvDecisionKey=lvFdcKey(pos); auto& e=lvFdc.at(lvDecisionKey);\n        if(e.key!=lvDecisionKey || lvEntryDepth>=int(e.depth)){\n            e.key=lvDecisionKey; e.move=lvFirstMove; e.width=static_cast<unsigned char>(std::min(lvSearched,254)); e.depth=static_cast<unsigned char>(lvEntryDepth);\n        }\n    }\n    return bestValue;\n}\n\n\n// Quiescence search function'''
+          if s.count(a)!=1: raise SystemExit('store anchor')
+          p.write_text(s.replace(a,b,1))
+          PY
+          git diff --check
+
+      - run: python3 -m pip install --disable-pip-version-check 'python-chess>=1.999,<2'
+      - name: Build AVX2
+        run: |
+          cd leviathan/src && make net && make clean && make -j2 ARCH=x86-64-avx2 build && mv stockfish leviathan
+          cd ../../stockfish/src && make net && make clean && make -j2 ARCH=x86-64-avx2 build && mv stockfish parent
+
+      - name: Configure common panel
+        working-directory: leviathan
+        run: |
+          mkdir -p x
+          cat > x/a.json <<'EOF'
+          {"Threads":1,"Hash":64,"Leviathan Fundamentals":true,"Leviathan Fundamentals Authority":2,"Leviathan Forcing Buyback":384,"Leviathan Recapture Buyback":256,"Leviathan Passer Buyback":320,"Leviathan Endgame Buyback":128,"Leviathan Quiet Overdrive":160,"Leviathan Rule50 Pawn Bonus":3072,"Leviathan Zugzwang Guard":true,"Leviathan Sacrifice Rescue":true,"Leviathan Rule50 Pressure":true,"Leviathan Policy":false,"Leviathan MetaSearch":false,"Leviathan Risk":false,"Leviathan Specialist":false,"Leviathan Atlas":false,"Leviathan Search DSL":false}
+          EOF
+          echo '{"Threads":1,"Hash":64}' > x/b.json
+          python3 - <<'PY'
+          import random,chess,chess.engine
+          from pathlib import Path
+          sf=chess.engine.SimpleEngine.popen_uci('../stockfish/src/parent'); sf.configure({'Threads':1,'Hash':64}); out=[]; seen=set()
+          try:
+            for family in range(5):
+              r=random.Random(104729+family*982451653); loc=[]
+              while len(loc)<4:
+                b=chess.Board()
+                for _ in range(r.randint(10,22)):
+                  if b.is_game_over(): break
+                  z=sf.analyse(b,chess.engine.Limit(nodes=1800),multipv=min(6,b.legal_moves.count())); z=z if isinstance(z,list) else [z]; ranked=[]
+                  for i in z:
+                    if i.get('pv'): ranked.append((i['pv'][0],int(i['score'].pov(b.turn).score(mate_score=100000) or 0)))
+                  if not ranked: break
+                  best=ranked[0][1]; v=[x for x in ranked if best-x[1]<=120] or ranked[:1]
+                  b.push(r.choices([m for m,_ in v],weights=range(len(v),0,-1),k=1)[0])
+                k=' '.join(b.fen().split()[:4])
+                if b.is_game_over() or k in seen: continue
+                seen.add(k); loc.append(b.fen())
+              out+=loc
+          finally: sf.quit()
+          Path('x/openings.fen').write_text('\n'.join(out)+'\n')
+          PY
+
+      - name: Exact-off gate and active bench
+        working-directory: leviathan/src
+        env: {PROFILE: '${{ matrix.profile }}'}
+        run: |
+          ./leviathan bench 2>&1 | tee ../x/off-${PROFILE}.txt
+          grep -q 'Nodes searched  : 2884956' ../x/off-${PROFILE}.txt
+          printf 'setoption name Leviathan Fundamentals value true\nsetoption name Leviathan Fundamentals Authority value 2\nbench\nquit\n' | ./leviathan 2>&1 | tee ../x/on-${PROFILE}.txt
+
+      - name: 40 equal-node games
+        working-directory: leviathan
+        env: {PROFILE: '${{ matrix.profile }}'}
+        run: |
+          python3 tools/run_match.py --engine-a "$PWD/src/leviathan" --engine-b "$GITHUB_WORKSPACE/stockfish/src/parent" --options-a x/a.json --options-b x/b.json --openings x/openings.fen --games 40 --nodes-per-move 24000 --max-plies 246 --out x/nodes-${PROFILE}.json
+      - name: 40 fixed-time games
+        working-directory: leviathan
+        env: {PROFILE: '${{ matrix.profile }}'}
+        run: |
+          python3 tools/run_match.py --engine-a "$PWD/src/leviathan" --engine-b "$GITHUB_WORKSPACE/stockfish/src/parent" --options-a x/a.json --options-b x/b.json --openings x/openings.fen --games 40 --movetime-ms 100 --max-plies 246 --out x/time-${PROFILE}.json
+      - name: Summarize
+        working-directory: leviathan
+        env: {PROFILE: '${{ matrix.profile }}'}
+        run: |
+          python3 - <<'PY'
+          import json,os,re
+          from pathlib import Path
+          q=os.environ['PROFILE'];n=json.load(open(f'x/nodes-{q}.json'))['summary'];t=json.load(open(f'x/time-{q}.json'))['summary'];a=Path(f'x/off-{q}.txt').read_text();b=Path(f'x/on-{q}.txt').read_text();g=lambda p,s:int(re.findall(p,s)[-1]);R={'profile':q,'equal_node':n,'fixed_time':t,'off_ms':g(r'Total time \(ms\)\s*:\s*(\d+)',a),'active_ms':g(r'Total time \(ms\)\s*:\s*(\d+)',b),'active_nodes':g(r'Nodes searched\s*:\s*(\d+)',b)};Path(f'x/report-{q}.json').write_text(json.dumps(R,indent=2)+'\n');print(json.dumps(R,indent=2))
+          PY
+      - uses: actions/upload-artifact@v4
+        with: {name: 'plyless-v15-${{ matrix.profile }}', path: 'leviathan/x/report-${{ matrix.profile }}.json'}
