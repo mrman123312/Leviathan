@@ -1,0 +1,58 @@
+name: Apply strength v6 proof gate
+
+on:
+  push:
+    branches:
+      - leviathan/strength-v6-proof-obligation
+    paths:
+      - '.github/workflows/apply-strength-v6-proof-gate.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout strength v6
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: leviathan/strength-v6-proof-obligation
+
+      - name: Gate shortcut authority with proof debt
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('src/search.cpp')
+          s = p.read_text()
+
+          old = "    if (!PvNode && !excludedMove && ttData.depth > depth - (ttData.value <= beta)\n        && is_valid(ttData.value)  // Can happen when !ttHit or when access race in probe()\n        && (ttData.bound & (ttData.value >= beta ? BOUND_LOWER : BOUND_UPPER))\n        && (cutNode == (ttData.value >= beta) || depth > 4))"
+          new = "    if (!PvNode && !excludedMove && leviathanProofDebt < 2\n        && ttData.depth > depth - (ttData.value <= beta)\n        && is_valid(ttData.value)  // Can happen when !ttHit or when access race in probe()\n        && (ttData.bound & (ttData.value >= beta ? BOUND_LOWER : BOUND_UPPER))\n        && (cutNode == (ttData.value >= beta) || depth > 4))"
+          if s.count(old) != 1:
+              raise SystemExit(f'TT gate anchor count {s.count(old)}')
+          s = s.replace(old, new, 1)
+
+          old = "            if (nmpMinPly || depth < 16)\n                return nullValue;"
+          new = "            // Under contradictory evidence, a null-move success is only a\n            // hypothesis. At moderate/deep nodes require the existing verification\n            // search instead of granting immediate cutoff authority.\n            const bool leviathanVerifyNull = leviathanProofDebt >= 2 && depth >= 10;\n            if (nmpMinPly || (depth < 16 && !leviathanVerifyNull))\n                return nullValue;"
+          if s.count(old) != 1:
+              raise SystemExit(f'null gate anchor count {s.count(old)}')
+          s = s.replace(old, new, 1)
+
+          old = "            if (value >= probCutBeta)\n            {\n                // Save ProbCut data into transposition table"
+          new = "            if (value >= probCutBeta && leviathanProofDebt < 3)\n            {\n                // Save ProbCut data into transposition table"
+          if s.count(old) != 1:
+              raise SystemExit(f'ProbCut gate anchor count {s.count(old)}')
+          s = s.replace(old, new, 1)
+
+          p.write_text(s)
+          PY
+          git diff --check
+          git diff -- src/search.cpp
+
+      - name: Commit proof gate
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add src/search.cpp
+          git commit -m 'Strength v6.2: gate shortcut cutoffs behind proof debt'
+          git push origin HEAD:leviathan/strength-v6-proof-obligation
