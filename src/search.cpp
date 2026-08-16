@@ -1438,6 +1438,22 @@ moves_loop:  // When in check, search starts here
                 // Post LMR continuation history updates
                 update_continuation_histories(ss, movedPiece, move.to_sq(), 1334);
             }
+            // Leviathan strength v5 - Margin Skeptic Search.
+            // A reduced quiet move that misses alpha by only a small margin may
+            // have missed because of the reduction itself. Re-open only near-
+            // boundary, genuinely reduced branches instead of globally inflating depth.
+            else if (d < newDepth && depth >= 6 && moveCount <= 10 && !capture && !givesCheck
+                     && value >= alpha - (18 + 3 * std::min(int(depth), 12))
+                     && (PvNode || ss->ttPv
+                         || Leviathan::Fundamentals::quiet_tactical_tension(
+                           pos, move, capture, givesCheck)))
+            {
+                leviathanResearched = true;
+                value = -search<NonPV>(pos, ss + 1, -(alpha + 1), -alpha, newDepth, !cutNode);
+
+                if (value > alpha)
+                    update_continuation_histories(ss, movedPiece, move.to_sq(), 1334);
+            }
         }
 
         // Step 18. Full-depth search when LMR is skipped
