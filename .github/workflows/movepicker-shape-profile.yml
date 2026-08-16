@@ -1,0 +1,44 @@
+name: MovePicker shape profiler
+
+on:
+  push:
+    branches: [leviathan/speed-v3-profile]
+    paths: ['.github/workflows/movepicker-shape-profile.yml']
+  workflow_dispatch:
+
+permissions: {contents: read}
+
+jobs:
+  profile:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with: {repository: official-stockfish/Stockfish, ref: 5062aee519a1ba262d472d8ab139851ced56573e}
+      - name: Instrument MovePicker shapes
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path('src/movepick.cpp'); s=p.read_text()
+          s=s.replace('#include <utility>','#include <utility>\n#include <array>\n#include <iostream>')
+          a='''namespace {\n\nenum Stages {'''
+          b='''namespace {\n\nstruct LVMovePickProfile {\n    std::array<unsigned long long,65> captures{}, quiets{}, evasions{}, sortedLen{}, sortedQualified{};\n    unsigned long long sorts=0;\n    ~LVMovePickProfile(){\n      auto d=[&](const char* n,const auto& a){std::cerr<<"LVMP "<<n;for(auto v:a)std::cerr<<' '<<v;std::cerr<<'\\n';};\n      std::cerr<<"LVMP sorts "<<sorts<<'\\n';d("captures",captures);d("quiets",quiets);d("evasions",evasions);d("sortlen",sortedLen);d("qualified",sortedQualified);\n    }\n};\nLVMovePickProfile lvmp;\ninline int lvmpbin(isize n){ return std::min<int>(64,std::max<isize>(0,n)); }\n\nenum Stages {'''
+          if s.count(a)!=1: raise SystemExit('ns anchor')
+          s=s.replace(a,b,1)
+          a='''void partial_insertion_sort(ExtMove* begin, ExtMove* end, int limit) {\n    ExtMove *sortedEnd = begin, *p = begin + 1;'''
+          b='''void partial_insertion_sort(ExtMove* begin, ExtMove* end, int limit) {\n    ++lvmp.sorts; ++lvmp.sortedLen[lvmpbin(end-begin)];\n    int lvq=0; for(ExtMove* z=begin;z<end;++z) lvq += z->value >= limit; ++lvmp.sortedQualified[lvmpbin(lvq)];\n    ExtMove *sortedEnd = begin, *p = begin + 1;'''
+          if s.count(a)!=1: raise SystemExit('sort anchor')
+          s=s.replace(a,b,1)
+          # Count generated/scored list sizes by template Type.
+          a='''    return it;\n}\n\n// Returns the next move satisfying'''
+          b='''    const int lvN = lvmpbin(it - cur);\n    if constexpr (Type == CAPTURES) ++lvmp.captures[lvN];\n    else if constexpr (Type == QUIETS) ++lvmp.quiets[lvN];\n    else if constexpr (Type == EVASIONS) ++lvmp.evasions[lvN];\n    return it;\n}\n\n// Returns the next move satisfying'''
+          if s.count(a)!=1: raise SystemExit('score return anchor')
+          p.write_text(s.replace(a,b,1))
+          PY
+      - name: Build and run representative bench
+        working-directory: src
+        run: |
+          make net && make clean && make -j2 ARCH=x86-64-avx2 build
+          ./stockfish bench 2>&1 | tee ../movepicker-shapes.txt
+          grep '^LVMP' ../movepicker-shapes.txt
+      - uses: actions/upload-artifact@v4
+        with: {name: movepicker-shapes, path: movepicker-shapes.txt}
