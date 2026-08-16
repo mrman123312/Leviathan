@@ -20,7 +20,7 @@ jobs:
           from pathlib import Path
           p=Path('src/search.cpp');s=p.read_text();s=s.replace('#include <utility>','#include <utility>\n#include <iostream>')
           a='''namespace {\n\nconstexpr u64 NODES_LIMIT_OUTPUT'''
-          b='''namespace {\n\nstruct LVDomProfile {\n  struct E {Key key=0;u16 move=0;unsigned char width=255,depth=0;};\n  static constexpr usize Size=1u<<16; std::array<E,Size> t{};\n  unsigned long long qualified[7]{}, prior1[7]{}, prior1same[7]{}, prior1sameAndNow1[7]{}, prior1diffAndNow1[7]{}, ttMatchesPrior[7]{};\n  ~LVDomProfile(){for(int d=1;d<=6;++d)std::cerr<<"LVDOM "<<d<<" qualified "<<qualified[d]<<" prior1 "<<prior1[d]<<" same "<<prior1same[d]<<" sameNow1 "<<prior1sameAndNow1[d]<<" diffNow1 "<<prior1diffAndNow1[d]<<" ttMatch "<<ttMatchesPrior[d]<<'\\n';}\n};\nLVDomProfile lvdom; inline usize lvdomi(Key k){return usize((k^(k>>31)^(k>>17))&(LVDomProfile::Size-1));}\n\nconstexpr u64 NODES_LIMIT_OUTPUT'''
+          b='''namespace {\n\nstruct LVDomProfile {\n  struct E {Key key=0;u16 move=0;unsigned char width=255,depth=0;};\n  static constexpr usize Size=1u<<16; std::array<E,Size> t{};\n  unsigned long long qualified[7]{}, prior1[7]{}, prior1same[7]{}, prior1sameAndNow1[7]{}, prior1diffAndNow1[7]{}, ttMatchesPrior[7]{};\n};\nLVDomProfile lvdom; inline usize lvdomi(Key k){return usize((k^(k>>31)^(k>>17))&(LVDomProfile::Size-1));}\n\nconstexpr u64 NODES_LIMIT_OUTPUT'''
           if s.count(a)!=1:raise SystemExit('ns');s=s.replace(a,b,1)
           a='''    bool  capture, ttCapture;\n    int   priorReduction;'''
           b='''    bool  capture, ttCapture;\n    const int lvED=int(depth); int lvCount=0; u16 lvFirst=0;\n    bool lvHit=false; unsigned char lvPW=255,lvPD=0; u16 lvPM=0;\n    int   priorReduction;'''
@@ -35,7 +35,7 @@ jobs:
           b='''        // Step 16. Make the move\n        if(lvED>=1&&lvED<=6){if(lvCount==0)lvFirst=move.raw();++lvCount;}\n        do_move(pos, move, st, givesCheck, ss);'''
           if s.count(a)!=1:raise SystemExit('dom');s=s.replace(a,b,1)
           a='''    assert(bestValue > -VALUE_INFINITE && bestValue < VALUE_INFINITE);\n\n    return bestValue;\n}\n\n\n// Quiescence search function'''
-          b='''    assert(bestValue > -VALUE_INFINITE && bestValue < VALUE_INFINITE);\n    if(!excludedMove&&lvED>=1&&lvED<=6){\n      if(lvHit&&int(lvPD)+1>=lvED){++lvdom.qualified[lvED];if(lvPW<=1){++lvdom.prior1[lvED];if(lvFirst&&lvFirst==lvPM){++lvdom.prior1same[lvED];if(lvCount<=1)++lvdom.prior1sameAndNow1[lvED];}else if(lvCount<=1)++lvdom.prior1diffAndNow1[lvED];}}\n      auto&e=lvdom.t[lvdomi(posKey)];if(e.key!=posKey||lvED>=int(e.depth)){e.key=posKey;e.move=lvFirst;e.width=static_cast<unsigned char>(std::min(lvCount,254));e.depth=static_cast<unsigned char>(lvED);}\n    }\n    return bestValue;\n}\n\n\n// Quiescence search function'''
+          b='''    assert(bestValue > -VALUE_INFINITE && bestValue < VALUE_INFINITE);\n    if(!excludedMove&&lvED>=1&&lvED<=6){\n      if(lvHit&&int(lvPD)+1>=lvED){++lvdom.qualified[lvED];if(lvPW<=1){++lvdom.prior1[lvED];if(lvFirst&&lvFirst==lvPM){++lvdom.prior1same[lvED];if(lvCount<=1)++lvdom.prior1sameAndNow1[lvED];}else if(lvCount<=1)++lvdom.prior1diffAndNow1[lvED];}}\n      auto&e=lvdom.t[lvdomi(posKey)];if(e.key!=posKey||lvED>=int(e.depth)){e.key=posKey;e.move=lvFirst;e.width=static_cast<unsigned char>(std::min(lvCount,254));e.depth=static_cast<unsigned char>(lvED);}\n    }\n    if constexpr (rootNode)\n      for(int d=1;d<=6;++d)std::cerr<<"LVDOM "<<d<<" qualified "<<lvdom.qualified[d]<<" prior1 "<<lvdom.prior1[d]<<" same "<<lvdom.prior1same[d]<<" sameNow1 "<<lvdom.prior1sameAndNow1[d]<<" diffNow1 "<<lvdom.prior1diffAndNow1[d]<<" ttMatch "<<lvdom.ttMatchesPrior[d]<<'\\n';\n    return bestValue;\n}\n\n\n// Quiescence search function'''
           if s.count(a)!=1:raise SystemExit('end');p.write_text(s.replace(a,b,1))
           PY
       - name: Build and profile
@@ -43,6 +43,6 @@ jobs:
         run: |
           make net && make clean && make -j2 ARCH=x86-64-avx2 build
           ./stockfish bench 2>&1 | tee ../dominant.txt
-          grep '^LVDOM' ../dominant.txt
+          grep '^LVDOM' ../dominant.txt | tail -6
       - uses: actions/upload-artifact@v4
         with: {name: plyless-dominant-move-profile, path: dominant.txt}
