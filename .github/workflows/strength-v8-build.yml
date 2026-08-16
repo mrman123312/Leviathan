@@ -1,4 +1,4 @@
-# Final V8.1 source validation trigger at d640f1892fd2996e38926e564e1dd090bf266682
+# Final V8.2 source validation trigger at 0ce3c97137852a2fbea7c7a7374231cbc8769872
 name: Leviathan strength v8 build
 
 on:
@@ -31,6 +31,11 @@ jobs:
           grep -q 'PROVENANCE_DOMAIN' src/leviathan_evidence.h
           grep -q 'SEARCH_DOMAIN' src/leviathan_evidence.h
           grep -q 'RIVAL_DOMAIN' src/leviathan_evidence.h
+          grep -q 'witnessDepth' src/search.h
+          grep -q 'leviathan_proof_memory_witness_depth' src/search.h
+          grep -q 'leviathanEntryDepth > leviathanWitnessCertifiedDepth' src/search.cpp
+          grep -q 'newDepth = std::max(newDepth, leviathanEntryDepth - 1)' src/search.cpp
+          grep -q 'e.witnessDepth = 0' src/search.cpp
 
       - name: Evidence primitive invariants
         run: |
@@ -127,7 +132,7 @@ jobs:
       - name: Archive V8 evidence
         uses: actions/upload-artifact@v4
         with:
-          name: strength-v8-build-evidence
+          name: strength-v8-2-build-evidence
           path: |
             strength-v8-persistent-smoke.txt
             strength-v8-history-smoke.txt
