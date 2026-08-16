@@ -1271,7 +1271,8 @@ moves_loop:  // When in check, search starts here
                     Value futilityValue = ss->staticEval + 234 + 247 * lmrDepth
                                         + PieceValue[capturedPiece] + 134 * captHist / 1024;
 
-                    if (futilityValue <= alpha)
+                    if (futilityValue <= alpha
+                        && !(leviathanProofDebt >= 3 && moveCount <= 6))
                         continue;
                 }
 
@@ -1279,6 +1280,7 @@ moves_loop:  // When in check, search starts here
                 // Avoid pruning sacrifices of our last piece for stalemate
                 int margin = 177 * depth + captHist * 34 / 1024;
                 if ((alpha >= VALUE_DRAW || pos.non_pawn_material(us) != PieceValue[movedPiece])
+                    && !(leviathanProofDebt >= 3 && moveCount <= 6)
                     && !pos.see_ge(move, -margin)
                     && !Leviathan::Fundamentals::rescue_bad_see(
                       pos, move, prevSq, capture, givesCheck))
@@ -1531,6 +1533,13 @@ moves_loop:  // When in check, search starts here
             {
                 leviathanResearched = true;
                 value = -search<NonPV>(pos, ss + 1, -(alpha + 1), -alpha, newDepth, !cutNode);
+
+                // A rescued PV false-negative is a concrete counterexample to the
+                // reduction model. Do not merely restore baseline depth: give the
+                // subsequent PV proof one extra ply to resolve the contradiction.
+                if (PvNode && leviathanReducedValue <= alpha && value > alpha
+                    && depth >= 7 && newDepth < depth)
+                    ++newDepth;
 
                 if (value > alpha)
                     update_continuation_histories(ss, movedPiece, move.to_sq(), 1334);
