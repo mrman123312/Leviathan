@@ -34,6 +34,7 @@
 #include "leviathan_atlas.h"
 #include "leviathan_control.h"
 #include "leviathan_dsl.h"
+#include "leviathan_fundamentals.h"
 #include "leviathan_policy.h"
 #include "leviathan_trace.h"
 #include "misc.h"
@@ -201,6 +202,52 @@ Engine::Engine(std::optional<std::filesystem::path> path) :
     }));
     options.add("Leviathan Specialist Veto", Option(768, 0, 4096, [](const Option& o) {
         Leviathan::Control::set_specialist_veto(int(o));
+        return std::nullopt;
+    }));
+
+    // Fundamentals v2: deterministic, pre-training search regime controls.
+    options.add("Leviathan Fundamentals", Option(false, [](const Option& o) {
+        Leviathan::Fundamentals::set_enabled(int(o) != 0);
+        return std::nullopt;
+    }));
+    options.add("Leviathan Fundamentals Authority", Option(0, 0, 2, [](const Option& o) {
+        Leviathan::Fundamentals::set_authority(int(o));
+        return std::nullopt;
+    }));
+    options.add("Leviathan Forcing Buyback", Option(384, 0, 2048, [](const Option& o) {
+        Leviathan::Fundamentals::set_forcing_buyback(int(o));
+        return std::nullopt;
+    }));
+    options.add("Leviathan Recapture Buyback", Option(256, 0, 2048, [](const Option& o) {
+        Leviathan::Fundamentals::set_recapture_buyback(int(o));
+        return std::nullopt;
+    }));
+    options.add("Leviathan Passer Buyback", Option(320, 0, 2048, [](const Option& o) {
+        Leviathan::Fundamentals::set_passer_buyback(int(o));
+        return std::nullopt;
+    }));
+    options.add("Leviathan Endgame Buyback", Option(128, 0, 1024, [](const Option& o) {
+        Leviathan::Fundamentals::set_endgame_buyback(int(o));
+        return std::nullopt;
+    }));
+    options.add("Leviathan Quiet Overdrive", Option(160, 0, 1024, [](const Option& o) {
+        Leviathan::Fundamentals::set_quiet_overdrive(int(o));
+        return std::nullopt;
+    }));
+    options.add("Leviathan Rule50 Pawn Bonus", Option(3072, 0, 16384, [](const Option& o) {
+        Leviathan::Fundamentals::set_rule50_pawn_bonus(int(o));
+        return std::nullopt;
+    }));
+    options.add("Leviathan Zugzwang Guard", Option(true, [](const Option& o) {
+        Leviathan::Fundamentals::set_zugzwang_guard(int(o) != 0);
+        return std::nullopt;
+    }));
+    options.add("Leviathan Sacrifice Rescue", Option(true, [](const Option& o) {
+        Leviathan::Fundamentals::set_sacrifice_rescue(int(o) != 0);
+        return std::nullopt;
+    }));
+    options.add("Leviathan Rule50 Pressure", Option(true, [](const Option& o) {
+        Leviathan::Fundamentals::set_rule50_pressure(int(o) != 0);
         return std::nullopt;
     }));
 

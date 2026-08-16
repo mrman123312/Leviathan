@@ -38,6 +38,7 @@
 #include "history.h"
 #include "leviathan_control.h"
 #include "leviathan_dsl.h"
+#include "leviathan_fundamentals.h"
 #include "leviathan_trace.h"
 #include "misc.h"
 #include "movegen.h"
@@ -1027,7 +1028,8 @@ Value Search::Worker::search(
 
     // Step 9. Null move search with verification search
     if (cutNode && ss->staticEval >= beta - 13 * depth - 47 * improving + 365 && !excludedMove
-        && pos.non_pawn_material(us) && ss->ply >= nmpMinPly && beta >= -2000)
+        && pos.non_pawn_material(us) && ss->ply >= nmpMinPly && beta >= -2000
+        && Leviathan::Fundamentals::allow_null_move(pos))
     {
         assert((ss - 1)->currentMove != Move::null());
 
@@ -1212,18 +1214,23 @@ moves_loop:  // When in check, search starts here
                 // Avoid pruning sacrifices of our last piece for stalemate
                 int margin = 177 * depth + captHist * 34 / 1024;
                 if ((alpha >= VALUE_DRAW || pos.non_pawn_material(us) != PieceValue[movedPiece])
-                    && !pos.see_ge(move, -margin))
+                    && !pos.see_ge(move, -margin)
+                    && !Leviathan::Fundamentals::rescue_bad_see(
+                      pos, move, prevSq, capture, givesCheck))
                     continue;
             }
             else if (!ss->followPV || !PvNode)
             {
+                const bool leviathanScopeProtected =
+                  Leviathan::Fundamentals::protected_scope_move(
+                    pos, move, prevSq, capture, givesCheck);
                 int dIndex  = std::min(int(depth), int(lmrDivisor.size())) - 1;
                 int history = (*contHist[0])[movedPiece][move.to_sq()]
                             + (*contHist[1])[movedPiece][move.to_sq()]
                             + sharedHistory.pawn_entry(pos)[movedPiece][move.to_sq()];
 
                 // Continuation history based pruning
-                if (history < -4136 * depth)
+                if (!leviathanScopeProtected && history < -4136 * depth)
                     continue;
 
                 history += 69 * mainHistory[us][move.raw()] / 32;
@@ -1237,7 +1244,8 @@ moves_loop:  // When in check, search starts here
                 // Futility pruning: parent node
                 // (*Scaler): Generally, more frequent futility pruning
                 // scales well
-                if (!ss->inCheck && lmrDepth < 12 && futilityValue <= alpha)
+                if (!leviathanScopeProtected && !ss->inCheck && lmrDepth < 12
+                    && futilityValue <= alpha)
                 {
                     if (bestValue <= futilityValue && !is_decisive(bestValue)
                         && !is_win(futilityValue))
@@ -1248,7 +1256,8 @@ moves_loop:  // When in check, search starts here
                 lmrDepth = std::max(lmrDepth, 0);
 
                 // Prune moves with negative SEE
-                if (!pos.see_ge(move, -23 * lmrDepth * lmrDepth))
+                if (!leviathanScopeProtected
+                    && !pos.see_ge(move, -23 * lmrDepth * lmrDepth))
                     continue;
             }
         }
@@ -1380,6 +1389,8 @@ moves_loop:  // When in check, search starts here
         r += Leviathan::DSL::lmr_adjustment(
           depth, moveCount, ss->statScore, correctionValue, PvNode, cutNode, allNode, capture,
           givesCheck, ttData.depth, ss->staticEval, alpha);
+        r += Leviathan::Fundamentals::lmr_adjustment(
+          pos, move, prevSq, depth, moveCount, PvNode, capture, givesCheck);
 
         Value leviathanReducedValue = VALUE_NONE;
         Depth leviathanReducedDepth = DEPTH_NONE;
