@@ -1,0 +1,243 @@
+name: Leviathan V8.5 causal strength decomposition v2
+
+on:
+  push:
+    branches:
+      - leviathan/strength-v8-5a-witness-hygiene
+    paths:
+      - '.github/workflows/v8-5-causal-strength-v2.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  causal-strength:
+    runs-on: ubuntu-22.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - id: hygiene-vs-control
+            candidate_sha: 95b779abefedf158a856d5db7eff9d2a61df2982
+            reference_sha: 9ffe3f2c43972fc55163300449e97a981a01e358
+          - id: receipt-vs-control
+            candidate_sha: 6756f490cb48a48eb35d9485512ffc58147ccfab
+            reference_sha: 9ffe3f2c43972fc55163300449e97a981a01e358
+          - id: combined-vs-hygiene
+            candidate_sha: 5541261dccec82d7c76dcb8298d8ce7bd8f69b9a
+            reference_sha: 95b779abefedf158a856d5db7eff9d2a61df2982
+
+    steps:
+      - name: Checkout exact candidate
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: ${{ matrix.candidate_sha }}
+          path: candidate
+
+      - name: Checkout exact reference
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: ${{ matrix.reference_sha }}
+          path: reference
+
+      - name: Verify exact identities
+        run: |
+          set -euo pipefail
+          test "$(git -C candidate rev-parse HEAD)" = '${{ matrix.candidate_sha }}'
+          test "$(git -C reference rev-parse HEAD)" = '${{ matrix.reference_sha }}'
+
+      - name: Install deterministic match dependency
+        run: python3 -m pip install --disable-pip-version-check 'python-chess==1.999'
+
+      - name: Build both engines identically
+        run: |
+          set -euo pipefail
+          for D in candidate reference; do
+            cd "$GITHUB_WORKSPACE/$D/src"
+            make net
+            make clean
+            make -j2 ARCH=x86-64-avx2 build 2>&1 | tee "$GITHUB_WORKSPACE/$D-build.log"
+            mv stockfish "stockfish-$D"
+          done
+
+      - name: Verify UCI parity
+        run: |
+          set -euo pipefail
+          printf 'uci\nquit\n' | ./candidate/src/stockfish-candidate > candidate-uci.txt
+          printf 'uci\nquit\n' | ./reference/src/stockfish-reference > reference-uci.txt
+          for F in candidate-uci.txt reference-uci.txt; do
+            grep -q 'option name Leviathan Fundamentals ' "$F"
+            grep -q 'option name Leviathan Fundamentals Authority ' "$F"
+            grep -q 'option name Leviathan Quiet Overdrive ' "$F"
+          done
+
+      - name: Generate one shared deterministic dev bank
+        run: |
+          set -euo pipefail
+          mkdir -p match
+          cat > match/options.json <<'EOF'
+          {
+            "Threads": 1,
+            "Hash": 64,
+            "Leviathan Fundamentals": true,
+            "Leviathan Fundamentals Authority": 1,
+            "Leviathan Quiet Overdrive": 0,
+            "Leviathan Policy": false,
+            "Leviathan MetaSearch": false,
+            "Leviathan Risk": false,
+            "Leviathan Specialist": false,
+            "Leviathan Atlas": false,
+            "Leviathan Search DSL": false
+          }
+          EOF
+          python3 - <<'PY'
+          import chess, random, hashlib
+          from pathlib import Path
+
+          seeds = [
+              ['e2e4','e7e5','g1f3','b8c6'],
+              ['e2e4','c7c5','g1f3','d7d6'],
+              ['e2e4','e7e6','d2d4','d7d5'],
+              ['e2e4','c7c6','d2d4','d7d5'],
+              ['d2d4','d7d5','c2c4','e7e6'],
+              ['d2d4','g8f6','c2c4','g7g6'],
+              ['d2d4','g8f6','c2c4','e7e6'],
+              ['c2c4','e7e5','b1c3','g8f6'],
+              ['g1f3','d7d5','g2g3','g8f6'],
+              ['e2e4','g8f6','e4e5','f6d5'],
+              ['c2c4','c7c5','g1f3','g8f6'],
+              ['d2d4','f7f5','g2g3','g8f6'],
+          ]
+          rng = random.Random(89108083)
+          out = []
+          for i in range(20):
+              board = chess.Board()
+              for uci in seeds[i % len(seeds)]:
+                  move = chess.Move.from_uci(uci)
+                  if move in board.legal_moves:
+                      board.push(move)
+              for _ in range(4 + (i % 7)):
+                  moves = sorted(board.legal_moves, key=lambda m: m.uci())
+                  if not moves or board.is_game_over():
+                      break
+                  board.push(moves[rng.randrange(len(moves))])
+              if board.is_game_over():
+                  raise SystemExit(f'terminal opening {i}')
+              out.append(board.fen())
+
+          if len(out) != 20:
+              raise SystemExit(f'expected 20 openings, got {len(out)}')
+          text = '\n'.join(out) + '\n'
+          digest = hashlib.sha256(text.encode()).hexdigest()
+          expected = '87f3e3780aac2deba3730528fb35032228982e6b5268798c5d72144363aaeb2a'
+          if digest != expected:
+              raise SystemExit(f'opening bank hash drift: {digest} != {expected}')
+          Path('match/openings.fen').write_text(text)
+          Path('match/openings.sha256').write_text(digest + '\n')
+          print('opening_sha256', digest)
+          PY
+          test "$(wc -l < match/openings.fen)" -eq 20
+          test "$(cat match/openings.sha256)" = '87f3e3780aac2deba3730528fb35032228982e6b5268798c5d72144363aaeb2a'
+
+      - name: Equal-node gate - 40 paired games
+        id: equalnode
+        run: |
+          set -euo pipefail
+          python3 candidate/tools/run_match.py \
+            --engine-a "$GITHUB_WORKSPACE/candidate/src/stockfish-candidate" \
+            --engine-b "$GITHUB_WORKSPACE/reference/src/stockfish-reference" \
+            --options-a match/options.json \
+            --options-b match/options.json \
+            --openings match/openings.fen \
+            --games 40 \
+            --nodes-per-move 20000 \
+            --max-plies 220 \
+            --out match/equal-node.json | tee match/equal-node.log
+          python3 - <<'PY' >> "$GITHUB_OUTPUT"
+          import json
+          s = json.load(open('match/equal-node.json'))['summary']
+          print('score=' + str(s['score_a']))
+          print('survives=' + ('true' if s['score_a'] >= 0.5 else 'false'))
+          PY
+
+      - name: Fixed-time economics - 40 paired games
+        if: steps.equalnode.outputs.survives == 'true'
+        run: |
+          set -euo pipefail
+          python3 candidate/tools/run_match.py \
+            --engine-a "$GITHUB_WORKSPACE/candidate/src/stockfish-candidate" \
+            --engine-b "$GITHUB_WORKSPACE/reference/src/stockfish-reference" \
+            --options-a match/options.json \
+            --options-b match/options.json \
+            --openings match/openings.fen \
+            --games 40 \
+            --movetime-ms 50 \
+            --max-plies 220 \
+            --out match/fixed-time.json | tee match/fixed-time.log
+
+      - name: Produce auditable causal report
+        if: always() && steps.equalnode.outcome == 'success'
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json, math
+          from pathlib import Path
+
+          def summarize(path):
+              d = json.loads(Path(path).read_text())
+              s = d['summary']
+              vals = [g['score_a'] for g in d['games']]
+              n = len(vals)
+              mean = sum(vals) / n
+              var = sum((x - mean) ** 2 for x in vals) / (n - 1) if n > 1 else 0.0
+              se = (var / n) ** 0.5
+              p = s['score_a']
+              return {
+                  'games': n,
+                  'wins': s['wins_a'],
+                  'draws': s['draws'],
+                  'losses': s['losses_a'],
+                  'score': p,
+                  'naive_elo': 400 * math.log10(p / (1 - p)) if 0 < p < 1 else None,
+                  'normal_95_score_ci': [max(0.0, mean - 1.96 * se), min(1.0, mean + 1.96 * se)],
+                  'resource': s['resource'],
+              }
+
+          en = summarize('match/equal-node.json')
+          ft = summarize('match/fixed-time.json') if Path('match/fixed-time.json').exists() else None
+          if en['score'] < 0.5:
+              decision = 'FAIL_EQUAL_NODE'
+          elif ft is None:
+              decision = 'RETEST'
+          elif ft['score'] < 0.5:
+              decision = 'FAIL_FIXED_TIME'
+          else:
+              decision = 'SURVIVES_DEV_SCREEN'
+
+          report = {
+              'comparison': '${{ matrix.id }}',
+              'candidate_source': '${{ matrix.candidate_sha }}',
+              'reference_source': '${{ matrix.reference_sha }}',
+              'opening_sha256': Path('match/openings.sha256').read_text().strip(),
+              'equal_node': en,
+              'fixed_time': ft,
+              'decision': decision,
+              'statistical_status': 'causal dev screen only; not statistically established',
+          }
+          Path('match/causal-report.json').write_text(json.dumps(report, indent=2) + '\n')
+          print(json.dumps(report, indent=2))
+          PY
+
+      - name: Archive causal evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: v8-5-causal-${{ matrix.id }}
+          path: |
+            match/
+            candidate-build.log
+            reference-build.log
+            candidate-uci.txt
+            reference-uci.txt
+          if-no-files-found: error
