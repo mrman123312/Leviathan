@@ -1,7 +1,7 @@
 {
   "schema": "LV_EXPERIMENT_MANIFEST_V1",
   "id": "W029",
-  "dispatch_revision": 2,
+  "dispatch_revision": 3,
   "family": "parent-relative-speed-reconciliation",
   "question": "At one fixed requested node budget on fresh positions, how fast are active Leviathan and the lossless P01 stack relative to the frozen official Stockfish parent?",
   "parent_sha": "5062aee519a1ba262d472d8ab139851ced56573e",
