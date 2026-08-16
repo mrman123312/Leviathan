@@ -1,0 +1,27 @@
+{
+  "schema": "LV_EXPERIMENT_MANIFEST_V1",
+  "experiment_id": "W020",
+  "name": "Per-search optional-organ readiness snapshot",
+  "reference_commit": "9fe94b6c81ccf3b1defe3200d6c08098a8dba1e1",
+  "candidate_ref": "leviathan/lab-v4-ready-snapshot event SHA",
+  "stockfish_assumption": "Runtime subsystem readiness may need to be queried wherever the subsystem could be used.",
+  "reason_for_assumption": "Subsystems are optional and configured dynamically through UCI state.",
+  "removed_assumption": "UCI options and model/file configuration are immutable for the duration of one go, so each worker can snapshot a readiness bitmask once.",
+  "profile_headroom": {
+    "reference_dsl_adjustment_calls": 2872729,
+    "reference_trace_feature_calls": 1661869,
+    "reference_trace_record_calls": 1695255,
+    "cumulative_per_node_risk_ready_calls": 1076149,
+    "cumulative_per_node_dsl_state_calls": 1076149,
+    "cumulative_per_node_trace_state_calls": 1073655
+  },
+  "local_exactness": "Normalized scores, nodes, PVs, and best moves matched at 3210480, 1286415, and 2451202 nodes.",
+  "local_timing_screen": {
+    "candidate_median": 1.0298974330368202,
+    "candidate_positive_rounds": "6/7",
+    "aa_median": 0.9924371127219234,
+    "classification": "Invalid for magnitude because A/A failed; sufficient only to justify replication."
+  },
+  "remote_test": "21 drift-sandwiched rounds versus the exact cumulative source commit, with an identical-binary A/A channel and three transcript gates.",
+  "promotion_rule": "No promotion from this run alone. Require A/A pass, positive bootstrap interval, a second independent run, and a game-position timing panel."
+}

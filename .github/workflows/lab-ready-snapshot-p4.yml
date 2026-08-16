@@ -1,0 +1,97 @@
+name: Leviathan per-search readiness snapshot P4
+
+on:
+  push:
+    branches: [leviathan/lab-v4-ready-snapshot]
+    paths:
+      - '.github/workflows/lab-ready-snapshot-p4.yml'
+      - 'src/leviathan_ready.h'
+      - 'src/search.h'
+      - 'src/search.cpp'
+      - 'src/movepick.h'
+      - 'src/movepick.cpp'
+      - 'tools/lossless_pair_benchmark.py'
+  workflow_dispatch:
+
+permissions: {contents: read}
+
+concurrency:
+  group: lab-ready-snapshot-p4-${{ github.ref }}
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  strict-pair:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ github.sha }}
+          path: candidate
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: 9fe94b6c81ccf3b1defe3200d6c08098a8dba1e1
+          path: reference
+      - name: Record source and environment provenance
+        run: |
+          set -euo pipefail
+          {
+            echo "runner_image=${ImageOS:-unknown}"
+            echo "runner_image_version=${ImageVersion:-unknown}"
+            uname -a
+            lscpu
+            g++ --version
+            git -C candidate rev-parse HEAD
+            git -C candidate rev-parse 'HEAD^{tree}'
+            git -C reference rev-parse HEAD
+            git -C reference rev-parse 'HEAD^{tree}'
+            sha256sum candidate/tools/lossless_pair_benchmark.py
+            sha256sum candidate/experiments/options/active_fundamentals.json
+            sha256sum candidate/experiments/manifests/ready_snapshot_p4.json
+          } | tee provenance.txt
+          set +e
+          diff -ru --exclude='*.nnue' reference/src candidate/src > candidate-source.patch
+          diff_status=$?
+          set -e
+          if (( diff_status > 1 )); then exit "$diff_status"; fi
+          test -s candidate-source.patch
+      - name: Build exact candidate and reference
+        run: |
+          set -euo pipefail
+          make -C reference/src net
+          cp reference/src/nn-ab28990d4ea3.nnue candidate/src/
+          make -C reference/src -j2 ARCH=x86-64-avx2 build
+          mv reference/src/stockfish reference/src/control_a
+          cp reference/src/control_a reference/src/control_b
+          make -C candidate/src -j2 ARCH=x86-64-avx2 build
+          mv candidate/src/stockfish candidate/src/candidate
+          sha256sum reference/src/control_a reference/src/control_b candidate/src/candidate \
+            | tee binary-sha256.txt
+          sha256sum reference/src/nn-ab28990d4ea3.nnue candidate/src/nn-ab28990d4ea3.nnue \
+            | tee network-sha256.txt
+      - name: Strict transcript gates and calibrated 21-round pair
+        run: |
+          set -euo pipefail
+          python3 candidate/tools/lossless_pair_benchmark.py \
+            --control-a reference/src/control_a \
+            --control-b reference/src/control_b \
+            --candidate candidate/src/candidate \
+            --options candidate/experiments/options/active_fundamentals.json \
+            --rounds 21 --output ready-snapshot-p4.json \
+            2>&1 | tee ready-snapshot-p4.log
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: ready-snapshot-p4
+          retention-days: 90
+          path: |
+            provenance.txt
+            candidate-source.patch
+            binary-sha256.txt
+            network-sha256.txt
+            ready-snapshot-p4.json
+            ready-snapshot-p4.log
