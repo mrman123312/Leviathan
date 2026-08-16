@@ -849,6 +849,7 @@ Value Search::Worker::search(
     assert(PvNode || (alpha == beta - 1));
     assert(0 < depth && depth < MAX_PLY);
     assert(!(PvNode && cutNode));
+    const Depth leviathanEntryDepth = depth;
 
     PVMoves   pv;
     StateInfo st;
@@ -858,8 +859,8 @@ Value Search::Worker::search(
     Depth extension, newDepth;
     Value bestValue, value, eval, maxValue, probCutBeta, probCutNearValue;
     bool  givesCheck, improving, priorCapture, opponentWorsening;
-    bool  capture, ttCapture, leviathanNullFragile;
-    int   priorReduction, leviathanProofDebt;
+    bool  capture, ttCapture, leviathanNullFragile, leviathanWitnessWasLmr;
+    int   priorReduction, leviathanProofDebt, leviathanWitnessCertifiedDepth;
     Piece movedPiece;
 
     SearchedList capturesSearched;
@@ -914,6 +915,8 @@ Value Search::Worker::search(
     leviathanNullFragile = false;
     leviathanProofDebt   = 0;
     leviathanWitness     = Move::none();
+    leviathanWitnessWasLmr = false;
+    leviathanWitnessCertifiedDepth = 0;
     priorReduction        = (ss - 1)->reduction;
     (ss - 1)->reduction = 0;
     ss->statScore       = 0;
@@ -929,6 +932,8 @@ Value Search::Worker::search(
     leviathanProofDebt = std::max(leviathanProofDebt,
                                   int(leviathan_proof_memory_load(posKey)));
     leviathanWitness = leviathan_proof_memory_witness(posKey);
+    leviathanWitnessWasLmr = leviathan_proof_memory_witness_was_lmr(posKey);
+    leviathanWitnessCertifiedDepth = int(leviathan_proof_memory_witness_depth(posKey));
     auto [ttHit, ttData, ttWriter] = tt.probe(posKey);
     // Need further processing of the saved data
     ss->ttHit    = ttHit;
@@ -1265,7 +1270,12 @@ Value Search::Worker::search(
     if (probCutNearMiss)
     {
         leviathanProofDebt = std::min(5, leviathanProofDebt + 1);
-        leviathanWitness   = probCutNearMiss;
+        if (leviathanWitness != probCutNearMiss)
+        {
+            leviathanWitnessWasLmr = false;
+            leviathanWitnessCertifiedDepth = 0;
+        }
+        leviathanWitness = probCutNearMiss;
     }
 
 moves_loop:  // When in check, search starts here
@@ -1579,6 +1589,20 @@ moves_loop:  // When in check, search starts here
         r += Leviathan::Fundamentals::lmr_adjustment(
           pos, move, prevSq, depth, moveCount, PvNode, capture, givesCheck);
 
+        // V8.5B receipt-only ablation. Preserve V7.4 memory decay semantics;
+        // the only added authority is a depth-monotonic re-proof for an exact move
+        // that previously demonstrated a serious LMR error.
+        const bool leviathanWitnessNeedsFullProof =
+          move == persistentWitness && leviathanWitnessWasLmr && (PvNode || ss->ttPv)
+          && leviathanEntryDepth >= 7
+          && (leviathanWitnessCertifiedDepth == 0
+              || leviathanEntryDepth >= leviathanWitnessCertifiedDepth + 2);
+        if (leviathanWitnessNeedsFullProof)
+        {
+            newDepth = std::max(newDepth, leviathanEntryDepth - 1);
+            r = std::min(r, 0);
+        }
+
         // Leviathan strength v6.4 - Proof Regime. Once several independent
         // warnings agree, incremental buybacks are not enough: accumulated LMR
         // terms can still bury the very branch we declared uncertain. Cap the
@@ -1648,7 +1672,12 @@ moves_loop:  // When in check, search starts here
                 // reduction model. Do not merely restore baseline depth: give the
                 // subsequent PV proof one extra ply to resolve the contradiction.
                 if (leviathanReducedValue <= alpha && value > alpha)
-                    leviathanWitness = move;
+                {
+                    if (leviathanWitness != move)
+                        leviathanWitnessCertifiedDepth = 0;
+                    leviathanWitness       = move;
+                    leviathanWitnessWasLmr = true;
+                }
 
                 if (PvNode && leviathanReducedValue <= alpha && value > alpha
                     && depth >= 7 && newDepth < depth)
@@ -1702,7 +1731,12 @@ moves_loop:  // When in check, search starts here
             const int  evidenceBoost = boundaryFlip ? 2 : lmrError >= 160 ? 2 : int(lmrError >= 64);
             leviathanProofDebt = std::min(5, leviathanProofDebt + evidenceBoost);
             if (boundaryFlip || lmrError >= 160)
-                leviathanWitness = move;
+            {
+                if (leviathanWitness != move)
+                    leviathanWitnessCertifiedDepth = 0;
+                leviathanWitness       = move;
+                leviathanWitnessWasLmr = true;
+            }
         }
 
         if (leviathanTraceReady && leviathanReducedValue != VALUE_NONE)
@@ -1733,6 +1767,11 @@ moves_loop:  // When in check, search starts here
         // best move, principal variation nor transposition table.
         if (threads.stop.load(std::memory_order_relaxed))
             return VALUE_ZERO;
+
+        if (leviathanWitnessNeedsFullProof && leviathanWitness == move
+            && leviathanWitnessWasLmr)
+            leviathanWitnessCertifiedDepth =
+              std::max(leviathanWitnessCertifiedDepth, int(leviathanEntryDepth));
 
         if (rootNode)
         {
@@ -1843,6 +1882,11 @@ moves_loop:  // When in check, search starts here
                     && !is_decisive(value) && !is_decisive(leviathanDisplacedValue)
                     && int(value - leviathanDisplacedValue) <= 72)
                 {
+                    if (leviathanWitness != leviathanDisplacedMove)
+                    {
+                        leviathanWitnessWasLmr = false;
+                        leviathanWitnessCertifiedDepth = 0;
+                    }
                     leviathanWitness = leviathanDisplacedMove;
                     leviathanProofDebt = std::min(5, leviathanProofDebt + 1);
                 }
@@ -1958,7 +2002,9 @@ moves_loop:  // When in check, search starts here
     // Persist only substantial proof debt. This is deliberately separate
     // from TT score authority: future visits inherit skepticism, not a verdict.
     if (!excludedMove && (leviathanProofDebt >= 3 || leviathanWitness))
-        leviathan_proof_memory_store(posKey, leviathanProofDebt, leviathanWitness);
+        leviathan_proof_memory_store(posKey, leviathanProofDebt, leviathanWitness,
+                                     leviathanWitnessWasLmr,
+                                     leviathanWitnessCertifiedDepth);
 
     // Write gathered information in transposition table. Note that the
     // static evaluation is saved as it was before correction history.
