@@ -1588,7 +1588,13 @@ moves_loop:  // When in check, search starts here
 
                 // Reduce other moves if we have found at least one score improvement
                 if (depth > 3 && depth < 12 && !is_decisive(value))
-                    depth -= 3;
+                {
+                    const int improvement = std::max(1, int(value + inc - alpha));
+                    depth -= (PvNode || ss->ttPv) && depth >= 6 && moveCount <= 8
+                                 && improvement <= 16
+                               ? 1
+                               : 3;
+                }
 
                 assert(depth > 0);
                 alpha = value;  // Update alpha! Always alpha < beta
