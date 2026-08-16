@@ -30,73 +30,63 @@ jobs:
           old_inc = '#include "position.h"\n#include "types.h"'
           new_inc = '#include "bitboard.h"\n#include "position.h"\n#include "types.h"'
 
-          anchor = '''inline bool quiet_tactical_tension(const Position& pos,
-                                   Move move,
-                                   bool capture,
-                                   bool givesCheck) {
-    if (capture || givesCheck)
-        return false;
+          anchor = ("inline bool quiet_tactical_tension(const Position& pos,\n"
+                    "                                   Move move,\n"
+                    "                                   bool capture,\n"
+                    "                                   bool givesCheck) {\n"
+                    "    if (capture || givesCheck)\n"
+                    "        return false;\n\n"
+                    "    Piece pc = moving_piece(pos, move);\n"
+                    "    if (pc == NO_PIECE || type_of(pc) == PAWN || type_of(pc) == KING)\n"
+                    "        return false;\n\n"
+                    "    Color us = color_of(pc);\n"
+                    "    return pos.attackers_to_exist(move.to_sq(), pos.pieces(), ~us);\n"
+                    "}\n")
 
-    Piece pc = moving_piece(pos, move);
-    if (pc == NO_PIECE || type_of(pc) == PAWN || type_of(pc) == KING)
-        return false;
+          addition = ("\n// A move can be syntactically quiet while being concretely forcing. After the\n"
+                      "// move has been made, detect whether the moved piece directly attacks an enemy\n"
+                      "// queen or rook. This is a tactical fact, not a positional guess.\n"
+                      "inline bool quiet_major_threat(const Position& pos,\n"
+                      "                               Move move,\n"
+                      "                               bool capture,\n"
+                      "                               bool givesCheck) {\n"
+                      "    if (capture || givesCheck || !move.is_ok())\n"
+                      "        return false;\n\n"
+                      "    Piece pc = moving_piece(pos, move);\n"
+                      "    if (pc == NO_PIECE || type_of(pc) == KING)\n"
+                      "        return false;\n\n"
+                      "    Color    us       = color_of(pc);\n"
+                      "    Bitboard targets  = pos.pieces(~us, QUEEN, ROOK);\n"
+                      "    Bitboard movedBit = square_bb(move.to_sq());\n\n"
+                      "    while (targets)\n"
+                      "    {\n"
+                      "        Square target = pop_lsb(targets);\n"
+                      "        if (pos.attackers_to(target) & movedBit)\n"
+                      "            return true;\n"
+                      "    }\n\n"
+                      "    return false;\n"
+                      "}\n")
 
-    Color us = color_of(pc);
-    return pos.attackers_to_exist(move.to_sq(), pos.pieces(), ~us);
-}
-'''
-          replacement = anchor + '''
-// A move can be syntactically quiet while being concretely forcing. After the
-// move has been made, detect whether the moved piece directly attacks an enemy
-// queen or rook. This is a tactical fact, not a positional guess, and it gives
-// the search a reason to distrust ordinary quiet-history reductions.
-inline bool quiet_major_threat(const Position& pos,
-                               Move move,
-                               bool capture,
-                               bool givesCheck) {
-    if (capture || givesCheck || !move.is_ok())
-        return false;
+          old_lmr = ("    // Quiet sacrifices/interference moves are precisely where a low-history LMR\n"
+                     "    // can hide compensation beyond the reduced horizon.\n"
+                     "    if (depth >= 6 && moveCount <= 10 && quiet_tactical_tension(pos, move, capture, givesCheck))\n"
+                     "        delta -= 256;\n\n"
+                     "    // Sparse king moves are tempo/proof moves, not ordinary quiets.\n")
+          new_lmr = ("    // Quiet sacrifices/interference moves are precisely where a low-history LMR\n"
+                     "    // can hide compensation beyond the reduced horizon.\n"
+                     "    if (depth >= 6 && moveCount <= 10 && quiet_tactical_tension(pos, move, capture, givesCheck))\n"
+                     "        delta -= 256;\n\n"
+                     "    // Quiet attacks on major pieces are forcing even though they are neither\n"
+                     "    // captures nor checks. Buy back depth before generic quiet history buries them.\n"
+                     "    if (depth >= 5 && moveCount <= 12 && quiet_major_threat(pos, move, capture, givesCheck))\n"
+                     "        delta -= 320;\n\n"
+                     "    // Sparse king moves are tempo/proof moves, not ordinary quiets.\n")
 
-    Piece pc = moving_piece(pos, move);
-    if (pc == NO_PIECE || type_of(pc) == KING)
-        return false;
-
-    Color    us       = color_of(pc);
-    Bitboard targets  = pos.pieces(~us, QUEEN, ROOK);
-    Bitboard movedBit = square_bb(move.to_sq());
-
-    while (targets)
-    {
-        Square target = pop_lsb(targets);
-        if (pos.attackers_to(target) & movedBit)
-            return true;
-    }
-
-    return false;
-}
-'''
-
-          old_lmr = '''    // Quiet sacrifices/interference moves are precisely where a low-history LMR
-    // can hide compensation beyond the reduced horizon.
-    if (depth >= 6 && moveCount <= 10 && quiet_tactical_tension(pos, move, capture, givesCheck))
-        delta -= 256;
-
-    // Sparse king moves are tempo/proof moves, not ordinary quiets.
-'''
-          new_lmr = '''    // Quiet sacrifices/interference moves are precisely where a low-history LMR
-    // can hide compensation beyond the reduced horizon.
-    if (depth >= 6 && moveCount <= 10 && quiet_tactical_tension(pos, move, capture, givesCheck))
-        delta -= 256;
-
-    // Quiet attacks on major pieces are forcing even though they are neither
-    // captures nor checks. Buy back depth before generic quiet history buries them.
-    if (depth >= 5 && moveCount <= 12 && quiet_major_threat(pos, move, capture, givesCheck))
-        delta -= 320;
-
-    // Sparse king moves are tempo/proof moves, not ordinary quiets.
-'''
-
-          for label, old, new in [('include', old_inc, new_inc), ('function', anchor, replacement), ('lmr', old_lmr, new_lmr)]:
+          for label, old, new in [
+              ('include', old_inc, new_inc),
+              ('function', anchor, anchor + addition),
+              ('lmr', old_lmr, new_lmr),
+          ]:
               if h.count(old) != 1:
                   raise SystemExit(f'header {label} anchor count {h.count(old)}')
               h = h.replace(old, new, 1)
@@ -104,14 +94,14 @@ inline bool quiet_major_threat(const Position& pos,
 
           sp = Path('src/search.cpp')
           s = sp.read_text()
-          old_ms = '''                     && (PvNode || ss->ttPv
-                         || Leviathan::Fundamentals::quiet_tactical_tension(
-                           pos, move, capture, givesCheck)))'''
-          new_ms = '''                     && (PvNode || ss->ttPv
-                         || Leviathan::Fundamentals::quiet_tactical_tension(
-                           pos, move, capture, givesCheck)
-                         || Leviathan::Fundamentals::quiet_major_threat(
-                           pos, move, capture, givesCheck)))'''
+          old_ms = ("                     && (PvNode || ss->ttPv\n"
+                    "                         || Leviathan::Fundamentals::quiet_tactical_tension(\n"
+                    "                           pos, move, capture, givesCheck)))")
+          new_ms = ("                     && (PvNode || ss->ttPv\n"
+                    "                         || Leviathan::Fundamentals::quiet_tactical_tension(\n"
+                    "                           pos, move, capture, givesCheck)\n"
+                    "                         || Leviathan::Fundamentals::quiet_major_threat(\n"
+                    "                           pos, move, capture, givesCheck)))")
           if s.count(old_ms) != 1:
               raise SystemExit(f'search anchor count {s.count(old_ms)}')
           sp.write_text(s.replace(old_ms, new_ms, 1))
