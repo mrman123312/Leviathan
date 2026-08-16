@@ -1,6 +1,7 @@
 #pragma once
 #include "chess.h"
 #include "evaluator.h"
+#include <array>
 #include <chrono>
 #include <cstdint>
 #include <unordered_map>
@@ -45,8 +46,11 @@ public:
 private:
     static constexpr int INF = 32000;
     static constexpr int MATE = 30000;
+    static constexpr int MAX_PLY = 128;
     const Evaluator* evaluator_;
     std::unordered_map<uint64_t, TTEntry> tt_;
+    std::array<std::array<int,64>,64> quiet_history_{};
+    std::array<std::array<Move,2>,MAX_PLY> killers_{};
     uint64_t nodes_ = 0;
     bool stopped_ = false;
     std::chrono::steady_clock::time_point deadline_{};
@@ -58,7 +62,11 @@ private:
     bool repeated(uint64_t key) const;
     uint64_t context_key(const Position& p) const;
     bool time_up();
-    std::vector<Move> ordered_moves(const Position& p, Move tt_move, bool captures_only=false) const;
+    static int score_to_tt(int score, int ply);
+    static int score_from_tt(int score, int ply);
+    void reward_quiet(Move m, int depth, int ply);
+    std::vector<Move> ordered_moves(const Position& p, Move tt_move, int ply,
+                                    bool captures_only=false) const;
     std::vector<Move> extract_pv(Position p, int max_len, std::vector<uint64_t> history) const;
 };
 
