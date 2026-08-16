@@ -1,0 +1,62 @@
+name: Apply strength v5 rival preservation
+
+on:
+  push:
+    branches:
+      - leviathan/strength-v5-margin-skeptic
+    paths:
+      - '.github/workflows/apply-strength-v5-rival-preservation.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout strength branch
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: leviathan/strength-v5-margin-skeptic
+
+      - name: Scale sibling reduction by confidence in first improvement
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('src/search.cpp')
+          s = p.read_text()
+          old = "                // Reduce other moves if we have found at least one score improvement\n                if (depth > 3 && depth < 12 && !is_decisive(value))\n                    depth -= 3;"
+          new = (
+              "                // Leviathan strength v5 - Rival Preservation.\n"
+              "                // A tiny alpha improvement is weak evidence that the remaining\n"
+              "                // siblings deserve a blanket three-ply cut. Scale the reduction\n"
+              "                // by how convincingly the new move cleared the old alpha.\n"
+              "                if (depth > 3 && depth < 12 && !is_decisive(value))\n"
+              "                {\n"
+              "                    const int improvementMargin = int(value - alpha);\n"
+              "                    int siblingPenalty = improvementMargin >= 96 ? 3\n"
+              "                                       : improvementMargin >= 32 ? 2\n"
+              "                                                                 : 1;\n"
+              "\n"
+              "                    // PV/TT-PV nodes are exactly where rival ordering can change\n"
+              "                    // the root decision, so demand one extra level of evidence.\n"
+              "                    if (PvNode || ss->ttPv)\n"
+              "                        siblingPenalty = std::max(0, siblingPenalty - 1);\n"
+              "\n"
+              "                    depth -= siblingPenalty;\n"
+              "                }"
+          )
+          if s.count(old) != 1:
+              raise SystemExit(f'anchor count {s.count(old)}')
+          p.write_text(s.replace(old, new, 1))
+          PY
+          git diff --check
+          git diff -- src/search.cpp
+
+      - name: Commit rival-preservation change
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add src/search.cpp
+          git commit -m 'Strength v5: scale sibling reduction by confidence'
+          git push origin HEAD:leviathan/strength-v5-margin-skeptic
