@@ -1,0 +1,126 @@
+name: Apply strength v6 proof obligation
+
+on:
+  push:
+    branches:
+      - leviathan/strength-v6-proof-obligation
+    paths:
+      - '.github/workflows/apply-strength-v6-proof-obligation.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout strength v6
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: leviathan/strength-v6-proof-obligation
+
+      - name: Add proof-obligation search authority
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('src/search.cpp')
+          s = p.read_text()
+
+          def rep(old, new, label):
+              global s
+              n = s.count(old)
+              if n != 1:
+                  raise SystemExit(f'{label} anchor count {n}')
+              s = s.replace(old, new, 1)
+
+          rep(
+              "    bool  givesCheck, improving, priorCapture, opponentWorsening;\n    bool  capture, ttCapture, leviathanNullFragile;\n    int   priorReduction;",
+              "    bool  givesCheck, improving, priorCapture, opponentWorsening;\n    bool  capture, ttCapture, leviathanNullFragile;\n    int   priorReduction, leviathanProofDebt;",
+              'declaration')
+
+          rep(
+              "    probCutNearValue      = -VALUE_INFINITE;\n    leviathanNullFragile = false;\n    priorReduction        = (ss - 1)->reduction;",
+              "    probCutNearValue      = -VALUE_INFINITE;\n    leviathanNullFragile = false;\n    leviathanProofDebt   = 0;\n    priorReduction        = (ss - 1)->reduction;",
+              'initialization')
+
+          old = "    improving         = ss->staticEval > (ss - 2)->staticEval;\n    opponentWorsening = ss->staticEval > -(ss - 1)->staticEval;"
+          new = old + "\n\n    // Leviathan strength v6 - Proof Obligation. Search shortcuts are evidence,\n    // not truth. Accumulate independent reasons that the node's current story\n    // may be unreliable, then spend verification only when warnings agree.\n    if (pos.has_repeated())\n        leviathanProofDebt += 2;\n    if (pos.rule50_count() >= 80)\n        leviathanProofDebt += 1;\n    if (is_valid(ttData.value) && !is_decisive(ttData.value))\n    {\n        const int ttEvalGap = std::abs(int(ttData.value - ss->staticEval));\n        leviathanProofDebt += ttEvalGap >= 256 ? 2 : int(ttEvalGap >= 96);\n    }\n    const int correctionGap = std::abs(correctionValue) / 131072;\n    if (correctionGap >= 96)\n        leviathanProofDebt += 1;\n    leviathanProofDebt = std::min(leviathanProofDebt, 5);"
+          rep(old, new, 'proof seed')
+
+          rep(
+              "    if (!PvNode && eval < alpha - 483 - 318 * depth * depth)\n        return qsearch<NonPV>(pos, ss, alpha, beta);",
+              "    if (!PvNode && leviathanProofDebt < 2\n        && eval < alpha - 483 - 318 * depth * depth)\n        return qsearch<NonPV>(pos, ss, alpha, beta);",
+              'razoring')
+
+          rep(
+              "    if (!ss->ttPv && eval >= beta && (!ttData.move || ttCapture) && !is_loss(beta) && !is_win(eval)\n        && depth < futility_depth(eval, beta))",
+              "    if (!ss->ttPv && leviathanProofDebt < 2 && eval >= beta\n        && (!ttData.move || ttCapture) && !is_loss(beta) && !is_win(eval)\n        && depth < futility_depth(eval, beta))",
+              'child futility')
+
+          rep(
+              "        if (depth >= 6 && nullValue < beta\n            && ss->staticEval - nullValue >= 192 && !is_decisive(nullValue))\n            leviathanNullFragile = true;",
+              "        if (depth >= 6 && nullValue < beta\n            && ss->staticEval - nullValue >= 192 && !is_decisive(nullValue))\n        {\n            leviathanNullFragile = true;\n            leviathanProofDebt = std::min(5, leviathanProofDebt + 2);\n        }",
+              'null debt')
+
+          rep(
+              "    if (!ss->followPV && !allNode && depth >= 6 && !ttData.move)\n        depth--;",
+              "    if (!ss->followPV && !allNode && depth >= 6 && !ttData.move\n        && leviathanProofDebt < 2)\n        depth--;",
+              'iir')
+
+          rep(
+              "    }\n\nmoves_loop:  // When in check, search starts here\n\n    // Step 12. A small Probcut idea",
+              "    }\n\n    if (probCutNearMiss)\n        leviathanProofDebt = std::min(5, leviathanProofDebt + 1);\n\nmoves_loop:  // When in check, search starts here\n\n    // Step 12. A small Probcut idea",
+              'probcut debt')
+
+          rep(
+              "    if ((ttData.bound & BOUND_LOWER) && ttData.depth >= depth - 4 && ttData.value >= probCutBeta\n        && !is_decisive(beta) && is_valid(ttData.value) && !is_decisive(ttData.value))",
+              "    if (leviathanProofDebt < 2 && (ttData.bound & BOUND_LOWER)\n        && ttData.depth >= depth - 4 && ttData.value >= probCutBeta\n        && !is_decisive(beta) && is_valid(ttData.value) && !is_decisive(ttData.value))",
+              'small probcut')
+
+          rep(
+              "            if (!leviathanNullFragile\n                && moveCount >= (3 + depth * depth) / (2 - improving))",
+              "            if (leviathanProofDebt < 2\n                && moveCount >= (3 + depth * depth) / (2 - improving))",
+              'quiet skip')
+
+          rep(
+              "                  || (leviathanNullFragile && moveCount <= 10);",
+              "                  || (leviathanProofDebt >= 2\n                      && moveCount <= 6 + std::min(leviathanProofDebt, 4));",
+              'scope protection')
+
+          rep(
+              "            else if (value >= beta && !is_decisive(value))",
+              "            else if (value >= beta && !is_decisive(value)\n                     && leviathanProofDebt < 3)",
+              'multicut authority')
+
+          rep(
+              "            else if (ttData.value >= beta || cutNode)\n                extension = -3;",
+              "            else if ((ttData.value >= beta || cutNode) && leviathanProofDebt < 3)\n                extension = -3;",
+              'negative extension authority')
+
+          rep(
+              "        // A failed null-move shortcut says the position depends heavily on making\n        // a real move now. Buy back a small amount of depth on quiet candidates.\n        if (leviathanNullFragile && !capture && !givesCheck && moveCount <= 10)\n            r -= 256;",
+              "        // Proof debt converts contradictory evidence into bounded search authority.\n        // Only early serious candidates receive the buyback; debt is capped above.\n        if (leviathanProofDebt >= 2 && !capture && !givesCheck && moveCount <= 8)\n            r -= 128 * std::min(leviathanProofDebt, 4);\n        if (leviathanProofDebt >= 4 && depth >= 7 && moveCount <= 2)\n            r -= 384;",
+              'proof buyback')
+
+          rep(
+              "                     && value >= alpha - (18 + 3 * std::min(int(depth), 12))\n                     && (PvNode || ss->ttPv\n                         || Leviathan::Fundamentals::quiet_tactical_tension(\n                           pos, move, capture, givesCheck)\n                         || Leviathan::Fundamentals::quiet_major_threat(\n                           pos, move, capture, givesCheck)))",
+              "                     && value >= alpha - (18 + 3 * std::min(int(depth), 12)\n                                               + 8 * leviathanProofDebt)\n                     && (PvNode || ss->ttPv || leviathanProofDebt >= 3\n                         || Leviathan::Fundamentals::quiet_tactical_tension(\n                           pos, move, capture, givesCheck)\n                         || Leviathan::Fundamentals::quiet_major_threat(\n                           pos, move, capture, givesCheck)))",
+              'margin skeptic')
+
+          rep(
+              "                    if (PvNode || ss->ttPv)\n                        siblingPenalty = std::max(0, siblingPenalty - 1);\n\n                    depth -= siblingPenalty;",
+              "                    if (PvNode || ss->ttPv)\n                        siblingPenalty = std::max(0, siblingPenalty - 1);\n                    if (leviathanProofDebt >= 2)\n                        siblingPenalty = std::max(0, siblingPenalty - 1);\n                    if (leviathanProofDebt >= 4)\n                        siblingPenalty = std::max(0, siblingPenalty - 1);\n\n                    depth -= siblingPenalty;",
+              'rival debt')
+
+          p.write_text(s)
+          PY
+          git diff --check
+          git diff -- src/search.cpp
+
+      - name: Commit proof-obligation search
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add src/search.cpp
+          git commit -m 'Strength v6: add proof-obligation search authority'
+          git push origin HEAD:leviathan/strength-v6-proof-obligation
