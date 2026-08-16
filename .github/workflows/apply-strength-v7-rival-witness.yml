@@ -1,0 +1,53 @@
+name: Apply strength v7 rival witness
+
+on:
+  push:
+    branches:
+      - leviathan/strength-v7-persistent-proof
+    paths:
+      - '.github/workflows/apply-strength-v7-rival-witness.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout strength v7
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: leviathan/strength-v7-persistent-proof
+
+      - name: Preserve displaced close rivals
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('src/search.cpp')
+          s = p.read_text()
+          old = "        int inc = (value == bestValue && ss->ply + 2 >= rootDepth && (int(nodes) & 14) == 0\n                   && !is_win(std::abs(value) + 1));\n\n        if (value + inc > bestValue)"
+          new = "        int inc = (value == bestValue && ss->ply + 2 >= rootDepth && (int(nodes) & 14) == 0\n                   && !is_win(std::abs(value) + 1));\n\n        // Preserve the move about to be displaced. If the new leader only\n        // barely beats it, the old leader is a concrete rival future rather\n        // than generic history noise.\n        const Move  leviathanDisplacedMove  = bestMove;\n        const Value leviathanDisplacedValue = bestValue;\n\n        if (value + inc > bestValue)"
+          if s.count(old) != 1:
+              raise SystemExit(f'displaced capture anchor count {s.count(old)}')
+          s = s.replace(old, new, 1)
+          old = "                if (value >= beta)\n                {\n                    // (*Scaler) Infrequent and small updates scale well\n                    ss->cutoffCnt += (extension < 2) || PvNode;\n                    assert(value >= beta);  // Fail high\n                    break;\n                }\n\n                // Leviathan strength v5 - Rival Preservation."
+          new = "                if (value >= beta)\n                {\n                    // (*Scaler) Infrequent and small updates scale well\n                    ss->cutoffCnt += (extension < 2) || PvNode;\n                    assert(value >= beta);  // Fail high\n                    break;\n                }\n\n                // Leviathan strength v7.4 - Rival Witness. At PV-like nodes, a\n                // displaced leader within a pawn is evidence of a genuine second\n                // route. Persist it so future visits retain more than one plan.\n                if (!rootNode && (PvNode || ss->ttPv) && leviathanDisplacedMove\n                    && leviathanDisplacedValue > -VALUE_INFINITE\n                    && !is_decisive(value) && !is_decisive(leviathanDisplacedValue)\n                    && int(value - leviathanDisplacedValue) <= 72)\n                {\n                    leviathanWitness = leviathanDisplacedMove;\n                    leviathanProofDebt = std::min(5, leviathanProofDebt + 1);\n                }\n\n                // Leviathan strength v5 - Rival Preservation."
+          if s.count(old) != 1:
+              raise SystemExit(f'rival witness anchor count {s.count(old)}')
+          s = s.replace(old, new, 1)
+          old = "    if (!excludedMove && leviathanProofDebt >= 3)\n        leviathan_proof_memory_store(posKey, leviathanProofDebt, leviathanWitness);"
+          new = "    if (!excludedMove && (leviathanProofDebt >= 3 || leviathanWitness))\n        leviathan_proof_memory_store(posKey, leviathanProofDebt, leviathanWitness);"
+          if s.count(old) != 1:
+              raise SystemExit(f'rival store anchor count {s.count(old)}')
+          p.write_text(s.replace(old, new, 1))
+          PY
+          git diff --check
+          git diff -- src/search.cpp
+
+      - name: Commit rival witness memory
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add src/search.cpp
+          git commit -m 'Strength v7.4: persist displaced close rivals'
+          git push origin HEAD:leviathan/strength-v7-persistent-proof
