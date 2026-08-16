@@ -1,0 +1,66 @@
+name: Plyless trust profile v2
+
+on:
+  push:
+    branches: [leviathan/plyless-v0-decision-depth]
+    paths: ['.github/workflows/plyless-trust-profile-v2.yml']
+  workflow_dispatch:
+
+permissions: {contents: read}
+
+jobs:
+  profile:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with: {repository: official-stockfish/Stockfish, ref: 5062aee519a1ba262d472d8ab139851ced56573e}
+      - name: Instrument cache-size and dominant-move persistence
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path('src/search.cpp'); s=p.read_text(); s=s.replace('#include <utility>','#include <utility>\n#include <iostream>')
+          a='''namespace {\n\nconstexpr u64 NODES_LIMIT_OUTPUT'''
+          b='''namespace {\n\ntemplate<int Bits> struct LVTrustCache {\n    struct E { Key k=0; u16 move=0; unsigned char width=255, depth=0; };\n    std::array<E,1u<<Bits> table{};\n    unsigned long long hit[7]{}, qual[7]{}, prior1[7]{}, prior1ok[7]{}, same[7]{}, sameNow1[7]{}, ttSame[7]{};\n    E& at(Key k){ return table[usize((k^(k>>32)^(k>>17))&((1u<<Bits)-1))]; }\n};\nstruct LVTrustProfile {\n    LVTrustCache<12> c4; LVTrustCache<14> c16; LVTrustCache<16> c64;\n    unsigned long long visits[7]{};\n};\nLVTrustProfile lvtrust;\n\nconstexpr u64 NODES_LIMIT_OUTPUT'''
+          if s.count(a)!=1: raise SystemExit('namespace')
+          s=s.replace(a,b,1)
+
+          a='''    bool  capture, ttCapture;\n    int   priorReduction;'''
+          b='''    bool  capture, ttCapture;\n    const int lvD=int(depth); int lvCount=0; u16 lvFirst=0; Key lvK=0;\n    struct LVP { bool hit=false; unsigned char w=255,d=0; u16 move=0; } lvP[3];\n    int   priorReduction;'''
+          if s.count(a)!=1: raise SystemExit('locals')
+          s=s.replace(a,b,1)
+
+          a='''    excludedMove                   = ss->excludedMove;\n    posKey                         = pos.key();\n    auto [ttHit, ttData, ttWriter] = tt.probe(posKey);'''
+          b='''    excludedMove                   = ss->excludedMove;\n    posKey                         = pos.key();\n    if(!excludedMove && lvD>=1 && lvD<=6){\n      ++lvtrust.visits[lvD]; lvK=posKey; int i=0;\n      auto get=[&](auto& c){auto&e=c.at(lvK);if(e.k==lvK){lvP[i]={true,e.width,e.depth,e.move};++c.hit[lvD];if(int(e.depth)+1>=lvD){++c.qual[lvD];if(e.width<=1)++c.prior1[lvD];}}++i;};\n      get(lvtrust.c4);get(lvtrust.c16);get(lvtrust.c64);\n    }\n    auto [ttHit, ttData, ttWriter] = tt.probe(posKey);'''
+          if s.count(a)!=1: raise SystemExit('probe')
+          s=s.replace(a,b,1)
+
+          a='''    ttCapture    = ttData.move && pos.capture_stage(ttData.move);'''
+          b='''    ttCapture    = ttData.move && pos.capture_stage(ttData.move);\n    if(lvD>=1&&lvD<=6&&ttData.move){int i=0;auto chk=[&](auto&c){if(lvP[i].hit&&int(lvP[i].d)+1>=lvD&&lvP[i].w<=1&&lvP[i].move==ttData.move.raw())++c.ttSame[lvD];++i;};chk(lvtrust.c4);chk(lvtrust.c16);chk(lvtrust.c64);}'''
+          if s.count(a)!=1: raise SystemExit('tt')
+          s=s.replace(a,b,1)
+
+          a='''        // Step 16. Make the move\n        do_move(pos, move, st, givesCheck, ss);'''
+          b='''        // Step 16. Make the move\n        if(lvD>=1&&lvD<=6){if(lvCount==0)lvFirst=move.raw();++lvCount;}\n        do_move(pos, move, st, givesCheck, ss);'''
+          if s.count(a)!=1: raise SystemExit('move')
+          s=s.replace(a,b,1)
+
+          a='''    assert(bestValue > -VALUE_INFINITE && bestValue < VALUE_INFINITE);\n\n    return bestValue;\n}\n\n\n// Quiescence search function'''
+          b='''    assert(bestValue > -VALUE_INFINITE && bestValue < VALUE_INFINITE);\n    if(!excludedMove&&lvD>=1&&lvD<=6){int i=0;auto put=[&](auto&c){\n      if(lvP[i].hit&&int(lvP[i].d)+1>=lvD&&lvP[i].w<=1){if(lvCount<=1)++c.prior1ok[lvD];if(lvFirst&&lvFirst==lvP[i].move){++c.same[lvD];if(lvCount<=1)++c.sameNow1[lvD];}}\n      auto&e=c.at(lvK);if(e.k!=lvK||lvD>=int(e.depth)){e.k=lvK;e.move=lvFirst;e.width=static_cast<unsigned char>(std::min(lvCount,254));e.depth=static_cast<unsigned char>(lvD);}++i;};\n      put(lvtrust.c4);put(lvtrust.c16);put(lvtrust.c64);\n    }\n    return bestValue;\n}\n\n\n// Quiescence search function'''
+          if s.count(a)!=1: raise SystemExit('store')
+          s=s.replace(a,b,1)
+
+          # Guaranteed explicit dump point after the main search returns.
+          a='''    bool uciPvSent = iterative_deepening();'''
+          b='''    bool uciPvSent = iterative_deepening();\n    auto lvDump=[&](const char* n,const auto& c){for(int d=1;d<=6;++d)std::cerr<<"LVTRUST "<<n<<' '<<d<<" visits "<<lvtrust.visits[d]<<" hit "<<c.hit[d]<<" qual "<<c.qual[d]<<" prior1 "<<c.prior1[d]<<" prior1ok "<<c.prior1ok[d]<<" same "<<c.same[d]<<" sameNow1 "<<c.sameNow1[d]<<" ttSame "<<c.ttSame[d]<<'\\n';};\n    lvDump("4k",lvtrust.c4);lvDump("16k",lvtrust.c16);lvDump("64k",lvtrust.c64);'''
+          if s.count(a)!=1: raise SystemExit('dump hook')
+          p.write_text(s.replace(a,b,1))
+          PY
+          git diff --check
+      - name: Build and run diagnostic bench
+        working-directory: src
+        run: |
+          make net && make clean && make -j2 ARCH=x86-64-avx2 build
+          ./stockfish bench 2>&1 | tee ../trust.txt
+          grep '^LVTRUST' ../trust.txt | tail -18
+      - uses: actions/upload-artifact@v4
+        with: {name: plyless-trust-profile-v2, path: trust.txt}
