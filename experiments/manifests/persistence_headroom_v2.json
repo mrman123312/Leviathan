@@ -1,0 +1,23 @@
+{
+  "schema": "LV_EXPERIMENT_MANIFEST_V1",
+  "id": "W023",
+  "family": "architectural-persistence-diagnostic",
+  "question": "How much next-root headroom comes from TT evidence versus carried history heuristics, and does either improve equal-node oracle decisions?",
+  "diagnostic_sha": "37450f36aeb1bac82c03f1651ed88d42d6d720d7",
+  "base_sha": "9fe94b6c81ccf3b1defe3200d6c08098a8dba1e1",
+  "oracle_sha": "5062aee519a1ba262d472d8ab139851ced56573e",
+  "arms": {
+    "warm": "TT and histories persist through two chronological prefix searches",
+    "history_only": "same prefix searches, then TT-only clear",
+    "cold": "full Clear Hash before the target, clearing TT and histories"
+  },
+  "settings": {
+    "positions": 50,
+    "path_plies": 2,
+    "path_nodes": 12000,
+    "target_nodes": 24000,
+    "deep_nodes_per_forced_move": 200000
+  },
+  "interpretation_gate": "This is a headroom and causality diagnostic, not a strength candidate. Any persistent mechanism requires history/provenance safety and new game evidence."
+}
+

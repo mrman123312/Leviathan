@@ -1,0 +1,118 @@
+name: Leviathan persistence headroom V2
+
+on:
+  push:
+    branches: [leviathan/lab-v4-persistence-headroom]
+    paths:
+      - '.github/workflows/lab-persistence-headroom-v2.yml'
+      - 'tools/persistence_headroom.py'
+      - 'experiments/holdouts/sparse_v3_direct_seed910247.fen'
+      - 'experiments/options/active_fundamentals.json'
+      - 'experiments/requirements-chess-hashed.txt'
+      - 'experiments/manifests/persistence_headroom_v2.json'
+  workflow_dispatch:
+
+permissions: {contents: read}
+
+concurrency:
+  group: lab-persistence-headroom-v2-${{ github.ref }}
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  three-arm-ablation:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 50
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ github.sha }}
+          path: lab
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: 37450f36aeb1bac82c03f1651ed88d42d6d720d7
+          path: diagnostic
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: 9fe94b6c81ccf3b1defe3200d6c08098a8dba1e1
+          path: reference
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          repository: official-stockfish/Stockfish
+          ref: 5062aee519a1ba262d472d8ab139851ced56573e
+          path: oracle
+      - name: Record immutable provenance
+        run: |
+          set -euo pipefail
+          {
+            echo "runner_image=${ImageOS:-unknown}"
+            echo "runner_image_version=${ImageVersion:-unknown}"
+            uname -a
+            lscpu
+            g++ --version
+            python3 --version
+            for engine in lab diagnostic reference oracle; do
+              git -C "$engine" rev-parse HEAD
+              git -C "$engine" rev-parse 'HEAD^{tree}'
+            done
+            sha256sum lab/tools/persistence_headroom.py
+            sha256sum lab/experiments/holdouts/sparse_v3_direct_seed910247.fen
+            sha256sum lab/experiments/options/active_fundamentals.json
+            sha256sum lab/experiments/requirements-chess-hashed.txt
+            sha256sum lab/experiments/manifests/persistence_headroom_v2.json
+          } | tee provenance.txt
+          set +e
+          diff -ru --exclude='*.nnue' reference/src diagnostic/src > diagnostic-source.patch
+          diff_status=$?
+          set -e
+          if (( diff_status > 1 )); then exit "$diff_status"; fi
+          test -s diagnostic-source.patch
+      - name: Install hash-locked chess harness dependency
+        run: |
+          set -euo pipefail
+          PIP_CACHE_DIR="$RUNNER_TEMP/pip-cache" python3 -m pip install \
+            --disable-pip-version-check --require-hashes \
+            -r lab/experiments/requirements-chess-hashed.txt
+          python3 -m pip freeze | sort | tee dependency-freeze.txt
+      - name: Build diagnostic engine and official oracle
+        run: |
+          set -euo pipefail
+          make -C diagnostic/src net
+          cp diagnostic/src/nn-ab28990d4ea3.nnue oracle/src/
+          make -C diagnostic/src -j2 ARCH=x86-64-avx2 build
+          mv diagnostic/src/stockfish diagnostic/src/diagnostic
+          make -C oracle/src -j2 ARCH=x86-64-avx2 build
+          mv oracle/src/stockfish oracle/src/oracle
+          sha256sum diagnostic/src/diagnostic oracle/src/oracle | tee binary-sha256.txt
+          sha256sum diagnostic/src/nn-ab28990d4ea3.nnue oracle/src/nn-ab28990d4ea3.nnue \
+            | tee network-sha256.txt
+      - name: Fifty-position TT/history/cold ablation
+        run: |
+          set -euo pipefail
+          mkdir -p results
+          python3 lab/tools/persistence_headroom.py \
+            --engine "$GITHUB_WORKSPACE/diagnostic/src/diagnostic" \
+            --path-engine "$GITHUB_WORKSPACE/oracle/src/oracle" \
+            --oracle "$GITHUB_WORKSPACE/oracle/src/oracle" \
+            --options lab/experiments/options/active_fundamentals.json \
+            --positions lab/experiments/holdouts/sparse_v3_direct_seed910247.fen \
+            --count 50 --path-plies 2 --path-nodes 12000 --target-nodes 24000 \
+            --deep-nodes 200000 --out results/persistence-headroom-v2.json \
+            | tee results/persistence-headroom-v2.log
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: persistence-headroom-v2
+          retention-days: 90
+          if-no-files-found: error
+          path: |
+            provenance.txt
+            dependency-freeze.txt
+            diagnostic-source.patch
+            binary-sha256.txt
+            network-sha256.txt
+            results/
+
