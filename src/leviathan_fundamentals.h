@@ -15,6 +15,7 @@
 #include <cstdlib>
 #include <string>
 
+#include "bitboard.h"
 #include "position.h"
 #include "types.h"
 
@@ -248,6 +249,34 @@ inline bool quiet_tactical_tension(const Position& pos,
     return pos.attackers_to_exist(move.to_sq(), pos.pieces(), ~us);
 }
 
+// A move can be syntactically quiet while being concretely forcing. After the
+// move has been made, detect whether the moved piece directly attacks an enemy
+// queen or rook. This is a tactical fact, not a positional guess.
+inline bool quiet_major_threat(const Position& pos,
+                               Move move,
+                               bool capture,
+                               bool givesCheck) {
+    if (capture || givesCheck || !move.is_ok())
+        return false;
+
+    Piece pc = moving_piece(pos, move);
+    if (pc == NO_PIECE || type_of(pc) == KING)
+        return false;
+
+    Color    us       = color_of(pc);
+    Bitboard targets  = pos.pieces(~us, QUEEN, ROOK);
+    Bitboard movedBit = square_bb(move.to_sq());
+
+    while (targets)
+    {
+        Square target = pop_lsb(targets);
+        if (pos.attackers_to(target) & movedBit)
+            return true;
+    }
+
+    return false;
+}
+
 inline int lmr_adjustment(const Position& pos,
                           Move move,
                           Square prevSq,
@@ -290,6 +319,11 @@ inline int lmr_adjustment(const Position& pos,
     // can hide compensation beyond the reduced horizon.
     if (depth >= 6 && moveCount <= 10 && quiet_tactical_tension(pos, move, capture, givesCheck))
         delta -= 256;
+
+    // Quiet attacks on major pieces are forcing even though they are neither
+    // captures nor checks. Buy back depth before generic quiet history buries them.
+    if (depth >= 5 && moveCount <= 12 && quiet_major_threat(pos, move, capture, givesCheck))
+        delta -= 320;
 
     // Sparse king moves are tempo/proof moves, not ordinary quiets.
     if (depth >= 5 && precision_king_move(pos, move, capture, givesCheck))

@@ -1487,6 +1487,8 @@ moves_loop:  // When in check, search starts here
                      && value >= alpha - (18 + 3 * std::min(int(depth), 12))
                      && (PvNode || ss->ttPv
                          || Leviathan::Fundamentals::quiet_tactical_tension(
+                           pos, move, capture, givesCheck)
+                         || Leviathan::Fundamentals::quiet_major_threat(
                            pos, move, capture, givesCheck)))
             {
                 leviathanResearched = true;
