@@ -1,0 +1,90 @@
+name: Leviathan v2.4 native-confidence screen
+on:
+  push:
+    branches: [leviathan/fundamentals-v2.1.1-phasefix]
+    paths: ['.github/workflows/v24-confidence-screen.yml']
+permissions: {contents: read}
+jobs:
+  screen:
+    runs-on: ubuntu-22.04
+    strategy:
+      fail-fast: false
+      matrix: {profile: [control, conf1536, conf2048, conf2560]}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with: {ref: 3831e96bc639108ca580f429cee43f8b89466359, path: leviathan}
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with: {repository: official-stockfish/Stockfish, ref: 5062aee519a1ba262d472d8ab139851ced56573e, path: stockfish}
+      - name: Apply native confidence dimension
+        if: matrix.profile != 'control'
+        working-directory: leviathan
+        env: {PROFILE: '${{ matrix.profile }}'}
+        run: |
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+          th={'conf1536':1536,'conf2048':2048,'conf2560':2560}[os.environ['PROFILE']]
+          h=Path('src/leviathan_fundamentals.h');s=h.read_text()
+          a='''                          Depth depth,\n                          int moveCount,''';b='''                          Depth depth,\n                          int baseReduction,\n                          int moveCount,'''
+          assert s.count(a)==1;s=s.replace(a,b,1)
+          x='''        delta += state().quietOverdrive * lateness * depthScale / 48;'''
+          y=f'''        delta += state().quietOverdrive * lateness * depthScale / 48;\n        // Native-confidence dimension: spend extra selectivity only where the\n        // already-tuned Stockfish LMR manifold independently wants a deep reduction.\n        if (baseReduction >= {th})\n            delta += std::min((baseReduction - {th}) / 3 + 192, 512);'''
+          assert s.count(x)==1;h.write_text(s.replace(x,y,1))
+          p=Path('src/search.cpp');t=p.read_text()
+          c='''        r += Leviathan::Fundamentals::lmr_adjustment(\n          pos, move, prevSq, depth, moveCount, PvNode, capture, givesCheck);'''
+          d='''        r += Leviathan::Fundamentals::lmr_adjustment(\n          pos, move, prevSq, depth, int(r), moveCount, PvNode, capture, givesCheck);'''
+          assert t.count(c)==1;p.write_text(t.replace(c,d,1))
+          PY
+          git diff --check
+      - run: python3 -m pip install --disable-pip-version-check 'python-chess>=1.999,<2'
+      - name: Build
+        run: |
+          cd leviathan/src && make net && make -j2 ARCH=x86-64-avx2 build && mv stockfish leviathan
+          cd ../../stockfish/src && make net && make -j2 ARCH=x86-64-avx2 build && mv stockfish parent
+      - name: Configure and common openings
+        working-directory: leviathan
+        run: |
+          mkdir q
+          cat > q/a.json <<'EOF'
+          {"Threads":1,"Hash":64,"Leviathan Fundamentals":true,"Leviathan Fundamentals Authority":2,"Leviathan Forcing Buyback":384,"Leviathan Recapture Buyback":256,"Leviathan Passer Buyback":320,"Leviathan Endgame Buyback":128,"Leviathan Quiet Overdrive":160,"Leviathan Rule50 Pawn Bonus":3072,"Leviathan Zugzwang Guard":true,"Leviathan Sacrifice Rescue":true,"Leviathan Rule50 Pressure":true,"Leviathan Policy":false,"Leviathan MetaSearch":false,"Leviathan Risk":false,"Leviathan Specialist":false,"Leviathan Atlas":false,"Leviathan Search DSL":false}
+          EOF
+          echo '{"Threads":1,"Hash":64}' > q/b.json
+          python3 - <<'PY'
+          import random,chess,chess.engine
+          from pathlib import Path
+          sf=chess.engine.SimpleEngine.popen_uci('../stockfish/src/parent');sf.configure({'Threads':1,'Hash':64});O=[];seen=set()
+          try:
+            for sh in range(5):
+              r=random.Random(8910+sh*100003);local=[]
+              while len(local)<4:
+                b=chess.Board()
+                for _ in range(r.randint(6,12)):
+                  I=sf.analyse(b,chess.engine.Limit(nodes=1800),multipv=min(6,b.legal_moves.count()));I=I if isinstance(I,list) else [I];R=[]
+                  for z in I:
+                    pv=z.get('pv',[])
+                    if pv:R.append((pv[0],int(z['score'].pov(b.turn).score(mate_score=100000) or 0)))
+                  if not R:break
+                  best=R[0][1];V=[z for z in R if best-z[1]<=100] or R[:1];b.push(r.choices([m for m,_ in V],weights=list(range(len(V),0,-1)),k=1)[0])
+                k=' '.join(b.fen().split()[:4])
+                if b.is_game_over() or k in seen:continue
+                seen.add(k);local.append(b.fen())
+              O+=local
+          finally:sf.quit()
+          Path('q/openings.fen').write_text('\n'.join(O)+'\n')
+          PY
+      - name: Bench and 40 games
+        working-directory: leviathan
+        env: {PROFILE: '${{ matrix.profile }}'}
+        run: |
+          ./src/leviathan bench 2>&1 | tee q/off.txt
+          printf 'setoption name Leviathan Fundamentals value true\nsetoption name Leviathan Fundamentals Authority value 2\nbench\nquit\n' | ./src/leviathan 2>&1 | tee q/on.txt
+          python3 tools/run_match.py --engine-a "$GITHUB_WORKSPACE/leviathan/src/leviathan" --engine-b "$GITHUB_WORKSPACE/stockfish/src/parent" --options-a q/a.json --options-b q/b.json --openings q/openings.fen --games 40 --movetime-ms 100 --max-plies 220 --out q/match.json | tee q/match.log
+          python3 - <<'PY'
+          import json,re,os
+          from pathlib import Path
+          d=json.loads(Path('q/match.json').read_text());off=Path('q/off.txt').read_text();on=Path('q/on.txt').read_text();x=lambda p,s:int(re.findall(p,s)[-1]);om=x(r'Total time \(ms\)\s*:\s*(\d+)',off);am=x(r'Total time \(ms\)\s*:\s*(\d+)',on);onodes=x(r'Nodes searched\s*:\s*(\d+)',off);anodes=x(r'Nodes searched\s*:\s*(\d+)',on);r={'profile':os.environ['PROFILE'],'summary':d['summary'],'speedup':om/am,'node_reduction_pct':(1-anodes/onodes)*100,'off_ms':om,'active_ms':am,'active_nodes':anodes};Path('q/report.json').write_text(json.dumps(r,indent=2)+'\n');print(json.dumps(r,indent=2))
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: v24-${{ matrix.profile }}
+          path: leviathan/q/
