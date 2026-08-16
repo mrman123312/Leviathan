@@ -81,25 +81,41 @@ inline bool zugzwang_risk(const Position& pos) {
 }
 
 inline Piece moving_piece(const Position& pos, Move move) {
-    if (!move.is_ok()) return NO_PIECE;
+    if (!move.is_ok())
+        return NO_PIECE;
     Piece pc = pos.piece_on(move.from_sq());
     return pc != NO_PIECE ? pc : pos.piece_on(move.to_sq());
 }
 
 inline bool pawn_move(const Position& pos, Move move) {
-    if (!move.is_ok()) return false;
-    if (move.type_of() == PROMOTION || move.type_of() == EN_PASSANT) return true;
+    if (!move.is_ok())
+        return false;
+    if (move.type_of() == PROMOTION || move.type_of() == EN_PASSANT)
+        return true;
     Piece pc = moving_piece(pos, move);
     return pc != NO_PIECE && type_of(pc) == PAWN;
 }
 
 inline Color mover_color(const Position& pos, Move move) {
     Piece pc = moving_piece(pos, move);
-    return pc != NO_PIECE ? color_of(pc) : pos.side_to_move();
+    return pc != NO_PIECE ? color_of(pc) : ~pos.side_to_move();
+}
+
+inline int king_distance(Square a, Square b) {
+    return std::max(std::abs(int(file_of(a)) - int(file_of(b))),
+                    std::abs(int(rank_of(a)) - int(rank_of(b))));
 }
 
 inline bool advanced_pawn_move(const Position& pos, Move move) {
     return pawn_move(pos, move) && relative_rank(mover_color(pos, move), move.to_sq()) >= RANK_6;
+}
+
+// Rank-five pawn commitments are often the point where a quiet move stops being
+// reversible: it can fix a structure, create a protected passer, or begin a
+// promotion race. Stockfish's local history/SEE signals can undervalue them well
+// before they become a rank-six tactical event.
+inline bool critical_pawn_commitment(const Position& pos, Move move) {
+    return pawn_move(pos, move) && relative_rank(mover_color(pos, move), move.to_sq()) >= RANK_5;
 }
 
 inline bool recapture(Move move, Square prevSq, bool capture) {
@@ -110,6 +126,52 @@ inline bool zeroing_quiet(const Position& pos, Move move, bool capture) {
     return capture || pawn_move(pos, move);
 }
 
+// Quiet moves around a king are disproportionately likely to be prophylaxis,
+// mating preparation, defender removal preparation, or an escape-square change.
+// Preserve them as candidates; alpha-beta still decides whether they are good.
+inline bool king_zone_maneuver(const Position& pos, Move move) {
+    Piece pc = moving_piece(pos, move);
+    if (pc == NO_PIECE || type_of(pc) == PAWN || type_of(pc) == KING)
+        return false;
+
+    Color us = color_of(pc);
+    return king_distance(move.to_sq(), pos.square<KING>(~us)) <= 2;
+}
+
+// A quiet move by a currently attacked non-pawn piece is a high-regret pruning
+// class: the obvious capture/retreat candidates dominate history, while a rare
+// tactical retreat, interposition, or counter-threat can look locally ordinary.
+inline bool threatened_piece_quiet(const Position& pos,
+                                   Move move,
+                                   bool capture,
+                                   bool givesCheck) {
+    if (capture || givesCheck)
+        return false;
+
+    Piece pc = moving_piece(pos, move);
+    if (pc == NO_PIECE || type_of(pc) == PAWN || type_of(pc) == KING)
+        return false;
+
+    Color us = color_of(pc);
+    return pos.attackers_to_exist(move.from_sq(), pos.pieces(), ~us);
+}
+
+inline bool precision_king_move(const Position& pos, Move move, bool capture, bool givesCheck) {
+    if (capture || givesCheck)
+        return false;
+
+    Piece pc = moving_piece(pos, move);
+    if (pc == NO_PIECE || type_of(pc) != KING)
+        return false;
+
+    // King geometry dominates sparse endings and long rule-50 conversions.
+    return low_material(pos) || pos.rule50_count() >= 50;
+}
+
+// Called before do_move() from shallow-pruning gates. This is deliberately a
+// candidate-preservation predicate, not an evaluation claim. Its job is to stop
+// irreversible, tactical-boundary, and king-geometry moves from disappearing
+// before the full search has a chance to judge them.
 inline bool protected_scope_move(const Position& pos,
                                  Move move,
                                  Square prevSq,
@@ -118,8 +180,11 @@ inline bool protected_scope_move(const Position& pos,
     if (!ready())
         return false;
 
-    return givesCheck || move.type_of() == PROMOTION || advanced_pawn_move(pos, move)
-        || recapture(move, prevSq, capture);
+    return givesCheck || move.type_of() == PROMOTION || critical_pawn_commitment(pos, move)
+        || recapture(move, prevSq, capture)
+        || threatened_piece_quiet(pos, move, capture, givesCheck)
+        || king_zone_maneuver(pos, move)
+        || precision_king_move(pos, move, capture, givesCheck);
 }
 
 // Soundness policy: this does not claim a move is good. It only says the move
@@ -143,7 +208,44 @@ inline bool rescue_bad_see(const Position& pos,
 
     // Checking sacrifices retain the broad rescue path. They are rare and are
     // exactly where a purely material SEE gate can miss forced tactical ideas.
-    return givesCheck && !pos.see_ge(move, 0);
+    if (givesCheck && !pos.see_ge(move, 0))
+        return true;
+
+    // Strength v5: non-checking sacrifices close to the enemy king are a classic
+    // delayed-compensation failure mode. SEE sees the immediate material loss;
+    // it does not see line opening, removal of a key defender, or a mating net a
+    // few plies later. Rescue only this geometrically narrow family.
+    if (capture)
+    {
+        Piece pc = moving_piece(pos, move);
+        if (pc != NO_PIECE && type_of(pc) != KING)
+        {
+            Color us = color_of(pc);
+            if (king_distance(move.to_sq(), pos.square<KING>(~us)) <= 2)
+                return true;
+        }
+    }
+
+    return false;
+}
+
+// Post-move detector: if a quiet non-pawn move deliberately leaves the moved
+// piece inside enemy attack, the line contains tactical tension that ordinary
+// quiet-history reductions are poorly suited to summarize. This covers quiet
+// sacrifices and interference moves without granting them move authority.
+inline bool quiet_tactical_tension(const Position& pos,
+                                   Move move,
+                                   bool capture,
+                                   bool givesCheck) {
+    if (capture || givesCheck)
+        return false;
+
+    Piece pc = moving_piece(pos, move);
+    if (pc == NO_PIECE || type_of(pc) == PAWN || type_of(pc) == KING)
+        return false;
+
+    Color us = color_of(pc);
+    return pos.attackers_to_exist(move.to_sq(), pos.pieces(), ~us);
 }
 
 inline int lmr_adjustment(const Position& pos,
@@ -165,11 +267,33 @@ inline int lmr_adjustment(const Position& pos,
         delta -= state().recaptureBuyback;
     if (move.type_of() == PROMOTION || advanced_pawn_move(pos, move))
         delta -= state().passerBuyback;
+    else if (critical_pawn_commitment(pos, move))
+        delta -= std::max(96, state().passerBuyback / 2);
 
     // v2.1: blanket endgame buyback made every sparse branch expensive. Keep
     // the extra protection concentrated on early candidates and forcing moves.
     if (low_material(pos) && (moveCount <= 4 || capture || givesCheck))
         delta -= state().endgameBuyback;
+
+    // Strength v5: preserve close PV rivals instead of assuming late quiet
+    // history is enough evidence. This is deliberately sub-ply: it buys a little
+    // more proof only where the node is already on the principal-value frontier.
+    if (pvNode && depth >= 6 && moveCount >= 2 && moveCount <= 8 && !capture && !givesCheck)
+        delta -= 160;
+
+    // Search quiet attacking/prophylactic maneuvers near the enemy king more
+    // seriously. These moves often have delayed value and weak local history.
+    if (!capture && !givesCheck && depth >= 5 && moveCount <= 10 && king_zone_maneuver(pos, move))
+        delta -= std::max(128, state().forcingBuyback / 2);
+
+    // Quiet sacrifices/interference moves are precisely where a low-history LMR
+    // can hide compensation beyond the reduced horizon.
+    if (depth >= 6 && moveCount <= 10 && quiet_tactical_tension(pos, move, capture, givesCheck))
+        delta -= 256;
+
+    // Sparse king moves are tempo/proof moves, not ordinary quiets.
+    if (depth >= 5 && precision_king_move(pos, move, capture, givesCheck))
+        delta -= std::max(96, state().endgameBuyback);
 
     // v2.1.2: the v2.1 post-move identity bug accidentally let ordinary pawn
     // moves participate in the speed budget, and the 100-game phase-fix showed
