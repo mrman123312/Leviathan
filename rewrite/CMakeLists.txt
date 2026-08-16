@@ -24,10 +24,9 @@ if(LEVIATHAN_FATHOM_DIR)
             message(FATAL_ERROR "Pinned Fathom source is incomplete: missing ${FATHOM_SRC}/${required}")
         endif()
     endforeach()
-    target_sources(leviathan PRIVATE
-        "${FATHOM_SRC}/tbprobe.c"
-        "${FATHOM_SRC}/tbchess.c"
-    )
+    # Match Fathom's upstream build contract: tbprobe.c includes tbchess.c.
+    # Compiling tbchess.c separately is invalid and CI intentionally guards this.
+    target_sources(leviathan PRIVATE "${FATHOM_SRC}/tbprobe.c")
     target_include_directories(leviathan PRIVATE "${FATHOM_SRC}")
     target_compile_definitions(leviathan PRIVATE LEVIATHAN_HAS_FATHOM=1 TB_NO_HELPER_API=1)
     find_package(Threads REQUIRED)
