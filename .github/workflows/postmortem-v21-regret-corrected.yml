@@ -1,0 +1,112 @@
+name: Leviathan v2.1 corrected loss regret
+
+on:
+  push:
+    branches:
+      - leviathan/h2h-100-20260815
+    paths:
+      - .github/workflows/postmortem-v21-regret-corrected.yml
+
+jobs:
+  analyze-loss:
+    strategy:
+      fail-fast: false
+      max-parallel: 6
+      matrix:
+        game_index: [4, 21, 24, 29, 36, 38, 50, 54, 56, 94, 96]
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: official-stockfish/Stockfish
+          ref: 5062aee519a1ba262d472d8ab139851ced56573e
+          path: stockfish-src
+      - uses: actions/download-artifact@v4
+        with:
+          name: leviathan-v21-vs-stockfish-100games-20260815
+          path: evidence
+          run-id: 31918850106
+          github-token: ${{ github.token }}
+      - run: python3 -m pip install python-chess
+      - run: |
+          make -C stockfish-src/src -j2 build ARCH=x86-64-avx2
+          cp stockfish-src/src/stockfish ./stockfish-exact
+          chmod +x ./stockfish-exact
+      - name: Corrected same-position regret for game ${{ matrix.game_index }}
+        env:
+          GAME_INDEX: ${{ matrix.game_index }}
+        run: |
+          cat > corrected.py <<'PY'
+          import os,json,chess,chess.engine
+          from pathlib import Path
+          idx=int(os.environ['GAME_INDEX'])
+          data=json.loads(Path('evidence/all-games.json').read_text())
+          g=data['games'][idx-1]
+          assert g['score_a']==0.0
+          lev=chess.WHITE if g['a_white'] else chess.BLACK
+          e=chess.engine.SimpleEngine.popen_uci('./stockfish-exact'); e.configure({'Threads':1,'Hash':128})
+          def cp(info):
+              x=info['score'].pov(lev).score(mate_score=100000)
+              return int(x if x is not None else 0)
+          def pv_san(board,pv,n=12):
+              b=board.copy(stack=False); out=[]
+              for m in pv[:n]:
+                  if m not in b.legal_moves: break
+                  out.append(b.san(m)); b.push(m)
+              return out
+          b=chess.Board(g['fen']); moves=[]
+          for ply,u in enumerate(g['moves']):
+              m=chess.Move.from_uci(u)
+              if b.turn==lev:
+                  best=e.analyse(b,chess.engine.Limit(nodes=15000))
+                  bestmove=best['pv'][0]; bestcp=cp(best)
+                  forced=e.analyse(b,chess.engine.Limit(nodes=15000),root_moves=[m])
+                  actcp=cp(forced)
+                  moves.append({'move_number':b.fullmove_number,'ply':ply+1,'actual_uci':u,'actual_san':b.san(m),'best_uci':bestmove.uci(),'best_san':b.san(bestmove),'quick_best_cp':bestcp,'quick_actual_cp':actcp,'quick_regret_cp':bestcp-actcp,'fen_before':b.fen()})
+              b.push(m)
+          top=sorted([x for x in moves if x['actual_uci']!=x['best_uci']],key=lambda x:x['quick_regret_cp'],reverse=True)[:6]
+          deep=[]
+          for x in top:
+              p=chess.Board(x['fen_before']); actual=chess.Move.from_uci(x['actual_uci'])
+              best=e.analyse(p,chess.engine.Limit(nodes=300000)); bm=best['pv'][0]; bcp=cp(best)
+              forced=e.analyse(p,chess.engine.Limit(nodes=300000),root_moves=[actual]); acp=cp(forced)
+              deep.append({**x,'deep_best_cp':bcp,'deep_actual_cp':acp,'deep_regret_cp':bcp-acp,'deep_best_san':p.san(bm),'deep_best_uci':bm.uci(),'deep_best_pv_san':pv_san(p,best.get('pv',[])),'deep_actual_pv_san':pv_san(p,forced.get('pv',[]))})
+          e.quit()
+          out={'global_game_index':idx,'leviathan_color':'White' if g['a_white'] else 'Black','start_fen':g['fen'],'plies':g['plies'],'termination':g['termination'],'critical':sorted(deep,key=lambda x:x['deep_regret_cp'],reverse=True)}
+          Path(f'corrected-{idx}.json').write_text(json.dumps(out,indent=2)+'\n')
+          print(json.dumps(out,indent=2))
+          PY
+          python3 corrected.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: corrected-${{ matrix.game_index }}
+          path: corrected-${{ matrix.game_index }}.json
+
+  aggregate:
+    needs: analyze-loss
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: corrected-*
+          path: corrected
+          merge-multiple: true
+      - run: |
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          files=sorted(Path('corrected').glob('corrected-*.json'),key=lambda p:int(p.stem.split('-')[1]))
+          data=[json.loads(p.read_text()) for p in files]
+          Path('corrected-loss-regret.json').write_text(json.dumps({'losses':data},indent=2)+'\n')
+          for r in data:
+              print(f"GAME {r['global_game_index']} Leviathan {r['leviathan_color']}")
+              for x in r['critical'][:4]:
+                  print(f"  move {x['move_number']} {x['actual_san']} vs {x['deep_best_san']} | {x['deep_best_cp']/100:+.2f} vs {x['deep_actual_cp']/100:+.2f} | regret {x['deep_regret_cp']/100:+.2f}")
+                  print('    best :',' '.join(x['deep_best_pv_san']))
+                  print('    actual:',' '.join(x['deep_actual_pv_san']))
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: leviathan-v21-corrected-loss-regret
+          path: corrected-loss-regret.json
