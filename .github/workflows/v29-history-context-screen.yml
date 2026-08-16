@@ -1,0 +1,95 @@
+name: Leviathan v2.9 history-context TT screen
+on:
+  push:
+    branches: [leviathan/fundamentals-v2.9-history-context]
+    paths: ['.github/workflows/v29-history-context-screen.yml']
+  workflow_dispatch:
+permissions: {contents: read}
+jobs:
+  screen:
+    runs-on: ubuntu-22.04
+    strategy:
+      fail-fast: false
+      matrix: {profile: [control, cutoffguard, splitkey]}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with: {ref: fbccfb6eb5cd335b1ce8fc5c5efad9e36be4e19d, path: leviathan}
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with: {repository: official-stockfish/Stockfish, ref: 5062aee519a1ba262d472d8ab139851ced56573e, path: stockfish}
+      - name: Apply history-context policy
+        if: matrix.profile != 'control'
+        working-directory: leviathan
+        env: {PROFILE: '${{ matrix.profile }}'}
+        run: |
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+          q=os.environ['PROFILE'];p=Path('src/search.cpp');s=p.read_text()
+          anchor='''    posKey                         = pos.key();\n    auto [ttHit, ttData, ttWriter] = tt.probe(posKey);'''
+          if q=='splitkey':
+            repl='''    posKey = pos.key();\n    // Board-only TT keys conflate graph histories. Keep Stockfish's fast key\n    // normally, but split repeated-line contexts when Fundamentals is active.\n    if (Leviathan::Fundamentals::ready() && pos.has_repeated())\n        posKey ^= Key(0x9E3779B97F4A7C15ULL);\n    auto [ttHit, ttData, ttWriter] = tt.probe(posKey);'''
+          else:
+            repl='''    posKey                         = pos.key();\n    auto [ttHit, ttData, ttWriter] = tt.probe(posKey);'''
+          # only first occurrence = main search. Qsearch is deliberately unchanged in first screen.
+          if s.count(anchor)<1: raise SystemExit('probe anchor')
+          s=s.replace(anchor,repl,1)
+          if q=='cutoffguard':
+            # Compute only when a TT cutoff is otherwise plausible; this keeps the common path cheap.
+            anchor='''        // Partial workaround for the graph history interaction problem\n        // For high rule50 counts don't produce transposition table cutoffs.\n        if (pos.rule50_count() < 96)\n        {'''
+            repl='''        // Leviathan: Stockfish itself labels this a partial graph-history workaround.\n        // In an actually repeated search path, refuse an inexact board-only TT cutoff;\n        // continue searching the node instead. Clean histories retain Stockfish behavior.\n        const bool leviathanHistorySensitive = Leviathan::Fundamentals::ready() && pos.has_repeated();\n        if (pos.rule50_count() < 96 && !leviathanHistorySensitive)\n        {'''
+            if s.count(anchor)!=1: raise SystemExit('cutoff anchor')
+            s=s.replace(anchor,repl,1)
+          p.write_text(s)
+          PY
+          git diff --check
+      - run: python3 -m pip install --disable-pip-version-check 'python-chess>=1.999,<2'
+      - name: Build
+        run: |
+          cd leviathan/src && make net && make clean && make -j2 ARCH=x86-64-avx2 build && mv stockfish leviathan
+          cd ../../stockfish/src && make net && make clean && make -j2 ARCH=x86-64-avx2 build && mv stockfish parent
+      - name: Prepare panel
+        working-directory: leviathan
+        run: |
+          mkdir -p x
+          cat > x/a.json <<'EOF'
+          {"Threads":1,"Hash":64,"Leviathan Fundamentals":true,"Leviathan Fundamentals Authority":2,"Leviathan Forcing Buyback":384,"Leviathan Recapture Buyback":256,"Leviathan Passer Buyback":320,"Leviathan Endgame Buyback":128,"Leviathan Quiet Overdrive":160,"Leviathan Rule50 Pawn Bonus":3072,"Leviathan Zugzwang Guard":true,"Leviathan Sacrifice Rescue":true,"Leviathan Rule50 Pressure":true,"Leviathan Policy":false,"Leviathan MetaSearch":false,"Leviathan Risk":false,"Leviathan Specialist":false,"Leviathan Atlas":false,"Leviathan Search DSL":false}
+          EOF
+          echo '{"Threads":1,"Hash":64}' > x/b.json
+          python3 - <<'PY'
+          import random,chess,chess.engine
+          from pathlib import Path
+          sf=chess.engine.SimpleEngine.popen_uci('../stockfish/src/parent');sf.configure({'Threads':1,'Hash':64});O=[];seen=set()
+          try:
+            for family in range(5):
+              r=random.Random(32452843+family*49999);loc=[]
+              while len(loc)<4:
+                b=chess.Board()
+                for _ in range(r.randint(12,24)):
+                  if b.is_game_over():break
+                  I=sf.analyse(b,chess.engine.Limit(nodes=1800),multipv=min(6,b.legal_moves.count()));I=I if isinstance(I,list) else [I];R=[]
+                  for z in I:
+                    if z.get('pv'):R.append((z['pv'][0],int(z['score'].pov(b.turn).score(mate_score=100000) or 0)))
+                  if not R:break
+                  best=R[0][1];V=[x for x in R if best-x[1]<=100] or R[:1];b.push(r.choices([m for m,_ in V],weights=range(len(V),0,-1),k=1)[0])
+                k=' '.join(b.fen().split()[:4])
+                if b.is_game_over() or k in seen:continue
+                seen.add(k);loc.append(b.fen())
+              O+=loc
+          finally:sf.quit()
+          Path('x/openings.fen').write_text('\n'.join(O)+'\n')
+          PY
+      - name: Gate, bench, games
+        working-directory: leviathan
+        env: {PROFILE: '${{ matrix.profile }}'}
+        run: |
+          ./src/leviathan bench 2>&1 | tee x/off.txt; grep -q 2884956 x/off.txt
+          printf 'setoption name Leviathan Fundamentals value true\nsetoption name Leviathan Fundamentals Authority value 2\nbench\nquit\n' | ./src/leviathan 2>&1 | tee x/on.txt
+          python3 tools/run_match.py --engine-a "$PWD/src/leviathan" --engine-b "$GITHUB_WORKSPACE/stockfish/src/parent" --options-a x/a.json --options-b x/b.json --openings x/openings.fen --games 40 --nodes-per-move 22000 --max-plies 240 --out x/nodes.json
+          python3 tools/run_match.py --engine-a "$PWD/src/leviathan" --engine-b "$GITHUB_WORKSPACE/stockfish/src/parent" --options-a x/a.json --options-b x/b.json --openings x/openings.fen --games 40 --movetime-ms 100 --max-plies 240 --out x/time.json
+          python3 - <<'PY'
+          import json,os,re
+          from pathlib import Path
+          n=json.load(open('x/nodes.json'))['summary'];t=json.load(open('x/time.json'))['summary'];off=Path('x/off.txt').read_text();on=Path('x/on.txt').read_text();get=lambda p,s:int(re.findall(p,s)[-1]);R={'profile':os.environ['PROFILE'],'equal_node':n,'fixed_time':t,'off_nodes':get(r'Nodes searched\s*:\s*(\d+)',off),'active_nodes':get(r'Nodes searched\s*:\s*(\d+)',on),'off_ms':get(r'Total time \(ms\)\s*:\s*(\d+)',off),'active_ms':get(r'Total time \(ms\)\s*:\s*(\d+)',on)};Path('x/report.json').write_text(json.dumps(R,indent=2));print(json.dumps(R,indent=2))
+          PY
+      - uses: actions/upload-artifact@v4
+        with: {name: 'v29-${{ matrix.profile }}', path: 'leviathan/x/report.json'}
