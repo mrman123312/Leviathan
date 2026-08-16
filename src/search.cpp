@@ -639,6 +639,31 @@ bool Search::Worker::iterative_deepening() {
               rootDepth, rootDepth - lastBestMoveDepth, rootMoves[0].previousScore, bestValue,
               totBestMoveChanges, int(nodesEffort), rootMoves.size(), is_decisive(bestValue));
 
+            // Leviathan strength v6.6 - Root Challenger Certification. A stable
+            // leader is not the same as a certified leader when another root move
+            // remains close. Use the rolling scores already maintained for every
+            // root move to spend more of the existing clock budget on ambiguous
+            // decisions. The normal maximum-time clamp below remains authoritative.
+            if (rootDepth >= 6 && rootMoves.size() > 1 && !is_decisive(bestValue)
+                && rootMoves[0].averageScore != -VALUE_INFINITE)
+            {
+                Value rivalAverage = -VALUE_INFINITE;
+                const usize rivalLimit = std::min(rootMoves.size(), usize(6));
+                for (usize i = 1; i < rivalLimit; ++i)
+                    if (rootMoves[i].averageScore != -VALUE_INFINITE)
+                        rivalAverage = std::max(rivalAverage, rootMoves[i].averageScore);
+
+                if (rivalAverage != -VALUE_INFINITE)
+                {
+                    const int rivalGap = std::max(0, int(rootMoves[0].averageScore - rivalAverage));
+                    const double certification = rivalGap <= 12 ? 1.22
+                                               : rivalGap <= 32 ? 1.14
+                                               : rivalGap <= 64 ? 1.07
+                                                                : 1.0;
+                    totalTime *= certification;
+                }
+            }
+
             if (rootMoves.size() == 1)
                 // Cap used time to 0.5s for a better viewer experience
                 totalTime = std::min(500.0, totalTime);
