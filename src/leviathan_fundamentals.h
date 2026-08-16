@@ -43,10 +43,11 @@ struct State {
     }
 };
 
-inline State& state() {
-    static State s;
-    return s;
-}
+// The engine constructs and configures this process-wide state before search.
+// An inline variable avoids the thread-safe initialization-guard branch that a
+// function-local non-trivial static otherwise places on every hot state() call.
+inline State globalState;
+inline State& state() { return globalState; }
 
 inline void set_enabled(bool v) { state().enabled = v; }
 inline void set_authority(int v) { state().authority = std::clamp(v, 0, 2); }
