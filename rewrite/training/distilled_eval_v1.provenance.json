@@ -1,0 +1,78 @@
+{
+  "schema_version": 1,
+  "artifact_id": "leviathan-distilled-v1",
+  "artifact_type": "teacher_distilled_parameters",
+  "reuse_mode": "teacher_distillation_no_source_copy",
+  "teacher": {
+    "engine": "official-stockfish/Stockfish",
+    "tag": "sf_18",
+    "commit": "cb3d4ee9b47d0c5aae855b12379378ea1439675c",
+    "label_depth": 5,
+    "generation_depth": 3,
+    "network_context": [
+      "nn-c288c895ea92.nnue",
+      "nn-37f18f62d772.nnue"
+    ]
+  },
+  "corpus": {
+    "generator": "stochastic Stockfish MultiPV-guided legal self-play",
+    "seed": 8910,
+    "candidate_rank_weights": [0.58, 0.25, 0.12, 0.05],
+    "training_positions": 2400,
+    "holdout_positions": 600,
+    "max_abs_teacher_cp": 1200,
+    "mate_positions_excluded": true
+  },
+  "model": {
+    "form": "bounded linear residual correction over Leviathan baseline",
+    "features": [
+      "symmetric piece-square occupancy 6x64",
+      "bishop pair",
+      "doubled pawns",
+      "isolated pawns",
+      "passed pawns",
+      "castling rights",
+      "king shield",
+      "tempo"
+    ],
+    "ridge": 120.0,
+    "integer_parameter_bounds": {
+      "psqt": [-180, 180],
+      "extras": [-240, 240]
+    },
+    "max_total_correction_cp": 600,
+    "weights_file": "rewrite/src/distilled_eval_weights.h"
+  },
+  "holdout_evidence": {
+    "baseline": {
+      "mae_cp": 173.28666666666666,
+      "rmse_cp": 264.55768747099376,
+      "correlation": 0.8331719063304915
+    },
+    "distilled_integer": {
+      "mae_cp": 158.285,
+      "rmse_cp": 242.83702010470589,
+      "correlation": 0.8464686267896901
+    },
+    "mae_improvement_fraction": 0.0865713846035471,
+    "accepted": true,
+    "acceptance_rule": "integer holdout MAE must beat baseline by at least 2 percent"
+  },
+  "failed_predecessor": {
+    "description": "random-legal-position direct linear fit",
+    "baseline_mae_cp": 936.205,
+    "candidate_mae_cp": 1194.1366666666668,
+    "accepted": false,
+    "lesson": "unrealistic random-position distribution and direct value replacement degraded held-out generalization; switched to plausible guided positions and residual learning"
+  },
+  "workflow_artifact": {
+    "github_actions_run": 31979751612,
+    "artifact_id": 9272031803,
+    "sha256": "dcc722039e064c23c3fb272142388cb51524d88e91d90ea5946aa4de690d38d3"
+  },
+  "limitations": [
+    "This is not NNUE and does not reproduce Stockfish training.",
+    "Improved agreement with a depth-5 Stockfish teacher is not itself an Elo result.",
+    "The one requested Stockfish match predates this evaluator promotion; no second match was run automatically."
+  ]
+}
