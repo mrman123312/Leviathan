@@ -1,0 +1,58 @@
+name: Apply strength v6 proof completion
+
+on:
+  push:
+    branches:
+      - leviathan/strength-v6-proof-obligation
+    paths:
+      - '.github/workflows/apply-strength-v6-proof-completion.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout strength v6
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: leviathan/strength-v6-proof-obligation
+
+      - name: Complete forcing proof obligations
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('src/search.cpp')
+          s = p.read_text()
+
+          old = "                    if (futilityValue <= alpha)\n                        continue;"
+          new = "                    if (futilityValue <= alpha\n                        && !(leviathanProofDebt >= 3 && moveCount <= 6))\n                        continue;"
+          if s.count(old) != 1:
+              raise SystemExit(f'capture futility anchor count {s.count(old)}')
+          s = s.replace(old, new, 1)
+
+          old = "                if ((alpha >= VALUE_DRAW || pos.non_pawn_material(us) != PieceValue[movedPiece])\n                    && !pos.see_ge(move, -margin)\n                    && !Leviathan::Fundamentals::rescue_bad_see(\n                      pos, move, prevSq, capture, givesCheck))\n                    continue;"
+          new = "                if ((alpha >= VALUE_DRAW || pos.non_pawn_material(us) != PieceValue[movedPiece])\n                    && !(leviathanProofDebt >= 3 && moveCount <= 6)\n                    && !pos.see_ge(move, -margin)\n                    && !Leviathan::Fundamentals::rescue_bad_see(\n                      pos, move, prevSq, capture, givesCheck))\n                    continue;"
+          if s.count(old) != 1:
+              raise SystemExit(f'capture SEE anchor count {s.count(old)}')
+          s = s.replace(old, new, 1)
+
+          old = "                leviathanResearched = true;\n                value = -search<NonPV>(pos, ss + 1, -(alpha + 1), -alpha, newDepth, !cutNode);\n\n                if (value > alpha)\n                    update_continuation_histories(ss, movedPiece, move.to_sq(), 1334);"
+          new = "                leviathanResearched = true;\n                value = -search<NonPV>(pos, ss + 1, -(alpha + 1), -alpha, newDepth, !cutNode);\n\n                // A rescued PV false-negative is a concrete counterexample to the\n                // reduction model. Do not merely restore baseline depth: give the\n                // subsequent PV proof one extra ply to resolve the contradiction.\n                if (PvNode && leviathanReducedValue <= alpha && value > alpha\n                    && depth >= 7 && newDepth < depth)\n                    ++newDepth;\n\n                if (value > alpha)\n                    update_continuation_histories(ss, movedPiece, move.to_sq(), 1334);"
+          if s.count(old) != 1:
+              raise SystemExit(f'PV completion anchor count {s.count(old)}')
+          s = s.replace(old, new, 1)
+
+          p.write_text(s)
+          PY
+          git diff --check
+          git diff -- src/search.cpp
+
+      - name: Commit proof completion
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add src/search.cpp
+          git commit -m 'Strength v6.3: complete high-debt forcing proofs'
+          git push origin HEAD:leviathan/strength-v6-proof-obligation
