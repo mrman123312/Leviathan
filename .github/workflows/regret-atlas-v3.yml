@@ -1,0 +1,45 @@
+name: Leviathan regret atlas v3
+
+on:
+  push:
+    branches: [leviathan/speed-v3-profile]
+    paths: ['.github/workflows/regret-atlas-v3.yml']
+  workflow_dispatch:
+
+permissions: {contents: read}
+
+jobs:
+  atlas:
+    runs-on: ubuntu-22.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: dev
+            seed: 70031
+          - name: holdout
+            seed: 99061
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with: {ref: leviathan/speed-v3-profile, path: leviathan}
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with: {repository: official-stockfish/Stockfish, ref: 5062aee519a1ba262d472d8ab139851ced56573e, path: stockfish}
+      - run: python3 -m pip install --disable-pip-version-check 'python-chess>=1.999,<2'
+      - name: Build v2.1.2-equivalent Leviathan and oracle
+        run: |
+          cd leviathan/src && make net && make -j2 ARCH=x86-64-avx2 build && mv stockfish leviathan
+          cd ../../stockfish/src && make net && make -j2 ARCH=x86-64-avx2 build && mv stockfish stockfish
+      - name: Build regret atlas
+        working-directory: leviathan
+        run: |
+          PYTHONPATH=. python3 tools/regret_atlas.py \
+            --leviathan "$GITHUB_WORKSPACE/leviathan/src/leviathan" \
+            --stockfish "$GITHUB_WORKSPACE/stockfish/src/stockfish" \
+            --positions 24 --seed ${{ matrix.seed }} --shallow 15000 --deep 250000 \
+            --out regret-${{ matrix.name }}.json | tee regret-${{ matrix.name }}.log
+      - uses: actions/upload-artifact@v4
+        with:
+          name: regret-atlas-${{ matrix.name }}
+          path: |
+            leviathan/regret-${{ matrix.name }}.json
+            leviathan/regret-${{ matrix.name }}.log
