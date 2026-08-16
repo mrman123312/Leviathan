@@ -1,0 +1,186 @@
+name: Leviathan Plyless v1 proven-width screen
+
+on:
+  push:
+    branches: [leviathan/plyless-v1-proven-width]
+    paths: ['.github/workflows/plyless-v1-proven-width-screen.yml']
+  workflow_dispatch:
+
+permissions: {contents: read}
+
+jobs:
+  screen:
+    runs-on: ubuntu-22.04
+    strategy:
+      fail-fast: false
+      matrix:
+        profile: [control, w1d4, w1d6, w1noncut, w1context]
+
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with: {ref: fbccfb6eb5cd335b1ce8fc5c5efad9e36be4e19d, path: leviathan}
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with: {repository: official-stockfish/Stockfish, ref: 5062aee519a1ba262d472d8ab139851ced56573e, path: stockfish}
+
+      - name: Apply proven-width sidecar allocator
+        if: matrix.profile != 'control'
+        working-directory: leviathan
+        env: {PROFILE: '${{ matrix.profile }}'}
+        run: |
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+          q=os.environ['PROFILE']
+          maxd = 4 if q == 'w1d4' else 6
+          require_noncut = q == 'w1noncut'
+          context_veto = q == 'w1context'
+
+          p=Path('src/search.cpp'); s=p.read_text()
+
+          # Worker-local experimental sidecar. Exact rule50 and repetition-state bits
+          # are part of the key so path-sensitive chess semantics are not conflated.
+          a='''namespace {\n\nconstexpr u64 NODES_LIMIT_OUTPUT'''
+          b='''namespace {\n\nstruct LVDecisionWidthCache {\n    struct Entry { Key key=0; unsigned char width=255; unsigned char depth=0; unsigned char flags=0; unsigned char pad=0; };\n    static constexpr usize Size = 1u << 16;\n    std::array<Entry, Size> table{};\n    Entry* probe(Key k) { return &table[usize((k ^ (k >> 32) ^ (k >> 17)) & (Size - 1))]; }\n};\nthread_local LVDecisionWidthCache lvDecisionWidthCache;\ninline Key lvDecisionKey(const Position& pos) {\n    Key k = pos.key() ^ Key(u64(pos.rule50_count()) * 0xD6E8FEB86659FD93ULL);\n    if (pos.has_repeated()) k ^= Key(0xA0761D6478BD642FULL);\n    return k ? k : Key(1);\n}\n\nconstexpr u64 NODES_LIMIT_OUTPUT'''
+          if s.count(a)!=1: raise SystemExit('namespace anchor')
+          s=s.replace(a,b,1)
+
+          a='''    bool  capture, ttCapture;\n    int   priorReduction;'''
+          b='''    bool  capture, ttCapture;\n    const int lvEntryDepth = int(depth);\n    int lvSearchedCount = 0;\n    bool lvPriorNarrow = false;\n    bool lvPriorNonCut = false;\n    Key lvWidthKey = 0;\n    int   priorReduction;'''
+          if s.count(a)!=1: raise SystemExit('locals anchor')
+          s=s.replace(a,b,1)
+
+          # Look up prior search shape after the canonical key is known.
+          a='''    excludedMove                   = ss->excludedMove;\n    posKey                         = pos.key();\n    auto [ttHit, ttData, ttWriter] = tt.probe(posKey);'''
+          b=f'''    excludedMove                   = ss->excludedMove;\n    posKey                         = pos.key();\n    if (Leviathan::Fundamentals::ready() && !excludedMove && lvEntryDepth >= 1 && lvEntryDepth <= {maxd})\n    {{\n        lvWidthKey = lvDecisionKey(pos);\n        const auto* e = lvDecisionWidthCache.probe(lvWidthKey);\n        if (e->key == lvWidthKey && int(e->depth) + 1 >= lvEntryDepth)\n        {{\n            lvPriorNarrow = e->width <= 1;\n            lvPriorNonCut = (e->flags & 1) != 0;\n        }}\n    }}\n    auto [ttHit, ttData, ttWriter] = tt.probe(posKey);'''
+          if s.count(a)!=1: raise SystemExit('lookup anchor')
+          s=s.replace(a,b,1)
+
+          # After static evaluation exists, construct the current trust gate. We do not
+          # use color; context/uncertainty invalidates compression symmetrically.
+          marker='''    // Step 12. A small Probcut idea'''
+          if require_noncut:
+              trust='lvPriorNarrow && lvPriorNonCut'
+          elif context_veto:
+              trust='lvPriorNarrow && !pos.has_repeated() && pos.rule50_count() < 70 && !ss->inCheck && !is_decisive(eval)'
+          else:
+              trust='lvPriorNarrow'
+          replacement=f'''    const bool lvUseDecisionCredit = Leviathan::Fundamentals::ready() && ({trust});\n\n    // Step 12. A small Probcut idea'''
+          if s.count(marker)!=1: raise SystemExit('trust marker')
+          s=s.replace(marker,replacement,1)
+
+          # Give only the FIRST recursively searched child one additional physical ply.
+          # No rival is removed. If another move survives Stockfish's pruning it is
+          # searched normally and can overturn the cached narrowness assumption.
+          a='''        u64 nodeCount = rootNode ? u64(nodes) : 0;\n        const u64 leviathanParentKey = u64(pos.key());'''
+          b='''        if (lvUseDecisionCredit && lvSearchedCount == 0 && extension < 1\n            && ss->ply < MAX_PLY - 2)\n            extension = 1;\n\n        if (lvEntryDepth >= 1 && lvEntryDepth <= 6)\n            ++lvSearchedCount;\n\n        u64 nodeCount = rootNode ? u64(nodes) : 0;\n        const u64 leviathanParentKey = u64(pos.key());'''
+          if s.count(a)!=1: raise SystemExit('credit anchor')
+          s=s.replace(a,b,1)
+
+          # Persist the shape only after a node completes normally. A non-cut flag lets
+          # one profile require evidence from nodes that did not terminate by beta cutoff.
+          a='''    assert(bestValue > -VALUE_INFINITE && bestValue < VALUE_INFINITE);\n\n    return bestValue;\n}\n\n\n// Quiescence search function'''
+          b='''    assert(bestValue > -VALUE_INFINITE && bestValue < VALUE_INFINITE);\n\n    if (Leviathan::Fundamentals::ready() && !excludedMove && lvEntryDepth >= 1 && lvEntryDepth <= 6)\n    {\n        if (!lvWidthKey) lvWidthKey = lvDecisionKey(pos);\n        auto* e = lvDecisionWidthCache.probe(lvWidthKey);\n        if (e->key != lvWidthKey || lvEntryDepth >= int(e->depth))\n        {\n            e->key = lvWidthKey;\n            e->width = static_cast<unsigned char>(std::min(lvSearchedCount, 254));\n            e->depth = static_cast<unsigned char>(std::min(lvEntryDepth, 255));\n            e->flags = bestValue < beta ? 1 : 0;\n        }\n    }\n\n    return bestValue;\n}\n\n\n// Quiescence search function'''
+          if s.count(a)!=1: raise SystemExit('store anchor')
+          s=s.replace(a,b,1)
+
+          p.write_text(s)
+          PY
+          git diff --check
+
+      - run: python3 -m pip install --disable-pip-version-check 'python-chess>=1.999,<2'
+
+      - name: Build equal AVX2 engines
+        run: |
+          cd leviathan/src && make net && make clean && make -j2 ARCH=x86-64-avx2 build && mv stockfish leviathan
+          cd ../../stockfish/src && make net && make clean && make -j2 ARCH=x86-64-avx2 build && mv stockfish parent
+
+      - name: Configure isolated strength parent and common openings
+        working-directory: leviathan
+        run: |
+          mkdir -p x
+          cat > x/a.json <<'EOF'
+          {"Threads":1,"Hash":64,"Leviathan Fundamentals":true,"Leviathan Fundamentals Authority":2,"Leviathan Forcing Buyback":384,"Leviathan Recapture Buyback":256,"Leviathan Passer Buyback":320,"Leviathan Endgame Buyback":128,"Leviathan Quiet Overdrive":160,"Leviathan Rule50 Pawn Bonus":3072,"Leviathan Zugzwang Guard":true,"Leviathan Sacrifice Rescue":true,"Leviathan Rule50 Pressure":true,"Leviathan Policy":false,"Leviathan MetaSearch":false,"Leviathan Risk":false,"Leviathan Specialist":false,"Leviathan Atlas":false,"Leviathan Search DSL":false}
+          EOF
+          echo '{"Threads":1,"Hash":64}' > x/b.json
+          python3 - <<'PY'
+          import random,chess,chess.engine
+          from pathlib import Path
+          sf=chess.engine.SimpleEngine.popen_uci('../stockfish/src/parent'); sf.configure({'Threads':1,'Hash':64}); out=[]; seen=set()
+          try:
+            for family in range(6):
+              r=random.Random(86028121 + family*15485863); loc=[]
+              while len(loc)<5:
+                b=chess.Board()
+                for _ in range(r.randint(10,24)):
+                  if b.is_game_over(): break
+                  z=sf.analyse(b,chess.engine.Limit(nodes=1900),multipv=min(7,b.legal_moves.count())); z=z if isinstance(z,list) else [z]; ranked=[]
+                  for i in z:
+                    if i.get('pv'): ranked.append((i['pv'][0],int(i['score'].pov(b.turn).score(mate_score=100000) or 0)))
+                  if not ranked: break
+                  best=ranked[0][1]; viable=[x for x in ranked if best-x[1] <= 125] or ranked[:1]
+                  b.push(r.choices([m for m,_ in viable],weights=range(len(viable),0,-1),k=1)[0])
+                k=' '.join(b.fen().split()[:4])
+                if b.is_game_over() or k in seen: continue
+                seen.add(k); loc.append(b.fen())
+              out += loc
+          finally: sf.quit()
+          Path('x/openings.fen').write_text('\n'.join(out)+'\n')
+          PY
+
+      - name: Exact-off containment and active bench
+        working-directory: leviathan/src
+        env: {PROFILE: '${{ matrix.profile }}'}
+        run: |
+          ./leviathan bench 2>&1 | tee ../x/off-${PROFILE}.txt
+          grep -q 'Nodes searched  : 2884956' ../x/off-${PROFILE}.txt
+          printf 'setoption name Leviathan Fundamentals value true\nsetoption name Leviathan Fundamentals Authority value 2\nbench\nquit\n' | ./leviathan 2>&1 | tee ../x/on-${PROFILE}.txt
+
+      - name: 60 equal-node games
+        working-directory: leviathan
+        env: {PROFILE: '${{ matrix.profile }}'}
+        run: |
+          python3 tools/run_match.py --engine-a "$PWD/src/leviathan" --engine-b "$GITHUB_WORKSPACE/stockfish/src/parent" --options-a x/a.json --options-b x/b.json --openings x/openings.fen --games 60 --nodes-per-move 24000 --max-plies 246 --out x/nodes-${PROFILE}.json
+
+      - name: 60 fixed-time games
+        working-directory: leviathan
+        env: {PROFILE: '${{ matrix.profile }}'}
+        run: |
+          python3 tools/run_match.py --engine-a "$PWD/src/leviathan" --engine-b "$GITHUB_WORKSPACE/stockfish/src/parent" --options-a x/a.json --options-b x/b.json --openings x/openings.fen --games 60 --movetime-ms 100 --max-plies 246 --out x/time-${PROFILE}.json
+
+      - name: Equal-node horizon panel
+        working-directory: leviathan
+        env: {PROFILE: '${{ matrix.profile }}'}
+        run: |
+          python3 - <<'PY'
+          import chess,chess.engine,json,statistics,os
+          fens=[x.strip() for x in open('x/openings.fen') if x.strip()]
+          def run(path,opts):
+            e=chess.engine.SimpleEngine.popen_uci(path); e.configure(opts); out=[]
+            try:
+              for fen in fens:
+                r=e.analyse(chess.Board(fen),chess.engine.Limit(nodes=50000)); out.append({'depth':r.get('depth',0),'seldepth':r.get('seldepth',0),'pvlen':len(r.get('pv',[]))})
+            finally:e.quit()
+            return out
+          a=run('./src/leviathan',json.load(open('x/a.json'))); b=run('../stockfish/src/parent',json.load(open('x/b.json')))
+          R={'profile':os.environ['PROFILE'],'candidate_mean_seldepth':statistics.mean(x['seldepth'] for x in a),'parent_mean_seldepth':statistics.mean(x['seldepth'] for x in b),'candidate_median_seldepth':statistics.median(x['seldepth'] for x in a),'parent_median_seldepth':statistics.median(x['seldepth'] for x in b)}
+          open(f'x/horizon-{os.environ["PROFILE"]}.json','w').write(json.dumps(R,indent=2)+'\n'); print(json.dumps(R,indent=2))
+          PY
+
+      - name: Summarize
+        working-directory: leviathan
+        env: {PROFILE: '${{ matrix.profile }}'}
+        run: |
+          python3 - <<'PY'
+          import json,os,re
+          from pathlib import Path
+          q=os.environ['PROFILE']; n=json.load(open(f'x/nodes-{q}.json'))['summary']; t=json.load(open(f'x/time-{q}.json'))['summary']; h=json.load(open(f'x/horizon-{q}.json')); off=Path(f'x/off-{q}.txt').read_text(); on=Path(f'x/on-{q}.txt').read_text(); g=lambda p,s:int(re.findall(p,s)[-1]); R={'profile':q,'equal_node':n,'fixed_time':t,'active_bench_nodes':g(r'Nodes searched\s*:\s*(\d+)',on),'active_bench_ms':g(r'Total time \(ms\)\s*:\s*(\d+)',on),'off_bench_ms':g(r'Total time \(ms\)\s*:\s*(\d+)',off),**h}; Path(f'x/report-{q}.json').write_text(json.dumps(R,indent=2)+'\n'); print(json.dumps(R,indent=2))
+          PY
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: plyless-v1-${{ matrix.profile }}
+          path: |
+            leviathan/x/report-${{ matrix.profile }}.json
+            leviathan/x/nodes-${{ matrix.profile }}.json
+            leviathan/x/time-${{ matrix.profile }}.json
+            leviathan/x/horizon-${{ matrix.profile }}.json
