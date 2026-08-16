@@ -915,7 +915,8 @@ Value Search::Worker::search(
         depth--;
 
     // At non-PV nodes we check for an early TT cutoff
-    if (!PvNode && !excludedMove && ttData.depth > depth - (ttData.value <= beta)
+    if (!PvNode && !excludedMove && leviathanProofDebt < 2
+        && ttData.depth > depth - (ttData.value <= beta)
         && is_valid(ttData.value)  // Can happen when !ttHit or when access race in probe()
         && (ttData.bound & (ttData.value >= beta ? BOUND_LOWER : BOUND_UPPER))
         && (cutNode == (ttData.value >= beta) || depth > 4))
@@ -1082,7 +1083,11 @@ Value Search::Worker::search(
         // Do not return unproven mate or TB scores
         if (nullValue >= beta && !is_win(nullValue))
         {
-            if (nmpMinPly || depth < 16)
+            // Under contradictory evidence, a null-move success is only a
+            // hypothesis. At moderate/deep nodes require the existing verification
+            // search instead of granting immediate cutoff authority.
+            const bool leviathanVerifyNull = leviathanProofDebt >= 2 && depth >= 10;
+            if (nmpMinPly || (depth < 16 && !leviathanVerifyNull))
                 return nullValue;
 
             assert(!nmpMinPly);  // Recursive verification is not allowed
@@ -1145,7 +1150,7 @@ Value Search::Worker::search(
 
             undo_move(pos, move);
 
-            if (value >= probCutBeta)
+            if (value >= probCutBeta && leviathanProofDebt < 3)
             {
                 // Save ProbCut data into transposition table
                 ttWriter.write(posKey, value_to_tt(value, ss->ply), ss->ttPv, BOUND_LOWER,
