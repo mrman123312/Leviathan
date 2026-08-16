@@ -105,6 +105,39 @@ inline bool recapture(Move move, Square prevSq, bool capture) {
     return capture && prevSq != SQ_NONE && move.to_sq() == prevSq;
 }
 
+struct MoveFacts {
+    bool active         = false;
+    bool promotion      = false;
+    bool advancedPawn   = false;
+    bool isRecapture    = false;
+    bool givesCheck     = false;
+    bool capture        = false;
+    bool protectedScope = false;
+};
+
+inline MoveFacts classify_move(const Position& pos,
+                               Move move,
+                               Square prevSq,
+                               bool capture,
+                               bool givesCheck,
+                               bool active) {
+    MoveFacts facts;
+    facts.active      = active;
+    facts.promotion   = move.type_of() == PROMOTION;
+    facts.isRecapture = recapture(move, prevSq, capture);
+    facts.givesCheck  = givesCheck;
+    facts.capture     = capture;
+
+    if (active)
+    {
+        facts.advancedPawn = facts.promotion || advanced_pawn_move(pos, move);
+        facts.protectedScope =
+          givesCheck || facts.promotion || facts.advancedPawn || facts.isRecapture;
+    }
+
+    return facts;
+}
+
 inline bool zeroing_quiet(const Position& pos, Move move, bool capture) {
     return capture || pawn_move(pos, move);
 }
@@ -123,52 +156,48 @@ inline bool protected_scope_move(const Position& pos,
 
 // Soundness policy: this does not claim a move is good. It only says the move
 // belongs to a class where pruning mistakes are unusually expensive.
-inline bool rescue_bad_see(const Position& pos,
-                           Move move,
-                           Square prevSq,
-                           bool capture,
-                           bool givesCheck) {
-    if (!ready() || !state().sacrificeRescue)
+inline bool rescue_bad_see(const Position& pos, Move move, const MoveFacts& facts) {
+    if (!facts.active || !state().sacrificeRescue)
         return false;
 
-    if (move.type_of() == PROMOTION)
+    if (facts.promotion)
         return true;
 
     // v2.1: a recapture is not automatically worthy of rescue. Keep only
     // near-balanced recaptures; obviously losing exchanges should still be
     // allowed to die in SEE pruning instead of inflating the tree.
-    if (recapture(move, prevSq, capture))
+    if (facts.isRecapture)
         return pos.see_ge(move, -300);
 
     // Checking sacrifices retain the broad rescue path. They are rare and are
     // exactly where a purely material SEE gate can miss forced tactical ideas.
-    return givesCheck && !pos.see_ge(move, 0);
+    return facts.givesCheck && !pos.see_ge(move, 0);
 }
 
 inline int lmr_adjustment(const Position& pos,
-                          Move move,
-                          Square prevSq,
                           Depth depth,
                           int moveCount,
                           bool pvNode,
-                          bool capture,
-                          bool givesCheck) {
-    if (!ready())
+                          const MoveFacts& facts) {
+    if (!facts.active)
         return 0;
 
+    const State& s = state();
     int delta = 0;
 
-    if (givesCheck)
-        delta -= state().forcingBuyback;
-    if (recapture(move, prevSq, capture))
-        delta -= state().recaptureBuyback;
-    if (move.type_of() == PROMOTION || advanced_pawn_move(pos, move))
-        delta -= state().passerBuyback;
+    if (facts.givesCheck)
+        delta -= s.forcingBuyback;
+    if (facts.isRecapture)
+        delta -= s.recaptureBuyback;
+    if (facts.promotion || facts.advancedPawn)
+        delta -= s.passerBuyback;
+
+    const bool sparse = low_material(pos);
 
     // v2.1: blanket endgame buyback made every sparse branch expensive. Keep
     // the extra protection concentrated on early candidates and forcing moves.
-    if (low_material(pos) && (moveCount <= 4 || capture || givesCheck))
-        delta -= state().endgameBuyback;
+    if (sparse && (moveCount <= 4 || facts.capture || facts.givesCheck))
+        delta -= s.endgameBuyback;
 
     // v2.1.2: the v2.1 post-move identity bug accidentally let ordinary pawn
     // moves participate in the speed budget, and the 100-game phase-fix showed
@@ -176,13 +205,13 @@ inline int lmr_adjustment(const Position& pos,
     // that useful selectivity, but now classify the mover correctly so sixth-
     // rank/seventh-rank pawn moves and promotions are explicitly protected.
     // This creates a real irreversibility gradient instead of all-pawn/all-safe.
-    if (state().authority >= 2 && depth >= 5 && moveCount >= 6 && !pvNode && !capture
-        && !givesCheck && move.type_of() != PROMOTION && !advanced_pawn_move(pos, move)
-        && pos.rule50_count() < 70 && !low_material(pos))
+    if (s.authority >= 2 && depth >= 5 && moveCount >= 6 && !pvNode && !facts.capture
+        && !facts.givesCheck && !facts.promotion && !facts.advancedPawn && pos.rule50_count() < 70
+        && !sparse)
     {
         const int lateness   = std::min(moveCount - 5, 8);
         const int depthScale = std::min(int(depth), 10) + 2;
-        delta += state().quietOverdrive * lateness * depthScale / 48;
+        delta += s.quietOverdrive * lateness * depthScale / 48;
     }
 
     return std::clamp(delta, -2048, 768);
