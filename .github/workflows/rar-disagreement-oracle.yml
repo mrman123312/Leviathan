@@ -1,0 +1,42 @@
+name: Leviathan RAR disagreement oracle
+
+on:
+  push:
+    branches: [leviathan/strength-v3-rar-pv]
+    paths: ['.github/workflows/rar-disagreement-oracle.yml']
+  workflow_dispatch:
+
+permissions: {contents: read}
+
+jobs:
+  disagreement:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with: {ref: leviathan/strength-v3-rar-pv, path: candidate}
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with: {ref: fbccfb6eb5cd335b1ce8fc5c5efad9e36be4e19d, path: parent}
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with: {repository: official-stockfish/Stockfish, ref: 5062aee519a1ba262d472d8ab139851ced56573e, path: oracle}
+      - run: python3 -m pip install --disable-pip-version-check 'python-chess>=1.999,<2'
+      - name: Build three exact engines
+        run: |
+          cd candidate/src && make net && make -j2 ARCH=x86-64-avx2 build && mv stockfish candidate
+          cd ../../parent/src && make net && make -j2 ARCH=x86-64-avx2 build && mv stockfish parent
+          cd ../../oracle/src && make net && make -j2 ARCH=x86-64-avx2 build && mv stockfish oracle
+      - name: Mine 30 actual candidate-parent disagreements
+        working-directory: candidate
+        run: |
+          PYTHONPATH=. python3 tools/disagreement_oracle.py \
+            --candidate "$GITHUB_WORKSPACE/candidate/src/candidate" \
+            --parent "$GITHUB_WORKSPACE/parent/src/parent" \
+            --oracle "$GITHUB_WORKSPACE/oracle/src/oracle" \
+            --disagreements 30 --max-positions 1200 --seed 550031 \
+            --shallow 18000 --deep 300000 --out disagreement.json | tee disagreement.log
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rar-disagreement-oracle
+          path: |
+            candidate/disagreement.json
+            candidate/disagreement.log
