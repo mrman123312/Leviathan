@@ -1,0 +1,48 @@
+name: Leviathan NNUE common-shape paired speed
+on:
+  push:
+    branches: [leviathan/speed-v3-nnue-shapes]
+    paths: ['.github/workflows/speed-v3-nnue-shape-paired.yml']
+  workflow_dispatch:
+permissions: {contents: read}
+jobs:
+  paired:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with: {repository: official-stockfish/Stockfish, ref: 5062aee519a1ba262d472d8ab139851ced56573e, path: base}
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with: {repository: official-stockfish/Stockfish, ref: 5062aee519a1ba262d472d8ab139851ced56573e, path: candidate}
+      - name: Apply exact shape specialization
+        working-directory: candidate
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path('src/nnue/nnue_accumulator.cpp');s=p.read_text()
+          a='''        apply_psq_features<-1>(j, acc, psqRemoved, featureTransformer);\n        apply_psq_features<+1>(j, acc, psqAdded, featureTransformer);\n\n        apply_threat_features<-1>(j, acc, thrRemoved, featureTransformer);'''
+          b='''        if (psqAdded.ssize() == 1 && psqRemoved.ssize() == 1)\n        {\n            const auto* rem = reinterpret_cast<const vec_t*>(&featureTransformer.weights[psqRemoved[0] * Dimensions + tileOff]);\n            const auto* add = reinterpret_cast<const vec_t*>(&featureTransformer.weights[psqAdded[0] * Dimensions + tileOff]);\n            for (IndexType k = 0; k < Tiling::NumRegs; ++k) { acc[k] = vec_sub_16(acc[k], rem[k]); acc[k] = vec_add_16(acc[k], add[k]); }\n        }\n        else if (psqAdded.ssize() == 1 && psqRemoved.ssize() == 2)\n        {\n            const auto* rem0 = reinterpret_cast<const vec_t*>(&featureTransformer.weights[psqRemoved[0] * Dimensions + tileOff]);\n            const auto* rem1 = reinterpret_cast<const vec_t*>(&featureTransformer.weights[psqRemoved[1] * Dimensions + tileOff]);\n            const auto* add = reinterpret_cast<const vec_t*>(&featureTransformer.weights[psqAdded[0] * Dimensions + tileOff]);\n            for (IndexType k = 0; k < Tiling::NumRegs; ++k) { acc[k] = vec_sub_16(acc[k], rem0[k]); acc[k] = vec_sub_16(acc[k], rem1[k]); acc[k] = vec_add_16(acc[k], add[k]); }\n        }\n        else { apply_psq_features<-1>(j, acc, psqRemoved, featureTransformer); apply_psq_features<+1>(j, acc, psqAdded, featureTransformer); }\n\n        apply_threat_features<-1>(j, acc, thrRemoved, featureTransformer);'''
+          if s.count(a)!=1: raise SystemExit('anchor')
+          p.write_text(s.replace(a,b,1))
+          PY
+      - name: Build same flags
+        run: |
+          cd base/src && make net && make clean && make -j2 ARCH=x86-64-avx2 build && mv stockfish basefish
+          cd ../../candidate/src && make net && make clean && make -j2 ARCH=x86-64-avx2 build && mv stockfish candidatefish
+      - name: Exact signature and 31 interleaved pairs
+        run: |
+          python3 - <<'PY' | tee paired.json
+          import subprocess,re,json,statistics
+          def run(path):
+            p=subprocess.run([path],input='bench\nquit\n',text=True,capture_output=True,check=True);o=p.stdout+p.stderr
+            return {'ms':int(re.findall(r'Total time \(ms\)\s*:\s*(\d+)',o)[-1]),'nodes':int(re.findall(r'Nodes searched\s*:\s*(\d+)',o)[-1]),'nps':int(re.findall(r'Nodes/second\s*:\s*(\d+)',o)[-1])}
+          B='./base/src/basefish';C='./candidate/src/candidatefish';run(B);run(C);P=[]
+          for i in range(31):
+            if i&1:c=run(C);b=run(B)
+            else:b=run(B);c=run(C)
+            if b['nodes']!=2884956 or c['nodes']!=2884956: raise SystemExit(f'LOSSLESS SIGNATURE FAILED {b} {c}')
+            P.append({'base':b,'candidate':c,'nps_ratio':c['nps']/b['nps'],'time_ratio':b['ms']/c['ms']})
+          R={'pairs':P,'median_nps_ratio':statistics.median(x['nps_ratio'] for x in P),'mean_nps_ratio':statistics.mean(x['nps_ratio'] for x in P),'median_time_speedup':statistics.median(x['time_ratio'] for x in P),'wins_time':sum(x['candidate']['ms']<x['base']['ms'] for x in P),'ties_time':sum(x['candidate']['ms']==x['base']['ms'] for x in P)}
+          print(json.dumps(R,indent=2))
+          PY
+      - uses: actions/upload-artifact@v4
+        with: {name: nnue-shape-paired-speed, path: paired.json}
