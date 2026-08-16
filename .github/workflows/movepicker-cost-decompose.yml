@@ -1,0 +1,36 @@
+name: MovePicker CPU cost decomposition
+
+on:
+  push:
+    branches: [leviathan/speed-v3-profile]
+    paths: ['.github/workflows/movepicker-cost-decompose.yml']
+  workflow_dispatch:
+
+permissions: {contents: read}
+
+jobs:
+  profile:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with: {repository: official-stockfish/Stockfish, ref: 5062aee519a1ba262d472d8ab139851ced56573e}
+      - name: Force diagnostic boundaries
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path('src/movepick.cpp');s=p.read_text()
+          s=s.replace('void partial_insertion_sort(ExtMove* begin, ExtMove* end, int limit) {','__attribute__((noinline)) void partial_insertion_sort(ExtMove* begin, ExtMove* end, int limit) {')
+          s=s.replace('template<GenType Type>\nExtMove* MovePicker::score', 'template<GenType Type>\n__attribute__((noinline)) ExtMove* MovePicker::score')
+          s=s.replace('template<typename Pred>\nMove MovePicker::select', 'template<typename Pred>\n__attribute__((noinline)) Move MovePicker::select')
+          p.write_text(s)
+          PY
+      - name: Build and perf
+        working-directory: src
+        run: |
+          make net && make clean && make -j2 ARCH=x86-64-avx2 build
+          sudo sysctl -w kernel.perf_event_paranoid=-1 || true
+          perf record -F 1499 -g -o ../mp.perf.data -- ./stockfish bench 16 1 15 default depth >/dev/null 2>&1
+          perf report -i ../mp.perf.data --stdio --no-children --sort=symbol --percent-limit 0.05 > ../mp-cost.txt 2>&1
+          grep -E 'MovePicker|partial_insertion|see_ge' ../mp-cost.txt || true
+      - uses: actions/upload-artifact@v4
+        with: {name: movepicker-cost-decomposition, path: mp-cost.txt}
