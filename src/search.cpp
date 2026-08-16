@@ -1810,6 +1810,12 @@ moves_loop:  // When in check, search starts here
         int inc = (value == bestValue && ss->ply + 2 >= rootDepth && (int(nodes) & 14) == 0
                    && !is_win(std::abs(value) + 1));
 
+        // Preserve the move about to be displaced. If the new leader only
+        // barely beats it, the old leader is a concrete rival future rather
+        // than generic history noise.
+        const Move  leviathanDisplacedMove  = bestMove;
+        const Value leviathanDisplacedValue = bestValue;
+
         if (value + inc > bestValue)
         {
             bestValue = value;
@@ -1827,6 +1833,18 @@ moves_loop:  // When in check, search starts here
                     ss->cutoffCnt += (extension < 2) || PvNode;
                     assert(value >= beta);  // Fail high
                     break;
+                }
+
+                // Leviathan strength v7.4 - Rival Witness. At PV-like nodes, a
+                // displaced leader within a pawn is evidence of a genuine second
+                // route. Persist it so future visits retain more than one plan.
+                if (!rootNode && (PvNode || ss->ttPv) && leviathanDisplacedMove
+                    && leviathanDisplacedValue > -VALUE_INFINITE
+                    && !is_decisive(value) && !is_decisive(leviathanDisplacedValue)
+                    && int(value - leviathanDisplacedValue) <= 72)
+                {
+                    leviathanWitness = leviathanDisplacedMove;
+                    leviathanProofDebt = std::min(5, leviathanProofDebt + 1);
                 }
 
                 // Leviathan strength v5 - Rival Preservation.
@@ -1939,7 +1957,7 @@ moves_loop:  // When in check, search starts here
 
     // Persist only substantial proof debt. This is deliberately separate
     // from TT score authority: future visits inherit skepticism, not a verdict.
-    if (!excludedMove && leviathanProofDebt >= 3)
+    if (!excludedMove && (leviathanProofDebt >= 3 || leviathanWitness))
         leviathan_proof_memory_store(posKey, leviathanProofDebt, leviathanWitness);
 
     // Write gathered information in transposition table. Note that the
