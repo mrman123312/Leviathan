@@ -1,0 +1,39 @@
+name: Freeze v2.1.1 phase fix
+on:
+  push:
+    branches: [leviathan/fundamentals-v2.1.1-phasefix]
+    paths: ['.github/workflows/freeze-v211-phasefix.yml']
+permissions: {contents: write}
+jobs:
+  freeze:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with: {ref: leviathan/fundamentals-v2.1.1-phasefix}
+      - name: Apply phase-safe move identity
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path('src/leviathan_fundamentals.h'); s=p.read_text()
+          anchor='''inline bool advanced_pawn_move(const Position& pos, Move move) {\n    if (!move.is_ok() || type_of(pos.moved_piece(move)) != PAWN)\n        return false;\n    const Color us = pos.side_to_move();\n    return relative_rank(us, move.to_sq()) >= RANK_6;\n}'''
+          repl='''// Phase-safe move identity: lmr_adjustment() is called after do_move(), where\n// move.from_sq() is empty and pos.side_to_move() is the opponent.  Recover the\n// mover from the destination square in that phase while remaining correct for\n// pre-move callers such as MovePicker.\ninline Piece moving_piece(const Position& pos, Move move) {\n    if (!move.is_ok())\n        return NO_PIECE;\n    Piece pc = pos.piece_on(move.from_sq());\n    return pc != NO_PIECE ? pc : pos.piece_on(move.to_sq());\n}\n\ninline bool pawn_move(const Position& pos, Move move) {\n    if (!move.is_ok())\n        return false;\n    if (move.type_of() == PROMOTION || move.type_of() == EN_PASSANT)\n        return true;\n    Piece pc = moving_piece(pos, move);\n    return pc != NO_PIECE && type_of(pc) == PAWN;\n}\n\ninline Color mover_color(const Position& pos, Move move) {\n    Piece pc = moving_piece(pos, move);\n    return pc != NO_PIECE ? color_of(pc) : pos.side_to_move();\n}\n\ninline bool advanced_pawn_move(const Position& pos, Move move) {\n    return pawn_move(pos, move)\n        && relative_rank(mover_color(pos, move), move.to_sq()) >= RANK_6;\n}'''
+          assert s.count(anchor)==1, s.count(anchor)
+          s=s.replace(anchor,repl,1)
+          old='''inline bool zeroing_quiet(const Position& pos, Move move, bool capture) {\n    return capture || (move.is_ok() && type_of(pos.moved_piece(move)) == PAWN);\n}'''
+          new='''inline bool zeroing_quiet(const Position& pos, Move move, bool capture) {\n    return capture || pawn_move(pos, move);\n}'''
+          assert s.count(old)==1
+          s=s.replace(old,new,1)
+          # MovePicker calls quiet_ordering_bonus before do_move, but phase-safe\n          # pawn_move() is equally valid there and keeps one source of truth.\n          old2='''    return type_of(pos.moved_piece(move)) == PAWN ? state().rule50PawnBonus : 0;'''
+          new2='''    return pawn_move(pos, move) ? state().rule50PawnBonus : 0;'''
+          assert s.count(old2)==1
+          p.write_text(s.replace(old2,new2,1))
+          PY
+          git diff --check
+          git diff -- src/leviathan_fundamentals.h
+      - name: Commit
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add src/leviathan_fundamentals.h
+          git commit -m 'Fix post-move pawn classification and mover color in Fundamentals v2.1.1'
+          git push origin HEAD:leviathan/fundamentals-v2.1.1-phasefix
