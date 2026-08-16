@@ -393,6 +393,37 @@ class Worker {
 
     PVMoves lastIterationIdxPV;
 
+    // Leviathan strength v7 - Persistent Proof Memory. This stores only the
+    // epistemic warning that search shortcuts were unreliable at a position;
+    // it never stores a move or evaluation as truth. Per-worker ownership keeps
+    // it lock-free, and the cache survives consecutive go commands in one game.
+    struct LeviathanProofMemoryEntry {
+        Key          key  = 0;
+        unsigned int debt = 0;
+    };
+    static constexpr usize LEVIATHAN_PROOF_MEMORY_SIZE = 4096;
+    std::array<LeviathanProofMemoryEntry, LEVIATHAN_PROOF_MEMORY_SIZE> leviathanProofMemory{};
+    int leviathanLastRootGamePly = -1;
+
+    unsigned int leviathan_proof_memory_load(Key key) const {
+        const auto& e = leviathanProofMemory[usize(key) & (LEVIATHAN_PROOF_MEMORY_SIZE - 1)];
+        return e.key == key ? e.debt : 0;
+    }
+
+    void leviathan_proof_memory_store(Key key, int debt) {
+        if (debt < 3)
+            return;
+        auto& e = leviathanProofMemory[usize(key) & (LEVIATHAN_PROOF_MEMORY_SIZE - 1)];
+        if (e.key != key)
+            e = {key, unsigned(std::min(debt, 5))};
+        else
+            e.debt = std::max(e.debt, unsigned(std::min(debt, 5)));
+    }
+
+    void leviathan_proof_memory_reset() {
+        leviathanProofMemory.fill({});
+    }
+
     usize                     threadIdx, numaThreadIdx, numaTotal;
     NumaReplicatedAccessToken numaAccessToken;
 

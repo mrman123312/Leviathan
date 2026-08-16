@@ -234,6 +234,13 @@ void Search::Worker::start_searching() {
 
     accumulatorStack.reset();
 
+    // Persist proof warnings while the actual game advances, but never leak
+    // them into a new game, a takeback, or repeated analysis of the same root.
+    const int leviathanRootGamePly = rootPos.game_ply();
+    if (leviathanLastRootGamePly >= 0 && leviathanRootGamePly <= leviathanLastRootGamePly)
+        leviathan_proof_memory_reset();
+    leviathanLastRootGamePly = leviathanRootGamePly;
+
     // Non-main threads go directly to iterative_deepening()
     if (!is_mainthread())
     {
@@ -888,6 +895,10 @@ Value Search::Worker::search(
     // Step 4. Transposition table lookup
     excludedMove                   = ss->excludedMove;
     posKey                         = leviathan_tt_key(pos);
+    // If this worker already discovered that heuristics disagree here, begin
+    // the revisit with that proof debt instead of paying to rediscover it.
+    leviathanProofDebt = std::max(leviathanProofDebt,
+                                  int(leviathan_proof_memory_load(posKey)));
     auto [ttHit, ttData, ttWriter] = tt.probe(posKey);
     // Need further processing of the saved data
     ss->ttHit    = ttHit;
@@ -1871,6 +1882,11 @@ moves_loop:  // When in check, search starts here
     // opponent move is probably good and the new position is added to the search tree.
     if (bestValue <= alpha)
         ss->ttPv = ss->ttPv || (ss - 1)->ttPv;
+
+    // Persist only substantial proof debt. This is deliberately separate
+    // from TT score authority: future visits inherit skepticism, not a verdict.
+    if (!excludedMove && leviathanProofDebt >= 3)
+        leviathan_proof_memory_store(posKey, leviathanProofDebt);
 
     // Write gathered information in transposition table. Note that the
     // static evaluation is saved as it was before correction history.
