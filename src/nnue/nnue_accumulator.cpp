@@ -352,8 +352,20 @@ void apply_combined(Color                              perspective,
         for (IndexType k = 0; k < Tiling::NumRegs; ++k)
             acc[k] = fromTile[k];
 
-        apply_psq_features<-1>(j, acc, psqRemoved, featureTransformer);
-        apply_psq_features<+1>(j, acc, psqAdded, featureTransformer);
+        if (psqAdded.ssize() == 1 && psqRemoved.ssize() == 2)
+        {
+            const usize tile = j * Tiling::TileHeight;
+            auto* rem0 = reinterpret_cast<const vec_t*>(&featureTransformer.weights[psqRemoved[0] * Dimensions + tile]);
+            auto* rem1 = reinterpret_cast<const vec_t*>(&featureTransformer.weights[psqRemoved[1] * Dimensions + tile]);
+            auto* add0 = reinterpret_cast<const vec_t*>(&featureTransformer.weights[psqAdded[0] * Dimensions + tile]);
+            for (IndexType k = 0; k < Tiling::NumRegs; ++k)
+                acc[k] = vec_add_16(vec_sub_16(vec_sub_16(acc[k], rem0[k]), rem1[k]), add0[k]);
+        }
+        else
+        {
+            apply_psq_features<-1>(j, acc, psqRemoved, featureTransformer);
+            apply_psq_features<+1>(j, acc, psqAdded, featureTransformer);
+        }
 
         apply_threat_features<-1>(j, acc, thrRemoved, featureTransformer);
         apply_threat_features<+1>(j, acc, thrAdded, featureTransformer);
@@ -371,8 +383,20 @@ void apply_combined(Color                              perspective,
         for (IndexType k = 0; k < Tiling::NumPsqtRegs; ++k)
             psqt[k] = fromTilePsqt[k];
 
-        apply_psqt<-1>(j, psqt, psqRemoved, featureTransformer.psqtWeights.data());
-        apply_psqt<+1>(j, psqt, psqAdded, featureTransformer.psqtWeights.data());
+        if (psqAdded.ssize() == 1 && psqRemoved.ssize() == 2)
+        {
+            const usize off = j * Tiling::PsqtTileHeight;
+            auto* rem0 = reinterpret_cast<const psqt_vec_t*>(&featureTransformer.psqtWeights[psqRemoved[0] * PSQTBuckets + off]);
+            auto* rem1 = reinterpret_cast<const psqt_vec_t*>(&featureTransformer.psqtWeights[psqRemoved[1] * PSQTBuckets + off]);
+            auto* add0 = reinterpret_cast<const psqt_vec_t*>(&featureTransformer.psqtWeights[psqAdded[0] * PSQTBuckets + off]);
+            for (IndexType k = 0; k < Tiling::NumPsqtRegs; ++k)
+                psqt[k] = vec_add_psqt_32(vec_sub_psqt_32(vec_sub_psqt_32(psqt[k], rem0[k]), rem1[k]), add0[k]);
+        }
+        else
+        {
+            apply_psqt<-1>(j, psqt, psqRemoved, featureTransformer.psqtWeights.data());
+            apply_psqt<+1>(j, psqt, psqAdded, featureTransformer.psqtWeights.data());
+        }
 
         apply_psqt<-1>(j, psqt, thrRemoved, featureTransformer.threatAndPpPsqtWeights.data());
         apply_psqt<+1>(j, psqt, thrAdded, featureTransformer.threatAndPpPsqtWeights.data());
