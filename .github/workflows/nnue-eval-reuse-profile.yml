@@ -1,0 +1,41 @@
+name: Leviathan NNUE evaluation reuse profile
+
+on:
+  push:
+    branches: [leviathan/speed-v3-profile]
+    paths: ['.github/workflows/nnue-eval-reuse-profile.yml']
+  workflow_dispatch:
+
+permissions: {contents: read}
+
+jobs:
+  profile:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with: {ref: fbccfb6eb5cd335b1ce8fc5c5efad9e36be4e19d}
+      - name: Instrument Search::Worker::evaluate key reuse
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path('src/search.cpp');s=p.read_text()
+          s=s.replace('#include <utility>','#include <utility>\n#include <unordered_map>\n#include <cstdio>\n#include <cstdlib>')
+          anchor='''Value Search::Worker::evaluate(const Position& pos) {\n    return Eval::evaluate(network[numaAccessToken], pos, accumulatorStack, refreshTable,\n                          optimism[pos.side_to_move()]);\n}'''
+          repl='''struct LeviathanEvalReuseProfile {\n    std::unordered_map<Key, unsigned> seen;\n    unsigned long long calls = 0, repeats = 0, secondPlus = 0;\n    ~LeviathanEvalReuseProfile() {\n        if (!std::getenv("LEVIATHAN_EVAL_REUSE_PROFILE")) return;\n        unsigned long long once=0, twice=0, threePlus=0, maxCount=0;\n        for (const auto& [k,c] : seen) {\n            if (c==1) ++once; else if (c==2) ++twice; else ++threePlus;\n            if (c>maxCount) maxCount=c;\n        }\n        std::fprintf(stderr, "LVEVAL calls %llu unique %zu repeats %llu once %llu twice %llu threeplus %llu max %llu\\n",\n                     calls, seen.size(), repeats, once, twice, threePlus, maxCount);\n    }\n};\nstatic LeviathanEvalReuseProfile leviathanEvalReuseProfile;\n\nValue Search::Worker::evaluate(const Position& pos) {\n    if (std::getenv("LEVIATHAN_EVAL_REUSE_PROFILE")) {\n        ++leviathanEvalReuseProfile.calls;\n        auto& c = leviathanEvalReuseProfile.seen[pos.key()];\n        if (c++) ++leviathanEvalReuseProfile.repeats;\n    }\n    return Eval::evaluate(network[numaAccessToken], pos, accumulatorStack, refreshTable,\n                          optimism[pos.side_to_move()]);\n}'''
+          if anchor not in s: raise SystemExit('evaluate anchor missing')
+          p.write_text(s.replace(anchor,repl,1))
+          PY
+      - name: Build and profile standard bench
+        working-directory: src
+        run: |
+          make net && make -j2 ARCH=x86-64-avx2 build
+          LEVIATHAN_EVAL_REUSE_PROFILE=1 ./stockfish bench 2>&1 | tee ../eval-reuse.log
+      - name: Extract profile
+        run: |
+          grep '^LVEVAL ' eval-reuse.log | tee eval-reuse-summary.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: nnue-eval-reuse-profile
+          path: |
+            eval-reuse.log
+            eval-reuse-summary.txt
