@@ -1,0 +1,43 @@
+name: Plyless branching-entropy profiler
+
+on:
+  push:
+    branches: [leviathan/plyless-v0-decision-depth]
+    paths: ['.github/workflows/plyless-branching-profile.yml']
+  workflow_dispatch:
+
+permissions: {contents: read}
+
+jobs:
+  profile:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with: {repository: official-stockfish/Stockfish, ref: 5062aee519a1ba262d472d8ab139851ced56573e}
+      - name: Instrument legal branching near the horizon
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path('src/search.cpp');s=p.read_text()
+          s=s.replace('#include <utility>','#include <utility>\n#include <iostream>')
+          a='''namespace {\n\nconstexpr u64 NODES_LIMIT_OUTPUT'''
+          b='''namespace {\n\nstruct LeviathanBranchProfile {\n    unsigned long long mainByDepth[5][17]{};\n    unsigned long long qByCount[17]{};\n    ~LeviathanBranchProfile() {\n        for (int d=1; d<=4; ++d) { std::cerr << "LVBRANCH depth " << d; for (auto v: mainByDepth[d]) std::cerr << ' ' << v; std::cerr << '\\n'; }\n        std::cerr << "LVBRANCH q"; for (auto v:qByCount) std::cerr << ' ' << v; std::cerr << '\\n';\n    }\n};\nthread_local LeviathanBranchProfile lvBranchProfile;\ninline int lvBranchBin(usize n) { return int(n < 16 ? n : 16); }\n\nconstexpr u64 NODES_LIMIT_OUTPUT'''
+          if s.count(a)!=1: raise SystemExit('namespace anchor')
+          s=s.replace(a,b,1)
+          a='''moves_loop:  // When in check, search starts here\n\n    // Step 12. A small Probcut idea'''
+          b='''moves_loop:  // When in check, search starts here\n\n    if (!rootNode && !excludedMove && depth >= 1 && depth <= 4)\n    {\n        MoveList<LEGAL> lvLegalProfile(pos);\n        ++lvBranchProfile.mainByDepth[int(depth)][lvBranchBin(lvLegalProfile.size())];\n    }\n\n    // Step 12. A small Probcut idea'''
+          if s.count(a)!=1: raise SystemExit('main anchor')
+          s=s.replace(a,b,1)
+          a='''    Square prevSq = ((ss - 1)->currentMove).is_ok() ? ((ss - 1)->currentMove).to_sq() : SQ_NONE;\n\n    // Initialize a MovePicker object for the current position, and prepare to search'''
+          b='''    Square prevSq = ((ss - 1)->currentMove).is_ok() ? ((ss - 1)->currentMove).to_sq() : SQ_NONE;\n\n    {\n        MoveList<LEGAL> lvLegalProfile(pos);\n        ++lvBranchProfile.qByCount[lvBranchBin(lvLegalProfile.size())];\n    }\n\n    // Initialize a MovePicker object for the current position, and prepare to search'''
+          if s.count(a)!=1: raise SystemExit('q anchor')
+          p.write_text(s.replace(a,b,1))
+          PY
+      - name: Build and profile bench
+        working-directory: src
+        run: |
+          make net && make clean && make -j2 ARCH=x86-64-avx2 build
+          ./stockfish bench 2>&1 | tee ../branching.txt
+          grep '^LVBRANCH' ../branching.txt
+      - uses: actions/upload-artifact@v4
+        with: {name: plyless-branching-profile, path: branching.txt}
