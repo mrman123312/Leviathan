@@ -1,0 +1,190 @@
+name: Quick H2H — P6 strongest config vs Stockfish
+
+on:
+  push:
+    branches:
+      - leviathan/quick-h2h-p6-vs-stockfish-20260816
+    paths:
+      - '.github/workflows/quick-h2h-p6-stockfish.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  match:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 15
+    steps:
+      - name: Checkout Leviathan P6 test branch
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          path: leviathan
+
+      - name: Checkout frozen Stockfish parent
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          repository: official-stockfish/Stockfish
+          ref: 5062aee519a1ba262d472d8ab139851ced56573e
+          path: stockfish
+
+      - name: Install match dependency
+        run: python3 -m pip install --disable-pip-version-check 'python-chess>=1.999,<2'
+
+      - name: Build both AVX2 engines
+        run: |
+          cd "$GITHUB_WORKSPACE/leviathan/src"
+          make net
+          make clean
+          make -j2 ARCH=x86-64-avx2 build
+          mv stockfish stockfish-leviathan
+          cd "$GITHUB_WORKSPACE/stockfish/src"
+          make net
+          make clean
+          make -j2 ARCH=x86-64-avx2 build
+          mv stockfish stockfish-parent
+
+      - name: Configure strongest validated deterministic Leviathan profile
+        working-directory: leviathan
+        run: |
+          mkdir -p quick-h2h
+          cat > quick-h2h/leviathan-options.json <<'EOF'
+          {
+            "Threads": 1,
+            "Hash": 64,
+            "Leviathan Fundamentals": true,
+            "Leviathan Fundamentals Authority": 1,
+            "Leviathan Forcing Buyback": 384,
+            "Leviathan Recapture Buyback": 256,
+            "Leviathan Passer Buyback": 320,
+            "Leviathan Endgame Buyback": 128,
+            "Leviathan Quiet Overdrive": 0,
+            "Leviathan Rule50 Pawn Bonus": 3072,
+            "Leviathan Zugzwang Guard": true,
+            "Leviathan Sacrifice Rescue": true,
+            "Leviathan Rule50 Pressure": true,
+            "Leviathan Policy": false,
+            "Leviathan MetaSearch": false,
+            "Leviathan Risk": false,
+            "Leviathan Specialist": false,
+            "Leviathan Atlas": false,
+            "Leviathan Search DSL": false
+          }
+          EOF
+          cat > quick-h2h/stockfish-options.json <<'EOF'
+          {
+            "Threads": 1,
+            "Hash": 64
+          }
+          EOF
+
+      - name: Generate ten deterministic diverse openings
+        working-directory: leviathan
+        run: |
+          python3 - <<'PY'
+          import chess, random
+          from pathlib import Path
+          seeds=[
+            ['e2e4','e7e5','g1f3','b8c6'],
+            ['e2e4','c7c5','g1f3','d7d6'],
+            ['e2e4','e7e6','d2d4','d7d5'],
+            ['e2e4','c7c6','d2d4','d7d5'],
+            ['d2d4','d7d5','c2c4','e7e6'],
+            ['d2d4','g8f6','c2c4','g7g6'],
+            ['d2d4','g8f6','c2c4','e7e6'],
+            ['c2c4','e7e5','b1c3','g8f6'],
+            ['g1f3','d7d5','g2g3','g8f6'],
+            ['e2e4','g8f6','e4e5','f6d5'],
+            ['c2c4','c7c5','g1f3','g8f6'],
+            ['d2d4','f7f5','g2g3','g8f6'],
+          ]
+          rng=random.Random(891021212)
+          out=[]
+          for i in range(10):
+              b=chess.Board()
+              for u in seeds[i % len(seeds)]:
+                  m=chess.Move.from_uci(u)
+                  if m in b.legal_moves:
+                      b.push(m)
+              for _ in range(3 + (i % 6)):
+                  moves=sorted(b.legal_moves,key=lambda m:m.uci())
+                  if not moves or b.is_game_over():
+                      break
+                  b.push(moves[rng.randrange(len(moves))])
+              out.append(b.fen())
+          Path('quick-h2h/openings.fen').write_text('\n'.join(out)+'\n')
+          print('\n'.join(out))
+          PY
+
+      - name: Verify candidate identity and UCI controls
+        working-directory: leviathan
+        run: |
+          git rev-parse HEAD | tee quick-h2h/leviathan-commit.txt
+          printf 'uci\nquit\n' | ./src/stockfish-leviathan | tee quick-h2h/uci.txt
+          grep -q 'option name Leviathan Fundamentals ' quick-h2h/uci.txt
+          grep -q 'option name Leviathan Fundamentals Authority ' quick-h2h/uci.txt
+
+      - name: Run 20-game paired match
+        working-directory: leviathan
+        run: |
+          python3 tools/run_match.py \
+            --engine-a "$GITHUB_WORKSPACE/leviathan/src/stockfish-leviathan" \
+            --engine-b "$GITHUB_WORKSPACE/stockfish/src/stockfish-parent" \
+            --options-a quick-h2h/leviathan-options.json \
+            --options-b quick-h2h/stockfish-options.json \
+            --openings quick-h2h/openings.fen \
+            --games 20 \
+            --movetime-ms 100 \
+            --max-plies 220 \
+            --out quick-h2h/match.json | tee quick-h2h/match.log
+
+      - name: Summarize result
+        working-directory: leviathan
+        run: |
+          python3 - <<'PY'
+          import json, math
+          from pathlib import Path
+          d=json.loads(Path('quick-h2h/match.json').read_text())
+          s=d['summary']; p=s['score_a']
+          elo=400*math.log10(p/(1-p)) if 0<p<1 else None
+          pairs=[]
+          for i in range(0,20,2):
+              g=d['games'][i:i+2]
+              pairs.append({
+                  'pair':i//2+1,
+                  'leviathan_points':sum(x['score_a'] for x in g),
+                  'scores':[x['score_a'] for x in g],
+                  'results':[x['result'] for x in g],
+                  'terminations':[x['termination'] for x in g]
+              })
+          report={
+            'candidate_search_commit':'8f28d37481243114b6789f584f853859b5f4713d',
+            'test_branch_commit':Path('quick-h2h/leviathan-commit.txt').read_text().strip(),
+            'stockfish_commit':'5062aee519a1ba262d472d8ab139851ced56573e',
+            'configuration':'P6 + v2.1.2 rescue profile: Fundamentals=true, Authority=1, Quiet Overdrive=0; learned organs disabled',
+            'protocol':'20 games / 10 reversed-color pairs; 100 ms/move; 1 thread; 64 MB hash; max 220 plies',
+            'wins':s['wins_a'],
+            'draws':s['draws'],
+            'losses':s['losses_a'],
+            'score':p,
+            'naive_elo':elo,
+            'pairs':pairs
+          }
+          Path('quick-h2h/report.json').write_text(json.dumps(report,indent=2)+'\n')
+          print(json.dumps(report,indent=2))
+          PY
+
+      - name: Archive evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: quick-h2h-p6-vs-stockfish
+          path: |
+            leviathan/quick-h2h/match.json
+            leviathan/quick-h2h/match.log
+            leviathan/quick-h2h/report.json
+            leviathan/quick-h2h/openings.fen
+            leviathan/quick-h2h/leviathan-options.json
+            leviathan/quick-h2h/stockfish-options.json
+            leviathan/quick-h2h/uci.txt
+            leviathan/quick-h2h/leviathan-commit.txt
+          if-no-files-found: error
