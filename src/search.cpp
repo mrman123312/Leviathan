@@ -1563,6 +1563,19 @@ moves_loop:  // When in check, search starts here
             value = -search<PV>(pos, ss + 1, -beta, -alpha, newDepth, false);
         }
 
+        // Leviathan strength v6.1 - Counterexample Feedback. If a full-depth
+        // verification materially contradicts the reduced LMR estimate, the node
+        // has produced direct evidence that our reduction model is unreliable here.
+        // Raise proof debt immediately so later siblings inherit that lesson.
+        if (leviathanReducedValue != VALUE_NONE && leviathanResearched
+            && !is_decisive(leviathanReducedValue) && !is_decisive(value))
+        {
+            const int  lmrError      = std::abs(int(value - leviathanReducedValue));
+            const bool boundaryFlip  = (leviathanReducedValue > alpha) != (value > alpha);
+            const int  evidenceBoost = boundaryFlip ? 2 : lmrError >= 160 ? 2 : int(lmrError >= 64);
+            leviathanProofDebt = std::min(5, leviathanProofDebt + evidenceBoost);
+        }
+
         if (leviathanTraceReady && leviathanReducedValue != VALUE_NONE)
             Leviathan::Trace::record_lmr(
               leviathanParentKey, move.raw(),
@@ -1700,6 +1713,11 @@ moves_loop:  // When in check, search starts here
 
                     depth -= siblingPenalty;
                 }
+
+                // Multiple non-cutoff alpha improvements are another direct
+                // ambiguity signal: several siblings are competitive at this node.
+                if (moveCount > 1 && value < beta && !is_decisive(value))
+                    leviathanProofDebt = std::min(5, leviathanProofDebt + 1);
 
                 assert(depth > 0);
                 alpha = value;  // Update alpha! Always alpha < beta
