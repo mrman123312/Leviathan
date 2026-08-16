@@ -252,7 +252,14 @@ void Search::Worker::start_searching() {
                 if (e.debt <= decay)
                     e = {};
                 else
+                {
                     e.debt -= decay;
+                    if (e.debt < 3)
+                    {
+                        e.evidence = 0;
+                        e.witness  = Move::none();
+                    }
+                }
             }
         }
     }
@@ -965,7 +972,9 @@ Value Search::Worker::search(
         // trajectory proof. After repetition has entered the current history,
         // keep TT move/static-eval reuse but do not let an old bound replace the
         // current static evaluation used by pruning decisions.
-        if (!pos.has_repeated() && is_valid(ttData.value)
+        if (!pos.has_repeated()
+            && !leviathanEvidence.contains(Leviathan::Evidence::Kind::EVAL_DISAGREEMENT)
+            && is_valid(ttData.value)
             && (ttData.bound & (ttData.value > eval ? BOUND_LOWER : BOUND_UPPER)))
             eval = ttData.value;
     }
@@ -1604,6 +1613,18 @@ moves_loop:  // When in check, search starts here
               givesCheck, ttData.depth, ss->staticEval, alpha);
         r += Leviathan::Fundamentals::lmr_adjustment(
           pos, move, prevSq, depth, moveCount, PvNode, capture, givesCheck);
+
+        // Leviathan strength v8.1 - Witness Proof Contract. A remembered move
+        // that concretely exposed search error is not just a hint. Revisit that one
+        // move at full depth when its causal evidence is still live. This is tightly
+        // scoped: one legal witness, bounded depth threshold, no global extension.
+        const bool leviathanWitnessNeedsFullProof =
+          move == persistentWitness && depth >= 6
+          && (leviathanEvidence.contains(Leviathan::Evidence::Kind::LMR_COUNTEREXAMPLE)
+              || leviathanEvidence.contains(Leviathan::Evidence::Kind::PROBCUT_NEAR_PROOF)
+              || leviathanEvidence.contains(Leviathan::Evidence::Kind::RIVAL_AMBIGUITY));
+        if (leviathanWitnessNeedsFullProof)
+            r = std::min(r, 0);
 
         // Leviathan strength v6.4 - Proof Regime. Once several independent
         // warnings agree, incremental buybacks are not enough: accumulated LMR
