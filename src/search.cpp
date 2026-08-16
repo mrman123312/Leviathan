@@ -1138,6 +1138,10 @@ moves_loop:  // When in check, search starts here
 
     int moveCount = 0;
 
+    const bool leviathanRiskReady  = Leviathan::Control::risk_ready();
+    const bool leviathanDslReady   = Leviathan::DSL::ready();
+    const bool leviathanTraceReady = Leviathan::Trace::ready();
+
     // Step 13. Loop through all pseudo-legal moves until no moves remain
     // or a beta cutoff occurs.
     while ((move = mp.next_move()) != Move::none())
@@ -1332,7 +1336,7 @@ moves_loop:  // When in check, search starts here
         }
 
         u64 nodeCount = rootNode ? u64(nodes) : 0;
-        const u64 leviathanParentKey = u64(pos.key());
+        const u64 leviathanParentKey = leviathanTraceReady ? u64(pos.key()) : 0;
 
         // Step 16. Make the move
         do_move(pos, move, st, givesCheck, ss);
@@ -1383,12 +1387,14 @@ moves_loop:  // When in check, search starts here
 
         // Leviathan P004/P005/P007: learned risk may first veto unsafe
         // reductions; Search-DSL candidates are separately bounded and gated.
-        r += Leviathan::Control::lmr_adjustment(
-          depth, moveCount, ss->statScore, correctionValue, PvNode, cutNode, allNode, capture,
-          givesCheck, ttData.depth, ss->staticEval, alpha);
-        r += Leviathan::DSL::lmr_adjustment(
-          depth, moveCount, ss->statScore, correctionValue, PvNode, cutNode, allNode, capture,
-          givesCheck, ttData.depth, ss->staticEval, alpha);
+        if (leviathanRiskReady)
+            r += Leviathan::Control::lmr_adjustment(
+              depth, moveCount, ss->statScore, correctionValue, PvNode, cutNode, allNode, capture,
+              givesCheck, ttData.depth, ss->staticEval, alpha);
+        if (leviathanDslReady)
+            r += Leviathan::DSL::lmr_adjustment(
+              depth, moveCount, ss->statScore, correctionValue, PvNode, cutNode, allNode, capture,
+              givesCheck, ttData.depth, ss->staticEval, alpha);
         r += Leviathan::Fundamentals::lmr_adjustment(
           pos, move, prevSq, depth, moveCount, PvNode, capture, givesCheck);
 
@@ -1465,7 +1471,7 @@ moves_loop:  // When in check, search starts here
             value = -search<PV>(pos, ss + 1, -beta, -alpha, newDepth, false);
         }
 
-        if (leviathanReducedValue != VALUE_NONE)
+        if (leviathanTraceReady && leviathanReducedValue != VALUE_NONE)
             Leviathan::Trace::record_lmr(
               leviathanParentKey, move.raw(),
               Leviathan::Trace::features(depth, moveCount, ss->statScore, correctionValue, PvNode,
