@@ -1,0 +1,31 @@
+name: Freeze v2.1.2 critical-pawn allocator
+on:
+  push:
+    branches: [leviathan/fundamentals-v2.1.2-critical-pawn]
+    paths: ['.github/workflows/freeze-v212-critical-pawn.yml']
+permissions: {contents: write}
+jobs:
+  freeze:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with: {ref: leviathan/fundamentals-v2.1.2-critical-pawn}
+      - name: Keep ordinary pawn compression but protect critical pawns
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path('src/leviathan_fundamentals.h'); s=p.read_text()
+          old='''    // Authority 2 is the funding mechanism. v2.1 deliberately avoids\n    // overdriving pawn moves: even a quiet pawn move irreversibly changes the\n    // position and is a poor place to buy generic speed. We also start one move\n    // later and one ply deeper than v2 to concentrate the extra reduction on\n    // genuinely late, stable-looking branches.\n    if (state().authority >= 2 && depth >= 5 && moveCount >= 6 && !pvNode && !capture\n        && !givesCheck && move.type_of() != PROMOTION && !advanced_pawn_move(pos, move)\n        && !zeroing_quiet(pos, move, capture) && pos.rule50_count() < 70 && !low_material(pos))'''
+          new='''    // v2.1.2: the v2.1 post-move identity bug accidentally let ordinary pawn\n    // moves participate in the speed budget, and the 100-game phase-fix showed\n    // that globally excluding every pawn was too expensive at 100 ms. Preserve\n    // that useful selectivity, but now classify the mover correctly so sixth-\n    // rank/seventh-rank pawn moves and promotions are explicitly protected.\n    // This creates a real irreversibility gradient instead of all-pawn/all-safe.\n    if (state().authority >= 2 && depth >= 5 && moveCount >= 6 && !pvNode && !capture\n        && !givesCheck && move.type_of() != PROMOTION && !advanced_pawn_move(pos, move)\n        && pos.rule50_count() < 70 && !low_material(pos))'''
+          if s.count(old)!=1: raise SystemExit(f'anchor count {s.count(old)}')
+          p.write_text(s.replace(old,new,1))
+          PY
+          git diff --check
+          git diff -- src/leviathan_fundamentals.h
+      - name: Commit
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add src/leviathan_fundamentals.h
+          git commit -m 'Distinguish ordinary and critical pawn search in v2.1.2'
+          git push origin HEAD:leviathan/fundamentals-v2.1.2-critical-pawn
