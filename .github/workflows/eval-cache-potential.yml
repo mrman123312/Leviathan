@@ -1,0 +1,35 @@
+name: Exact evaluation-cache reuse profiler
+
+on:
+  push:
+    branches: [leviathan/speed-v3-profile]
+    paths: ['.github/workflows/eval-cache-potential.yml']
+  workflow_dispatch:
+
+permissions: {contents: read}
+
+jobs:
+  profile:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with: {repository: official-stockfish/Stockfish, ref: 5062aee519a1ba262d472d8ab139851ced56573e}
+      - name: Instrument direct-mapped exact eval-context reuse
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path('src/search.cpp');s=p.read_text()
+          s=s.replace('#include <vector>','#include <vector>\n#include <array>\n#include <iostream>')
+          anchor='''Value Search::Worker::evaluate(const Position& pos) {\n    return Eval::evaluate(network[numaAccessToken], pos, accumulatorStack, refreshTable,\n                          optimism[pos.side_to_move()]);\n}'''
+          repl='''Value Search::Worker::evaluate(const Position& pos) {\n    struct EvalReuseProfile {\n        static constexpr int S0=12,S1=14,S2=16,S3=18;\n        std::array<u64,1ULL<<S0> a{}; std::array<u64,1ULL<<S1> b{};\n        std::array<u64,1ULL<<S2> c{}; std::array<u64,1ULL<<S3> d{};\n        u64 calls=0,h0=0,h1=0,h2=0,h3=0;\n        ~EvalReuseProfile(){ std::cerr<<"LVEVALCACHE calls "<<calls<<" hits4096 "<<h0<<" hits16384 "<<h1<<" hits65536 "<<h2<<" hits262144 "<<h3<<'\\n'; }\n    };\n    static thread_local EvalReuseProfile p;\n    // Include the exact optimism scalar in the context key because NNUE's outer\n    // evaluator blends it into the returned value. Zero is remapped so an empty\n    // cache line cannot count as a hit.\n    u64 k = u64(pos.key()) ^ (u64(u32(optimism[pos.side_to_move()])) * 0x9E3779B97F4A7C15ULL);\n    if (!k) k=1; ++p.calls;\n    auto hit=[&](auto& tab,int bits,u64& n){ usize i=(k^(k>>32)) & ((1ULL<<bits)-1); n += tab[i]==k; tab[i]=k; };\n    hit(p.a,EvalReuseProfile::S0,p.h0); hit(p.b,EvalReuseProfile::S1,p.h1);\n    hit(p.c,EvalReuseProfile::S2,p.h2); hit(p.d,EvalReuseProfile::S3,p.h3);\n    return Eval::evaluate(network[numaAccessToken], pos, accumulatorStack, refreshTable,\n                          optimism[pos.side_to_move()]);\n}'''
+          if s.count(anchor)!=1: raise SystemExit('evaluate anchor')
+          p.write_text(s.replace(anchor,repl,1))
+          PY
+      - name: Build and run
+        working-directory: src
+        run: |
+          make net && make clean && make -j2 ARCH=x86-64-avx2 build
+          ./stockfish bench 2>&1 | tee ../eval-cache-potential.txt
+          grep '^LVEVALCACHE' ../eval-cache-potential.txt
+      - uses: actions/upload-artifact@v4
+        with: {name: eval-cache-potential, path: eval-cache-potential.txt}
