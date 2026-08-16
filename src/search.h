@@ -445,7 +445,8 @@ class Worker {
             return;
         auto& e = leviathanProofMemory[usize(key) & (LEVIATHAN_PROOF_MEMORY_SIZE - 1)];
         const unsigned boundedDebt = unsigned(std::clamp(debt, 0, 5));
-        const auto boundedWitnessEvidence = witnessEvidence & Leviathan::Evidence::KNOWN_MASK;
+        const auto boundedWitnessEvidence = Leviathan::Evidence::Mask(
+          witnessEvidence & Leviathan::Evidence::KNOWN_MASK);
         const unsigned boundedWitnessDepth = unsigned(std::max(0, witnessDepth));
         if (e.key != key)
             e = {key, boundedDebt, evidence, witness, boundedWitnessEvidence, boundedWitnessDepth};

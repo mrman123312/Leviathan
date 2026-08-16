@@ -978,9 +978,7 @@ Value Search::Worker::search(
         // trajectory proof. After repetition has entered the current history,
         // keep TT move/static-eval reuse but do not let an old bound replace the
         // current static evaluation used by pruning decisions.
-        if (!pos.has_repeated()
-            && !leviathanEvidence.contains(Leviathan::Evidence::Kind::EVAL_DISAGREEMENT)
-            && is_valid(ttData.value)
+        if (!pos.has_repeated() && is_valid(ttData.value)
             && (ttData.bound & (ttData.value > eval ? BOUND_LOWER : BOUND_UPPER)))
             eval = ttData.value;
     }
@@ -1030,7 +1028,6 @@ Value Search::Worker::search(
 
     // At non-PV nodes we check for an early TT cutoff
     if (!PvNode && !excludedMove && leviathanProofDebt < 2
-        && !Leviathan::Evidence::tt_sensitive(leviathanEvidence)
         && ttData.depth > depth - (ttData.value <= beta)
         && is_valid(ttData.value)  // Can happen when !ttHit or when access race in probe()
         && (ttData.bound & (ttData.value >= beta ? BOUND_LOWER : BOUND_UPPER))
@@ -1200,10 +1197,7 @@ Value Search::Worker::search(
             // Under contradictory evidence, a null-move success is only a
             // hypothesis. At moderate/deep nodes require the existing verification
             // search instead of granting immediate cutoff authority.
-            const bool leviathanVerifyNull = depth >= 10
-              && (leviathanProofDebt >= 2
-                  || leviathanEvidence.contains(Leviathan::Evidence::Kind::NULL_FRAGILITY)
-                  || leviathanEvidence.multi_source());
+            const bool leviathanVerifyNull = leviathanProofDebt >= 2 && depth >= 10;
             if (nmpMinPly || (depth < 16 && !leviathanVerifyNull))
                 return nullValue;
 
@@ -1387,8 +1381,6 @@ moves_loop:  // When in check, search starts here
         {
             // Skip quiet moves if movecount exceeds our threshold
             if (leviathanProofDebt < 2
-                && !Leviathan::Evidence::pruning_sensitive(leviathanEvidence)
-                && !Leviathan::Evidence::rival_sensitive(leviathanEvidence)
                 && moveCount >= (3 + depth * depth) / (2 - improving))
                 mp.skip_quiet_moves();
 
@@ -1399,18 +1391,14 @@ moves_loop:  // When in check, search starts here
             {
                 Piece capturedPiece = pos.piece_on(move.to_sq());
                 int   captHist = captureHistory[movedPiece][move.to_sq()][type_of(capturedPiece)];
-                const bool leviathanForcingProtected =
-                  move == persistentWitness
-                  || (leviathanProofDebt >= 3 && moveCount <= 6)
-                  || (Leviathan::Evidence::rival_sensitive(leviathanEvidence) && moveCount <= 4);
-
                 // Futility pruning for captures
                 if (!givesCheck && lmrDepth < 8)
                 {
                     Value futilityValue = ss->staticEval + 234 + 247 * lmrDepth
                                         + PieceValue[capturedPiece] + 134 * captHist / 1024;
 
-                    if (futilityValue <= alpha && !leviathanForcingProtected)
+                    if (futilityValue <= alpha
+                        && !(leviathanProofDebt >= 3 && moveCount <= 6))
                         continue;
                 }
 
@@ -1418,7 +1406,7 @@ moves_loop:  // When in check, search starts here
                 // Avoid pruning sacrifices of our last piece for stalemate
                 int margin = 177 * depth + captHist * 34 / 1024;
                 if ((alpha >= VALUE_DRAW || pos.non_pawn_material(us) != PieceValue[movedPiece])
-                    && !leviathanForcingProtected
+                    && !(leviathanProofDebt >= 3 && moveCount <= 6)
                     && !pos.see_ge(move, -margin)
                     && !Leviathan::Fundamentals::rescue_bad_see(
                       pos, move, prevSq, capture, givesCheck))
@@ -1430,8 +1418,6 @@ moves_loop:  // When in check, search starts here
                   Leviathan::Fundamentals::protected_scope_move(
                     pos, move, prevSq, capture, givesCheck)
                   || move == persistentWitness
-                  || (Leviathan::Evidence::rival_sensitive(leviathanEvidence) && moveCount <= 6)
-                  || (Leviathan::Evidence::pruning_sensitive(leviathanEvidence) && moveCount <= 6)
                   || (leviathanProofDebt >= 2
                       && moveCount <= 6 + std::min(leviathanProofDebt, 4));
                 int dIndex  = std::min(int(depth), int(lmrDivisor.size())) - 1;
@@ -1514,8 +1500,7 @@ moves_loop:  // When in check, search starts here
             // singular (multiple moves fail high), and we can prune the whole
             // subtree by returning a softbound.
             else if (value >= beta && !is_decisive(value)
-                     && leviathanProofDebt < 3
-                     && !Leviathan::Evidence::pruning_sensitive(leviathanEvidence))
+                     && leviathanProofDebt < 3)
             {
                 ttMoveHistory << -421 - 110 * depth;
 
@@ -1539,8 +1524,7 @@ moves_loop:  // When in check, search starts here
 
             // If the ttMove is assumed to fail high over current beta or
             // if we are on a cutNode
-            else if ((ttData.value >= beta || cutNode) && leviathanProofDebt < 3
-                     && !Leviathan::Evidence::pruning_sensitive(leviathanEvidence))
+            else if ((ttData.value >= beta || cutNode) && leviathanProofDebt < 3)
                 extension = -3;
         }
 
@@ -1567,11 +1551,6 @@ moves_loop:  // When in check, search starts here
             r -= 768;
         else if (move == persistentWitness)
             r -= 640;
-
-        if (Leviathan::Evidence::pruning_sensitive(leviathanEvidence) && moveCount <= 4)
-            r -= 256;
-        if (Leviathan::Evidence::rival_sensitive(leviathanEvidence) && moveCount <= 4)
-            r -= 192;
 
         // Proof debt converts contradictory evidence into bounded search authority.
         // Only early serious candidates receive the buyback; debt is capped above.
@@ -1628,18 +1607,19 @@ moves_loop:  // When in check, search starts here
         r += Leviathan::Fundamentals::lmr_adjustment(
           pos, move, prevSq, depth, moveCount, PvNode, capture, givesCheck);
 
-        // Leviathan strength v8.1 - Witness Proof Contract. A remembered move
-        // that concretely exposed search error is not just a hint. Revisit that one
-        // move at full depth when its causal evidence is still live. This is tightly
-        // scoped: one legal witness, bounded depth threshold, no global extension.
-        constexpr auto leviathanProofWitnessCauses =
-          Leviathan::Evidence::bit(Leviathan::Evidence::Kind::LMR_COUNTEREXAMPLE)
-          | Leviathan::Evidence::bit(Leviathan::Evidence::Kind::PROBCUT_NEAR_PROOF)
-          | Leviathan::Evidence::bit(Leviathan::Evidence::Kind::RIVAL_AMBIGUITY);
+        // Leviathan strength v8.4 - Causal-Minimal LMR Certificate.
+        // Only a concrete move that previously demonstrated a large LMR error may
+        // buy extra proof. Restrict to PV-relevant nodes and reopen at most every
+        // two depth levels so the certificate amortizes work instead of causing
+        // iterative-deepening re-search inflation.
+        const bool leviathanLmrWitness =
+          leviathanWitnessEvidence
+          & Leviathan::Evidence::bit(Leviathan::Evidence::Kind::LMR_COUNTEREXAMPLE);
         const bool leviathanWitnessNeedsFullProof =
-          move == persistentWitness && leviathanEntryDepth >= 6
-          && leviathanEntryDepth > leviathanWitnessCertifiedDepth
-          && (leviathanWitnessEvidence & leviathanProofWitnessCauses);
+          move == persistentWitness && leviathanLmrWitness && (PvNode || ss->ttPv)
+          && leviathanEntryDepth >= 7
+          && (leviathanWitnessCertifiedDepth == 0
+              || leviathanEntryDepth >= leviathanWitnessCertifiedDepth + 2);
         if (leviathanWitnessNeedsFullProof)
         {
             newDepth = std::max(newDepth, leviathanEntryDepth - 1);
@@ -1652,8 +1632,6 @@ moves_loop:  // When in check, search starts here
         // reduction itself so proof debt has real search authority.
         if (depth >= 7 && leviathanProofDebt >= 4 && moveCount <= 2)
             r = std::min(r, 0);      // full depth (negative extension remains allowed)
-        else if (depth >= 7 && leviathanEvidence.severe() && moveCount <= 3)
-            r = std::min(r, 0);      // diverse severe evidence certifies one extra rival
         else if (depth >= 6 && leviathanProofDebt >= 3 && moveCount <= 4)
             r = std::min(r, 1024);   // at most about one ply of positive reduction
 
