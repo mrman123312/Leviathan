@@ -113,8 +113,9 @@ inline bool protected_scope_move(const Position& pos,
                                  Move move,
                                  Square prevSq,
                                  bool capture,
-                                 bool givesCheck) {
-    if (!ready())
+                                 bool givesCheck,
+                                 bool active) {
+    if (!active)
         return false;
 
     return givesCheck || move.type_of() == PROMOTION || advanced_pawn_move(pos, move)
@@ -127,8 +128,9 @@ inline bool rescue_bad_see(const Position& pos,
                            Move move,
                            Square prevSq,
                            bool capture,
-                           bool givesCheck) {
-    if (!ready() || !state().sacrificeRescue)
+                           bool givesCheck,
+                           bool active) {
+    if (!active || !state().sacrificeRescue)
         return false;
 
     if (move.type_of() == PROMOTION)
@@ -152,8 +154,9 @@ inline int lmr_adjustment(const Position& pos,
                           int moveCount,
                           bool pvNode,
                           bool capture,
-                          bool givesCheck) {
-    if (!ready())
+                          bool givesCheck,
+                          bool active) {
+    if (!active)
         return 0;
 
     int delta = 0;
