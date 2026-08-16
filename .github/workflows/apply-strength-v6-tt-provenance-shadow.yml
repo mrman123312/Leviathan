@@ -1,0 +1,58 @@
+name: Apply strength v6 TT provenance shadow
+
+on:
+  push:
+    branches:
+      - leviathan/strength-v6-proof-obligation
+    paths:
+      - '.github/workflows/apply-strength-v6-tt-provenance-shadow.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout strength v6
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: leviathan/strength-v6-proof-obligation
+
+      - name: Add reversible-history TT shadow identity
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('src/search.cpp')
+          s = p.read_text()
+
+          anchor = "// Detect shuffling moves in order to limit search explosions\n// Added in #6447 as non-regression, and so its parameters should not be tuned\nbool is_shuffling"
+          helper = "// Leviathan strength v6.5 - Transposition Provenance Shadow.\n// A board key is sufficient for ordinary transpositions, but once a repeated\n// trajectory exists the draw truth can depend on the reversible path. Keep the\n// normal TT namespace untouched for ordinary positions and derive a compact\n// shadow identity only for history-sensitive states.\ninline Key leviathan_tt_key(const Position& pos) {\n    Key base = pos.key();\n    if (!pos.has_repeated())\n        return base;\n\n    const StateInfo* st      = pos.state();\n    const int horizon        = std::min({st->rule50, st->pliesFromNull, 32});\n    Key historySignature     = make_key(0x4C565450524F5601ULL ^ u64(horizon));\n    const StateInfo* current = st;\n\n    for (int i = 0; current && i <= horizon; ++i, current = current->previous)\n    {\n        const u64 repetitionCode = u64(current->repetition + MAX_PLY);\n        const u64 pathSalt = u64(i + 1) * 0x9E3779B97F4A7C15ULL;\n        historySignature ^= make_key(u64(current->key) ^ pathSalt ^ (repetitionCode << 48));\n    }\n\n    return base ^ historySignature;\n}\n\n"
+          if s.count(anchor) != 1:
+              raise SystemExit(f'helper anchor count {s.count(anchor)}')
+          s = s.replace(anchor, helper + anchor, 1)
+
+          key_anchor = "    posKey                         = pos.key();"
+          if s.count(key_anchor) != 2:
+              raise SystemExit(f'node key anchor count {s.count(key_anchor)}')
+          s = s.replace(key_anchor, "    posKey                         = leviathan_tt_key(pos);")
+
+          child_anchor = "                Key nextPosKey                             = pos.key();"
+          if s.count(child_anchor) != 1:
+              raise SystemExit(f'child key anchor count {s.count(child_anchor)}')
+          s = s.replace(child_anchor,
+                        "                Key nextPosKey                             = leviathan_tt_key(pos);",
+                        1)
+
+          p.write_text(s)
+          PY
+          git diff --check
+          git diff -- src/search.cpp
+
+      - name: Commit TT provenance shadow
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add src/search.cpp
+          git commit -m 'Strength v6.5: partition repetition-sensitive TT identity'
+          git push origin HEAD:leviathan/strength-v6-proof-obligation
