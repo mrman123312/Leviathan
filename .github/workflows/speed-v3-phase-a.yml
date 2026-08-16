@@ -1,0 +1,88 @@
+name: Leviathan speed v3 phase A
+
+on:
+  push:
+    branches: [leviathan/speed-v3-profile]
+    paths: ['.github/workflows/speed-v3-phase-a.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  exact-speed:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: leviathan/speed-v3-profile
+          path: candidate
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: fbccfb6eb5cd335b1ce8fc5c5efad9e36be4e19d
+          path: reference
+      - name: Build AVX2
+        run: |
+          cd candidate/src && make net && make -j2 ARCH=x86-64-avx2 build && mv stockfish candidate
+          cd ../../reference/src && make net && make -j2 ARCH=x86-64-avx2 build && mv stockfish reference
+      - name: Exact active bench equivalence and 15 alternating pairs
+        run: |
+          python3 - <<'PY' | tee speed-phase-a.txt
+          import json,re,statistics,subprocess
+          cfg='''setoption name Threads value 1
+setoption name Hash value 64
+setoption name Leviathan Fundamentals value true
+setoption name Leviathan Fundamentals Authority value 2
+setoption name Leviathan Forcing Buyback value 384
+setoption name Leviathan Recapture Buyback value 256
+setoption name Leviathan Passer Buyback value 320
+setoption name Leviathan Endgame Buyback value 128
+setoption name Leviathan Quiet Overdrive value 160
+setoption name Leviathan Rule50 Pawn Bonus value 3072
+setoption name Leviathan Zugzwang Guard value true
+setoption name Leviathan Sacrifice Rescue value true
+setoption name Leviathan Rule50 Pressure value true
+setoption name Leviathan Policy value false
+setoption name Leviathan MetaSearch value false
+setoption name Leviathan Risk value false
+setoption name Leviathan Specialist value false
+setoption name Leviathan Atlas value false
+setoption name Leviathan Search DSL value false
+'''
+          def run(path):
+              p=subprocess.run([path],input=cfg+'bench\nquit\n',text=True,capture_output=True,check=True)
+              o=p.stdout+p.stderr
+              return {'ms':int(re.findall(r'Total time \(ms\)\s*:\s*(\d+)',o)[-1]),
+                      'nodes':int(re.findall(r'Nodes searched\s*:\s*(\d+)',o)[-1]),
+                      'nps':int(re.findall(r'Nodes/second\s*:\s*(\d+)',o)[-1])}
+          ref='./reference/src/reference'; cand='./candidate/src/candidate'
+          run(ref);run(cand)
+          pairs=[]
+          for i in range(15):
+              if i%2:
+                  c=run(cand); r=run(ref)
+              else:
+                  r=run(ref); c=run(cand)
+              if c['nodes']!=r['nodes']:
+                  raise SystemExit(f'FUNCTIONAL DIVERGENCE: ref={r} candidate={c}')
+              pairs.append({'reference':r,'candidate':c})
+              print(i+1,r,c, 'speedup',r['ms']/c['ms'])
+          speed=[p['reference']['ms']/p['candidate']['ms'] for p in pairs]
+          result={'pairs':pairs,
+                  'reference_nodes':pairs[0]['reference']['nodes'],
+                  'candidate_nodes':pairs[0]['candidate']['nodes'],
+                  'median_speedup':statistics.median(speed),
+                  'mean_speedup':statistics.mean(speed),
+                  'reference_median_ms':statistics.median(p['reference']['ms'] for p in pairs),
+                  'candidate_median_ms':statistics.median(p['candidate']['ms'] for p in pairs),
+                  'reference_median_nps':statistics.median(p['reference']['nps'] for p in pairs),
+                  'candidate_median_nps':statistics.median(p['candidate']['nps'] for p in pairs)}
+          open('speed-phase-a.json','w').write(json.dumps(result,indent=2)+'\n')
+          print(json.dumps(result,indent=2))
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: speed-v3-phase-a
+          path: |
+            speed-phase-a.json
+            speed-phase-a.txt
