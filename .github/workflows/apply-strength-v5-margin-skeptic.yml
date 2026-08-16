@@ -1,0 +1,77 @@
+name: Apply strength v5 margin skeptic
+
+on:
+  push:
+    branches:
+      - leviathan/strength-v5-margin-skeptic
+    paths:
+      - '.github/workflows/apply-strength-v5-margin-skeptic.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout strength branch
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: leviathan/strength-v5-margin-skeptic
+
+      - name: Add near-alpha fail-low skeptic re-search
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('src/search.cpp')
+          s = p.read_text()
+          old = '''                // Post LMR continuation history updates
+                update_continuation_histories(ss, movedPiece, move.to_sq(), 1334);
+            }
+        }
+
+        // Step 18. Full-depth search when LMR is skipped
+'''
+          new = '''                // Post LMR continuation history updates
+                update_continuation_histories(ss, movedPiece, move.to_sq(), 1334);
+            }
+            // Leviathan strength v5 — Margin Skeptic Search.
+            // Stockfish normally gives full-depth verification to a reduced move
+            // only after it crosses alpha. That creates an information cliff: a
+            // reduced quiet move that misses alpha by a few centipawns can be
+            // discarded even though the reduction itself may be the reason it
+            // missed. Re-open only near-boundary, genuinely reduced branches.
+            // This buys proof where the decision is fragile instead of globally
+            // inflating depth.
+            else if (d < newDepth && depth >= 6 && moveCount <= 10 && !capture && !givesCheck
+                     && value >= alpha - (18 + 3 * std::min(int(depth), 12))
+                     && (PvNode || ss->ttPv
+                         || Leviathan::Fundamentals::quiet_tactical_tension(
+                           pos, move, capture, givesCheck)))
+            {
+                leviathanResearched = true;
+                value = -search<NonPV>(pos, ss + 1, -(alpha + 1), -alpha, newDepth, !cutNode);
+
+                // If the skeptic search flips the branch across alpha, preserve
+                // the same continuation-history signal as an ordinary LMR fail-high.
+                if (value > alpha)
+                    update_continuation_histories(ss, movedPiece, move.to_sq(), 1334);
+            }
+        }
+
+        // Step 18. Full-depth search when LMR is skipped
+'''
+          if s.count(old) != 1:
+              raise SystemExit(f'anchor count {s.count(old)}')
+          p.write_text(s.replace(old, new, 1))
+          PY
+          git diff --check
+          git diff -- src/search.cpp
+
+      - name: Commit strength search change
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add src/search.cpp
+          git commit -m 'Strength v5: verify near-alpha LMR fail-lows'
+          git push origin HEAD:leviathan/strength-v5-margin-skeptic
