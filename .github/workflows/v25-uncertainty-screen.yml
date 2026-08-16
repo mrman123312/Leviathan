@@ -1,0 +1,192 @@
+name: Leviathan v2.5 uncertainty screen
+
+on:
+  push:
+    branches: [leviathan/fundamentals-v2.5-uncertainty]
+    paths: ['.github/workflows/v25-uncertainty-screen.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  screen:
+    runs-on: ubuntu-22.04
+    strategy:
+      fail-fast: false
+      matrix:
+        profile: [control, boundary, rival, both]
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: fbccfb6eb5cd335b1ce8fc5c5efad9e36be4e19d
+          path: leviathan
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          repository: official-stockfish/Stockfish
+          ref: 5062aee519a1ba262d472d8ab139851ced56573e
+          path: stockfish
+
+      - name: Apply source-derived uncertainty profile
+        working-directory: leviathan
+        env:
+          PROFILE: ${{ matrix.profile }}
+        run: |
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+          q=os.environ['PROFILE']
+          p=Path('src/search.cpp')
+          s=p.read_text()
+
+          if q in ('boundary','both'):
+              anchor='''            leviathanReducedValue = value;\n\n            // Do a full-depth search when reduced LMR search fails high'''
+              repl='''            leviathanReducedValue = value;\n\n            // Leviathan boundary uncertainty: Stockfish normally treats every\n            // reduced fail-low identically. A line one centipawn below alpha is\n            // not as trustworthy as a line hundreds below alpha. Verify only\n            // genuinely reduced, quiet near-boundary lines one step deeper.\n            if (d + 1 < newDepth && depth >= 4 && moveCount <= 14 && !capture && !givesCheck\n                && value <= alpha && value >= alpha - 32)\n            {\n                const Depth verifyDepth = std::min(newDepth - 1, d + 2);\n                if (verifyDepth > d)\n                {\n                    leviathanResearched = true;\n                    ss->reduction = newDepth - verifyDepth;\n                    value = -search<NonPV>(pos, ss + 1, -(alpha + 1), -alpha, verifyDepth, true);\n                    ss->reduction = 0;\n                }\n            }\n\n            // Do a full-depth search when reduced LMR search fails high'''
+              if s.count(anchor)!=1:
+                  raise SystemExit(f'boundary anchor count={s.count(anchor)}')
+              s=s.replace(anchor,repl,1)
+
+          if q in ('rival','both'):
+              anchor='''                // Reduce other moves if we have found at least one score improvement\n                if (depth > 3 && depth < 12 && !is_decisive(value))\n                    depth -= 3;'''
+              repl='''                // Leviathan rival preservation: Stockfish compresses every remaining\n                // rival by three plies after any score improvement. Preserve more\n                // scope when the new leader barely cleared alpha; compress hard\n                // only when the improvement itself is convincing.\n                if (depth > 3 && depth < 12 && !is_decisive(value))\n                {\n                    const int improvement = std::max(1, int(value + inc - alpha));\n                    depth -= improvement <= 24 ? 1 : improvement <= 80 ? 2 : 3;\n                }'''
+              if s.count(anchor)!=1:
+                  raise SystemExit(f'rival anchor count={s.count(anchor)}')
+              s=s.replace(anchor,repl,1)
+
+          p.write_text(s)
+          PY
+          git diff --check
+          git diff -- src/search.cpp
+
+      - run: python3 -m pip install --disable-pip-version-check 'python-chess>=1.999,<2'
+
+      - name: Build both AVX2 engines
+        run: |
+          cd leviathan/src
+          make net
+          make clean
+          make -j2 ARCH=x86-64-avx2 build
+          mv stockfish leviathan
+          cd ../../stockfish/src
+          make net
+          make clean
+          make -j2 ARCH=x86-64-avx2 build
+          mv stockfish parent
+
+      - name: Configure
+        working-directory: leviathan
+        run: |
+          mkdir -p screen
+          cat > screen/a.json <<'EOF'
+          {"Threads":1,"Hash":64,"Leviathan Fundamentals":true,"Leviathan Fundamentals Authority":2,"Leviathan Forcing Buyback":384,"Leviathan Recapture Buyback":256,"Leviathan Passer Buyback":320,"Leviathan Endgame Buyback":128,"Leviathan Quiet Overdrive":160,"Leviathan Rule50 Pawn Bonus":3072,"Leviathan Zugzwang Guard":true,"Leviathan Sacrifice Rescue":true,"Leviathan Rule50 Pressure":true,"Leviathan Policy":false,"Leviathan MetaSearch":false,"Leviathan Risk":false,"Leviathan Specialist":false,"Leviathan Atlas":false,"Leviathan Search DSL":false}
+          EOF
+          echo '{"Threads":1,"Hash":64}' > screen/b.json
+
+      - name: Generate common 20-opening diverse panel
+        working-directory: leviathan
+        run: |
+          python3 - <<'PY'
+          import random
+          from pathlib import Path
+          import chess, chess.engine
+          sf=chess.engine.SimpleEngine.popen_uci('../stockfish/src/parent')
+          sf.configure({'Threads':1,'Hash':64})
+          out=[]; seen=set()
+          try:
+            for shard in range(5):
+              rng=random.Random(8910+shard*100003)
+              local=[]
+              while len(local)<4:
+                b=chess.Board()
+                for _ in range(rng.randint(6,12)):
+                  if b.is_game_over(): break
+                  infos=sf.analyse(b,chess.engine.Limit(nodes=1800),multipv=min(6,b.legal_moves.count()))
+                  if not isinstance(infos,list): infos=[infos]
+                  ranked=[]
+                  for info in infos:
+                    pv=info.get('pv',[])
+                    if not pv: continue
+                    cp=info['score'].pov(b.turn).score(mate_score=100000)
+                    ranked.append((pv[0],int(cp or 0)))
+                  if not ranked: break
+                  best=ranked[0][1]
+                  viable=[x for x in ranked if best-x[1]<=100] or ranked[:1]
+                  b.push(rng.choices([m for m,_ in viable],weights=list(range(len(viable),0,-1)),k=1)[0])
+                if b.is_game_over(): continue
+                key=' '.join(b.fen().split()[:4])
+                if key in seen: continue
+                seen.add(key); local.append(b.fen())
+              out.extend(local)
+          finally:
+            sf.quit()
+          Path('screen/openings.fen').write_text('\n'.join(out)+'\n')
+          PY
+
+      - name: Fixed-depth bench
+        working-directory: leviathan/src
+        env:
+          PROFILE: ${{ matrix.profile }}
+        run: |
+          ./leviathan bench 2>&1 | tee ../screen/off-${PROFILE}.txt
+          cat > ../screen/on.uci <<'EOF'
+          setoption name Leviathan Fundamentals value true
+          setoption name Leviathan Fundamentals Authority value 2
+          bench
+          quit
+          EOF
+          ./leviathan < ../screen/on.uci 2>&1 | tee ../screen/on-${PROFILE}.txt
+
+      - name: 40 equal-node games — pure search quality
+        working-directory: leviathan
+        env:
+          PROFILE: ${{ matrix.profile }}
+        run: |
+          python3 tools/run_match.py \
+            --engine-a "$GITHUB_WORKSPACE/leviathan/src/leviathan" \
+            --engine-b "$GITHUB_WORKSPACE/stockfish/src/parent" \
+            --options-a screen/a.json --options-b screen/b.json \
+            --openings screen/openings.fen --games 40 --nodes-per-move 18000 --max-plies 220 \
+            --out screen/nodes-${PROFILE}.json | tee screen/nodes-${PROFILE}.log
+
+      - name: 40 fixed-time games — practical strength
+        working-directory: leviathan
+        env:
+          PROFILE: ${{ matrix.profile }}
+        run: |
+          python3 tools/run_match.py \
+            --engine-a "$GITHUB_WORKSPACE/leviathan/src/leviathan" \
+            --engine-b "$GITHUB_WORKSPACE/stockfish/src/parent" \
+            --options-a screen/a.json --options-b screen/b.json \
+            --openings screen/openings.fen --games 40 --movetime-ms 100 --max-plies 220 \
+            --out screen/time-${PROFILE}.json | tee screen/time-${PROFILE}.log
+
+      - name: Summarize
+        working-directory: leviathan
+        env:
+          PROFILE: ${{ matrix.profile }}
+        run: |
+          python3 - <<'PY'
+          import json, os, re
+          from pathlib import Path
+          q=os.environ['PROFILE']
+          n=json.loads(Path(f'screen/nodes-{q}.json').read_text())['summary']
+          t=json.loads(Path(f'screen/time-{q}.json').read_text())['summary']
+          off=Path(f'screen/off-{q}.txt').read_text(); on=Path(f'screen/on-{q}.txt').read_text()
+          def last(p,s): return int(re.findall(p,s)[-1])
+          om=last(r'Total time \(ms\)\s*:\s*(\d+)',off); am=last(r'Total time \(ms\)\s*:\s*(\d+)',on)
+          onodes=last(r'Nodes searched\s*:\s*(\d+)',off); anodes=last(r'Nodes searched\s*:\s*(\d+)',on)
+          r={'profile':q,'equal_node':n,'fixed_time':t,'off_ms':om,'active_ms':am,'bench_speed_ratio':om/am,'off_nodes':onodes,'active_nodes':anodes,'node_change_pct':(anodes/onodes-1)*100}
+          Path(f'screen/report-{q}.json').write_text(json.dumps(r,indent=2)+'\n')
+          print(json.dumps(r,indent=2))
+          PY
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: v25-${{ matrix.profile }}
+          path: |
+            leviathan/screen/report-${{ matrix.profile }}.json
+            leviathan/screen/nodes-${{ matrix.profile }}.json
+            leviathan/screen/time-${{ matrix.profile }}.json
+            leviathan/screen/openings.fen
+            leviathan/screen/off-${{ matrix.profile }}.txt
+            leviathan/screen/on-${{ matrix.profile }}.txt
