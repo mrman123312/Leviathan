@@ -1,0 +1,132 @@
+name: Leviathan Sparse Uncertainty causal ablation
+
+on:
+  push:
+    branches: [leviathan/lab-v4-sparse-ablation]
+    paths:
+      - '.github/workflows/lab-sparse-v3-ablation.yml'
+      - 'tools/multi_candidate_regret_panel.py'
+      - 'experiments/options/active_fundamentals.json'
+      - 'experiments/requirements-chess-hashed.txt'
+      - 'experiments/manifests/sparse_v3_ablation.json'
+  workflow_dispatch:
+
+permissions: {contents: read}
+
+concurrency:
+  group: lab-sparse-v3-ablation-${{ github.ref }}
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  fixed-corpus-oracle:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 100
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ github.sha }}
+          path: lab
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: 9fe94b6c81ccf3b1defe3200d6c08098a8dba1e1
+          path: reference
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: 79c6ba9189b98dd865813fc4e36b4c649d6fd524
+          path: verify
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: c4101ddaf2aa8bca7dd6715f640cf3e3df6a5f9f
+          path: soften
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: e0e07e32659e87f626f19e3e9efaa259fc31a8b1
+          path: both
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          repository: official-stockfish/Stockfish
+          ref: 5062aee519a1ba262d472d8ab139851ced56573e
+          path: oracle
+      - name: Record immutable provenance
+        run: |
+          set -euo pipefail
+          {
+            echo "runner_image=${ImageOS:-unknown}"
+            echo "runner_image_version=${ImageVersion:-unknown}"
+            uname -a
+            lscpu
+            g++ --version
+            python3 --version
+            for engine in lab reference verify soften both oracle; do
+              git -C "$engine" rev-parse HEAD
+              git -C "$engine" rev-parse 'HEAD^{tree}'
+            done
+            sha256sum lab/tools/multi_candidate_regret_panel.py
+            sha256sum lab/experiments/options/active_fundamentals.json
+            sha256sum lab/experiments/requirements-chess-hashed.txt
+            sha256sum lab/experiments/manifests/sparse_v3_ablation.json
+          } | tee provenance.txt
+          for candidate in verify soften both; do
+            set +e
+            diff -ru --exclude='*.nnue' reference/src "$candidate/src" \
+              > "$candidate-source.patch"
+            diff_status=$?
+            set -e
+            if (( diff_status > 1 )); then exit "$diff_status"; fi
+            test -s "$candidate-source.patch"
+          done
+      - name: Install hash-locked chess harness dependency
+        run: |
+          set -euo pipefail
+          PIP_CACHE_DIR="$RUNNER_TEMP/pip-cache" python3 -m pip install \
+            --disable-pip-version-check --require-hashes \
+            -r lab/experiments/requirements-chess-hashed.txt
+          python3 -m pip freeze | sort | tee dependency-freeze.txt
+      - name: Build reference, ablations, combined candidate, and oracle
+        run: |
+          set -euo pipefail
+          make -C reference/src net
+          for engine in verify soften both oracle; do
+            cp reference/src/nn-ab28990d4ea3.nnue "$engine/src/"
+          done
+          for engine in reference verify soften both oracle; do
+            make -C "$engine/src" -j2 ARCH=x86-64-avx2 build
+            mv "$engine/src/stockfish" "$engine/src/$engine"
+          done
+          sha256sum reference/src/reference verify/src/verify soften/src/soften \
+            both/src/both oracle/src/oracle | tee binary-sha256.txt
+          sha256sum reference/src/nn-ab28990d4ea3.nnue verify/src/nn-ab28990d4ea3.nnue \
+            soften/src/nn-ab28990d4ea3.nnue both/src/nn-ab28990d4ea3.nnue \
+            oracle/src/nn-ab28990d4ea3.nnue | tee network-sha256.txt
+      - name: Fixed-corpus equal-node deep-oracle panel
+        run: |
+          set -euo pipefail
+          mkdir -p results
+          python3 lab/tools/multi_candidate_regret_panel.py \
+            --engine reference="$GITHUB_WORKSPACE/reference/src/reference" \
+            --engine verify="$GITHUB_WORKSPACE/verify/src/verify" \
+            --engine soften="$GITHUB_WORKSPACE/soften/src/soften" \
+            --engine both="$GITHUB_WORKSPACE/both/src/both" \
+            --oracle "$GITHUB_WORKSPACE/oracle/src/oracle" \
+            --options lab/experiments/options/active_fundamentals.json \
+            --positions 240 --seed 991073 --shallow 24000 --deep 300000 \
+            --min-disagreements 20 --out results/sparse-v3-ablation.json \
+            | tee results/sparse-v3-ablation.log
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: sparse-v3-causal-ablation
+          retention-days: 90
+          if-no-files-found: error
+          path: |
+            provenance.txt
+            dependency-freeze.txt
+            *-source.patch
+            binary-sha256.txt
+            network-sha256.txt
+            results/
+

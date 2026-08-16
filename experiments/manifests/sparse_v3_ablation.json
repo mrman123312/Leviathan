@@ -1,0 +1,23 @@
+{
+  "schema": "LV_EXPERIMENT_MANIFEST_V1",
+  "id": "W022",
+  "family": "strength-causal-ablation",
+  "question": "Which Sparse Uncertainty component, if either, causes the positive deep-oracle disagreement signal?",
+  "reference_sha": "9fe94b6c81ccf3b1defe3200d6c08098a8dba1e1",
+  "candidates": {
+    "verify_only": "79c6ba9189b98dd865813fc4e36b4c649d6fd524",
+    "soften_only": "c4101ddaf2aa8bca7dd6715f640cf3e3df6a5f9f",
+    "both": "e0e07e32659e87f626f19e3e9efaa259fc31a8b1"
+  },
+  "oracle_sha": "5062aee519a1ba262d472d8ab139851ced56573e",
+  "network": "nn-ab28990d4ea3.nnue",
+  "design": {
+    "positions": 240,
+    "generation_seed": 991073,
+    "shallow_nodes": 24000,
+    "deep_nodes_per_search": 300000,
+    "selection": "One fixed corpus for all candidates; no candidate-specific disagreement stopping rule."
+  },
+  "interpretation_gate": "No candidate advances to new games unless its oracle advantage is positive, has at least 20 disagreements, and survives a fresh-corpus replication."
+}
+
