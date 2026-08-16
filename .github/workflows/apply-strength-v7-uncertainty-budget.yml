@@ -1,0 +1,43 @@
+name: Apply strength v7 uncertainty budget
+
+on:
+  push:
+    branches:
+      - leviathan/strength-v7-persistent-proof
+    paths:
+      - '.github/workflows/apply-strength-v7-uncertainty-budget.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout strength v7
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: leviathan/strength-v7-persistent-proof
+
+      - name: Couple root proof debt to time budget
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('src/search.cpp')
+          s = p.read_text()
+          old = "            totalTime *= Leviathan::Control::meta_time_factor(\n              rootDepth, rootDepth - lastBestMoveDepth, rootMoves[0].previousScore, bestValue,\n              totBestMoveChanges, int(nodesEffort), rootMoves.size(), is_decisive(bestValue));\n\n            // Leviathan strength v6.6 - Root Challenger Certification. A stable\n"
+          new = "            totalTime *= Leviathan::Control::meta_time_factor(\n              rootDepth, rootDepth - lastBestMoveDepth, rootMoves[0].previousScore, bestValue,\n              totBestMoveChanges, int(nodesEffort), rootMoves.size(), is_decisive(bestValue));\n\n            // Leviathan strength v7.2 - Uncertainty Budget Coupling. Local proof\n            // failures can now propagate to and persist at the root. Convert that\n            // epistemic state into more verification time, while the normal hard\n            // maximum-time clamp below remains authoritative.\n            const unsigned leviathanRootDebt =\n              leviathan_proof_memory_load(leviathan_tt_key(rootPos));\n            if (!is_decisive(bestValue) && leviathanRootDebt >= 3)\n                totalTime *= leviathanRootDebt >= 5 ? 1.18\n                           : leviathanRootDebt >= 4 ? 1.12\n                                                    : 1.06;\n\n            // Leviathan strength v6.6 - Root Challenger Certification. A stable\n"
+          if s.count(old) != 1:
+              raise SystemExit(f'uncertainty budget anchor count {s.count(old)}')
+          p.write_text(s.replace(old, new, 1))
+          PY
+          git diff --check
+          git diff -- src/search.cpp
+
+      - name: Commit uncertainty budget coupling
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add src/search.cpp
+          git commit -m 'Strength v7.2: couple root proof debt to time budget'
+          git push origin HEAD:leviathan/strength-v7-persistent-proof
