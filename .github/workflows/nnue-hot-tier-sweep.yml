@@ -1,0 +1,147 @@
+name: Leviathan NNUE hot-tier sweep
+
+on:
+  push:
+    branches: [leviathan/speed-v3-profile]
+    paths: ['.github/workflows/nnue-hot-tier-sweep.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  prepare-hotset:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: fbccfb6eb5cd335b1ce8fc5c5efad9e36be4e19d
+      - name: Instrument threat-index traffic
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path('src/nnue/nnue_accumulator.cpp');s=p.read_text()
+          s=s.replace('#include <new>','#include <new>\n#include <cstdio>\n#include <cstdlib>\n#include <cstdint>')
+          anchor='void apply_combined(Color                              perspective,'
+          helper='\n'.join(['',
+            'struct LVHotProfile {',
+            '  static constexpr int N=64368;',
+            '  std::uint64_t c[N]{}; std::uint64_t total=0;',
+            '  ~LVHotProfile(){ if(!std::getenv("LV_HOT_PROFILE")) return;',
+            '    std::fprintf(stderr,"LVHOT_TOTAL %llu\\n",(unsigned long long)total);',
+            '    for(int i=0;i<N;++i) if(c[i]) std::fprintf(stderr,"LVHOT %d %llu\\n",i,(unsigned long long)c[i]);',
+            '  }',
+            '};',
+            'LVHotProfile lvHotProfile;', '', ''])
+          if anchor not in s: raise SystemExit('profile anchor')
+          s=s.replace(anchor,helper+anchor,1)
+          body='    const auto& fromAcc = from.accumulation[perspective];'
+          repl='\n'.join([
+            '    if (std::getenv("LV_HOT_PROFILE")) {',
+            '      for(auto x:thrRemoved){++lvHotProfile.c[x];++lvHotProfile.total;}',
+            '      for(auto x:thrAdded){++lvHotProfile.c[x];++lvHotProfile.total;}',
+            '    }','',body])
+          if body not in s: raise SystemExit('profile body')
+          p.write_text(s.replace(body,repl,1))
+          PY
+      - name: Build profiler and collect deterministic traffic
+        working-directory: src
+        run: |
+          make net && make -j2 ARCH=x86-64-avx2 build
+          LV_HOT_PROFILE=1 ./stockfish bench 32 1 15 default depth 2>&1 | tee ../profile.log
+      - name: Emit ordered hotset
+        run: |
+          python3 - <<'PY'
+          rows=[]
+          for line in open('profile.log',errors='ignore'):
+            if line.startswith('LVHOT '):
+              _,i,c=line.split(); rows.append((int(i),int(c)))
+          rows.sort(key=lambda x:x[1],reverse=True)
+          assert len(rows)>=8192, len(rows)
+          open('hot8192.txt','w').write('\n'.join(str(i) for i,_ in rows[:8192])+'\n')
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: nnue-hotset-8192
+          path: hot8192.txt
+
+  benchmark:
+    needs: prepare-hotset
+    runs-on: ubuntu-22.04
+    strategy:
+      fail-fast: false
+      matrix:
+        hot: [2048, 4096, 8192]
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with: {ref: fbccfb6eb5cd335b1ce8fc5c5efad9e36be4e19d, path: candidate}
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with: {ref: fbccfb6eb5cd335b1ce8fc5c5efad9e36be4e19d, path: reference}
+      - uses: actions/download-artifact@v4
+        with: {name: nnue-hotset-8192, path: hotset}
+      - name: Add pre-expanded hot tier
+        working-directory: candidate
+        env:
+          HOT: ${{ matrix.hot }}
+        run: |
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+          K=int(os.environ['HOT']); inds=[int(x) for x in Path('../hotset/hot8192.txt').read_text().split()[:K]]
+          h=Path('src/nnue/leviathan_hot_threat_indices.h')
+          lines=['#ifndef LEVIATHAN_HOT_THREAT_INDICES_H_INCLUDED','#define LEVIATHAN_HOT_THREAT_INDICES_H_INCLUDED','#include <array>','#include "../types.h"','namespace Stockfish::Eval::NNUE {',f'inline constexpr IndexType LeviathanHotThreatCount = {K};',f'inline constexpr std::array<IndexType, {K}> LeviathanHotThreatIndices = {{']
+          for j in range(0,K,16): lines.append('  '+', '.join(map(str,inds[j:j+16]))+',')
+          lines += ['};','}','#endif']
+          h.write_text('\n'.join(lines)+'\n')
+
+          p=Path('src/nnue/nnue_feature_transformer.h');s=p.read_text()
+          inc='#include "nnue_common.h"'
+          if inc not in s: raise SystemExit('include anchor')
+          s=s.replace(inc,inc+'\n#include "leviathan_hot_threat_indices.h"',1)
+          anchor='''        permute_weights();\n\n        return !stream.fail();'''
+          repl='''        permute_weights();\n        build_leviathan_hot_threat_cache();\n\n        return !stream.fail();'''
+          if anchor not in s: raise SystemExit('read anchor')
+          s=s.replace(anchor,repl,1)
+          anchor='''    ThreatWeightType* threatWeightData() { return threatAndPpWeights.data(); }'''
+          repl='''    ThreatWeightType* threatWeightData() { return threatAndPpWeights.data(); }\n\n    void build_leviathan_hot_threat_cache() {\n        leviathanHotThreatSlot.fill(-1);\n        for (IndexType slot = 0; slot < LeviathanHotThreatCount; ++slot)\n        {\n            const IndexType idx = LeviathanHotThreatIndices[slot];\n            leviathanHotThreatSlot[idx] = static_cast<i16>(slot);\n            const auto* src = threatAndPpWeights.data() + idx * HalfDimensions;\n            auto* dst = leviathanHotThreatWeights.data() + slot * HalfDimensions;\n            for (IndexType j = 0; j < HalfDimensions; ++j)\n                dst[j] = static_cast<WeightType>(src[j]);\n        }\n    }\n\n    const WeightType* leviathan_hot_threat_column(IndexType idx) const {\n        const i16 slot = leviathanHotThreatSlot[idx];\n        return slot >= 0 ? leviathanHotThreatWeights.data() + IndexType(slot) * HalfDimensions : nullptr;\n    }'''
+          if anchor not in s: raise SystemExit('method anchor')
+          s=s.replace(anchor,repl,1)
+          anchor='''    alignas(CacheLineSize) ThreatAndPpWeightArray threatAndPpWeights;'''
+          repl='''    alignas(CacheLineSize) ThreatAndPpWeightArray threatAndPpWeights;\n    alignas(CacheLineSize) std::array<WeightType, LeviathanHotThreatCount * HalfDimensions> leviathanHotThreatWeights;\n    std::array<i16, ThreatAndPpDimensions> leviathanHotThreatSlot;'''
+          if anchor not in s: raise SystemExit('field anchor')
+          p.write_text(s.replace(anchor,repl,1))
+
+          p=Path('src/nnue/nnue_accumulator.cpp');s=p.read_text()
+          anchor='''        auto* column =\n          reinterpret_cast<const vec_i8_t*>(&ft.threatAndPpWeights[list[i] * Dimensions + tileOff]);\n    #ifdef USE_NEON'''
+          repl='''        const auto* hotColumn = ft.leviathan_hot_threat_column(list[i]);\n        if (hotColumn)\n        {\n            auto* hot = reinterpret_cast<const vec_t*>(hotColumn + tileOff);\n            for (IndexType k = 0; k < Tiling::NumRegs; ++k)\n                if constexpr (sign == +1)\n                    acc[k] = vec_add_16(acc[k], hot[k]);\n                else\n                    acc[k] = vec_sub_16(acc[k], hot[k]);\n            continue;\n        }\n\n        auto* column =\n          reinterpret_cast<const vec_i8_t*>(&ft.threatAndPpWeights[list[i] * Dimensions + tileOff]);\n    #ifdef USE_NEON'''
+          if anchor not in s: raise SystemExit('acc hot anchor')
+          p.write_text(s.replace(anchor,repl,1))
+          PY
+      - name: Build candidate and reference
+        run: |
+          cd candidate/src && make net && make -j2 ARCH=x86-64-avx2 build && mv stockfish candidate
+          cd ../../reference/src && make net && make -j2 ARCH=x86-64-avx2 build && mv stockfish reference
+      - name: Exact-node standard bench panel
+        run: |
+          python3 - <<'PY' | tee standard-${{ matrix.hot }}.txt
+          import json,re,statistics,subprocess
+          cfg='setoption name Threads value 1\nsetoption name Hash value 64\nsetoption name Leviathan Fundamentals value true\nsetoption name Leviathan Fundamentals Authority value 2\nsetoption name Leviathan Policy value false\nsetoption name Leviathan MetaSearch value false\nsetoption name Leviathan Risk value false\nsetoption name Leviathan Specialist value false\nsetoption name Leviathan Atlas value false\nsetoption name Leviathan Search DSL value false\n'
+          def R(p):
+            z=subprocess.run([p],input=cfg+'bench\nquit\n',text=True,capture_output=True,check=True);o=z.stdout+z.stderr
+            return {'ms':int(re.findall(r'Total time \(ms\)\s*:\s*(\d+)',o)[-1]),'nodes':int(re.findall(r'Nodes searched\s*:\s*(\d+)',o)[-1])}
+          ref='./reference/src/reference';cand='./candidate/src/candidate';R(ref);R(cand);P=[]
+          for i in range(17):
+            if i%2:c=R(cand);r=R(ref)
+            else:r=R(ref);c=R(cand)
+            if r['nodes']!=c['nodes']:raise SystemExit(f'DIVERGENCE {r} {c}')
+            P.append((r,c));print(i+1,r,c,r['ms']/c['ms'])
+          q=[r['ms']/c['ms'] for r,c in P]
+          out={'hot':${{ matrix.hot }},'nodes':P[0][0]['nodes'],'median_speedup':statistics.median(q),'mean_speedup':statistics.mean(q),'reference_median_ms':statistics.median(r['ms'] for r,c in P),'candidate_median_ms':statistics.median(c['ms'] for r,c in P)}
+          open('hot-tier-${{ matrix.hot }}.json','w').write(json.dumps(out,indent=2)+'\n');print(json.dumps(out,indent=2))
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: nnue-hot-tier-${{ matrix.hot }}
+          path: |
+            hot-tier-${{ matrix.hot }}.json
+            standard-${{ matrix.hot }}.txt
