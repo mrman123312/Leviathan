@@ -1,0 +1,99 @@
+name: Leviathan speed v3 lossless fastpath screen
+
+on:
+  push:
+    branches: [leviathan/speed-v3-lossless-fastpaths]
+    paths: ['.github/workflows/speed-v3-fastpath-screen.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  bench:
+    runs-on: ubuntu-22.04
+    strategy:
+      fail-fast: false
+      matrix:
+        profile: [control, dsl, trace, both]
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: fbccfb6eb5cd335b1ce8fc5c5efad9e36be4e19d
+      - name: Apply exact fast paths
+        if: matrix.profile != 'control'
+        env: {PROFILE: '${{ matrix.profile }}'}
+        run: |
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+          q=os.environ['PROFILE']
+          if q in ('dsl','both'):
+            p=Path('src/leviathan_dsl.h');s=p.read_text()
+            a='''inline int lmr_adjustment(Depth depth,\n                          int moveCount,'''
+            b='''inline int lmr_adjustment(Depth depth,\n                          int moveCount,'''
+            if s.count(a)!=1: raise SystemExit('dsl signature anchor')
+            # Insert before the feature array. This changes no result: eval(x) already
+            # returned zero when !ready(), but used to construct/clamp all features first.
+            anchor='''                          Value staticEval,\n                          Value alpha) {\n    const std::array<int, FeatureCount> x = {'''
+            repl='''                          Value staticEval,\n                          Value alpha) {\n    if (!ready())\n        return 0;\n\n    const std::array<int, FeatureCount> x = {'''
+            if s.count(anchor)!=1: raise SystemExit('dsl body anchor')
+            p.write_text(s.replace(anchor,repl,1))
+          if q in ('trace','both'):
+            p=Path('src/leviathan_trace.h');s=p.read_text()
+            anchor='''inline void set_sample_permille(int v) {\n    auto& s = state();'''
+            repl='''inline bool enabled() {\n    const auto& s = state();\n    return s.samplePermille > 0 && !s.file.empty();\n}\n\ninline void set_sample_permille(int v) {\n    auto& s = state();'''
+            if s.count(anchor)!=1: raise SystemExit('trace header anchor')
+            p.write_text(s.replace(anchor,repl,1))
+            p=Path('src/search.cpp');s=p.read_text()
+            anchor='''        u64 nodeCount = rootNode ? u64(nodes) : 0;\n        const u64 leviathanParentKey = u64(pos.key());'''
+            repl='''        u64 nodeCount = rootNode ? u64(nodes) : 0;\n        const bool leviathanTraceEnabled = Leviathan::Trace::enabled();\n        const u64 leviathanParentKey = leviathanTraceEnabled ? u64(pos.key()) : 0;'''
+            if s.count(anchor)!=1: raise SystemExit('trace key anchor')
+            s=s.replace(anchor,repl,1)
+            # Only maintain trace bookkeeping when tracing is actually enabled.
+            s=s.replace('''            leviathanReducedDepth = d;''','''            if (leviathanTraceEnabled)\n                leviathanReducedDepth = d;''',1)
+            s=s.replace('''            leviathanReducedValue = value;''','''            if (leviathanTraceEnabled)\n                leviathanReducedValue = value;''',1)
+            s=s.replace('''                    leviathanResearched = true;''','''                    if (leviathanTraceEnabled)\n                        leviathanResearched = true;''',1)
+            s=s.replace('''            if (leviathanReducedValue != VALUE_NONE)\n                leviathanResearched = true;''','''            if (leviathanTraceEnabled && leviathanReducedValue != VALUE_NONE)\n                leviathanResearched = true;''',1)
+            anchor='''        if (leviathanReducedValue != VALUE_NONE)\n            Leviathan::Trace::record_lmr('''
+            repl='''        if (leviathanTraceEnabled && leviathanReducedValue != VALUE_NONE)\n            Leviathan::Trace::record_lmr('''
+            if s.count(anchor)!=1: raise SystemExit('trace record anchor')
+            p.write_text(s.replace(anchor,repl,1))
+          PY
+          git diff --check
+      - name: Build
+        working-directory: src
+        run: make net && make clean && make -j2 ARCH=x86-64-avx2 build
+      - name: Exact semantic gates and interleaved timing
+        env: {PROFILE: '${{ matrix.profile }}'}
+        working-directory: src
+        run: |
+          python3 - <<'PY' | tee ../${PROFILE}.json
+          import subprocess,re,statistics,json,os
+          profile=os.environ['PROFILE']
+          def run(active):
+            q=("setoption name Leviathan Fundamentals value true\nsetoption name Leviathan Fundamentals Authority value 2\n" if active else "")+"bench\nquit\n"
+            p=subprocess.run(['./stockfish'],input=q,text=True,capture_output=True,check=True)
+            o=p.stdout+p.stderr
+            return {'ms':int(re.findall(r'Total time \(ms\)\s*:\s*(\d+)',o)[-1]),'nodes':int(re.findall(r'Nodes searched\s*:\s*(\d+)',o)[-1]),'nps':int(re.findall(r'Nodes/second\s*:\s*(\d+)',o)[-1])}
+          # warm
+          run(False);run(True)
+          pairs=[]
+          for i in range(21):
+            if i&1: a=run(True);o=run(False)
+            else: o=run(False);a=run(True)
+            if o['nodes'] != 2884956: raise SystemExit(f'off signature changed {o}')
+            if a['nodes'] != 3210480: raise SystemExit(f'active signature changed {a}')
+            pairs.append({'off':o,'active':a})
+          R={'profile':profile,'pairs':pairs,
+             'off_median_nps':statistics.median(x['off']['nps'] for x in pairs),
+             'active_median_nps':statistics.median(x['active']['nps'] for x in pairs),
+             'active_over_off_nps':statistics.median(x['active']['nps']/x['off']['nps'] for x in pairs),
+             'active_median_ms':statistics.median(x['active']['ms'] for x in pairs)}
+          print(json.dumps(R,indent=2))
+          open(f'../report-{profile}.json','w').write(json.dumps(R,indent=2)+'\n')
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: speed-v3-fastpath-${{ matrix.profile }}
+          path: report-${{ matrix.profile }}.json
