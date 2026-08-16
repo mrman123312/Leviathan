@@ -25,45 +25,34 @@ jobs:
           from pathlib import Path
           p = Path('src/search.cpp')
           s = p.read_text()
-          old = '''                // Post LMR continuation history updates
-                update_continuation_histories(ss, movedPiece, move.to_sq(), 1334);
-            }
-        }
-
-        // Step 18. Full-depth search when LMR is skipped
-'''
-          new = '''                // Post LMR continuation history updates
-                update_continuation_histories(ss, movedPiece, move.to_sq(), 1334);
-            }
-            // Leviathan strength v5 — Margin Skeptic Search.
-            // Stockfish normally gives full-depth verification to a reduced move
-            // only after it crosses alpha. That creates an information cliff: a
-            // reduced quiet move that misses alpha by a few centipawns can be
-            // discarded even though the reduction itself may be the reason it
-            // missed. Re-open only near-boundary, genuinely reduced branches.
-            // This buys proof where the decision is fragile instead of globally
-            // inflating depth.
-            else if (d < newDepth && depth >= 6 && moveCount <= 10 && !capture && !givesCheck
-                     && value >= alpha - (18 + 3 * std::min(int(depth), 12))
-                     && (PvNode || ss->ttPv
-                         || Leviathan::Fundamentals::quiet_tactical_tension(
-                           pos, move, capture, givesCheck)))
-            {
-                leviathanResearched = true;
-                value = -search<NonPV>(pos, ss + 1, -(alpha + 1), -alpha, newDepth, !cutNode);
-
-                // If the skeptic search flips the branch across alpha, preserve
-                // the same continuation-history signal as an ordinary LMR fail-high.
-                if (value > alpha)
-                    update_continuation_histories(ss, movedPiece, move.to_sq(), 1334);
-            }
-        }
-
-        // Step 18. Full-depth search when LMR is skipped
-'''
-          if s.count(old) != 1:
-              raise SystemExit(f'anchor count {s.count(old)}')
-          p.write_text(s.replace(old, new, 1))
+          anchor = "                // Post LMR continuation history updates\n                update_continuation_histories(ss, movedPiece, move.to_sq(), 1334);\n            }\n        }\n\n        // Step 18. Full-depth search when LMR is skipped\n"
+          replacement = (
+              "                // Post LMR continuation history updates\n"
+              "                update_continuation_histories(ss, movedPiece, move.to_sq(), 1334);\n"
+              "            }\n"
+              "            // Leviathan strength v5 - Margin Skeptic Search.\n"
+              "            // A reduced quiet move that misses alpha by only a small margin may\n"
+              "            // have missed because of the reduction itself. Re-open only near-\n"
+              "            // boundary, genuinely reduced branches instead of globally inflating depth.\n"
+              "            else if (d < newDepth && depth >= 6 && moveCount <= 10 && !capture && !givesCheck\n"
+              "                     && value >= alpha - (18 + 3 * std::min(int(depth), 12))\n"
+              "                     && (PvNode || ss->ttPv\n"
+              "                         || Leviathan::Fundamentals::quiet_tactical_tension(\n"
+              "                           pos, move, capture, givesCheck)))\n"
+              "            {\n"
+              "                leviathanResearched = true;\n"
+              "                value = -search<NonPV>(pos, ss + 1, -(alpha + 1), -alpha, newDepth, !cutNode);\n"
+              "\n"
+              "                if (value > alpha)\n"
+              "                    update_continuation_histories(ss, movedPiece, move.to_sq(), 1334);\n"
+              "            }\n"
+              "        }\n"
+              "\n"
+              "        // Step 18. Full-depth search when LMR is skipped\n"
+          )
+          if s.count(anchor) != 1:
+              raise SystemExit(f'anchor count {s.count(anchor)}')
+          p.write_text(s.replace(anchor, replacement, 1))
           PY
           git diff --check
           git diff -- src/search.cpp
