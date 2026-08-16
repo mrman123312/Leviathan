@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "donor_id": "fathom",
+  "source_repo": "jdart1/Fathom",
+  "source_revision": "c9c6fef0dddc05d2e242c183acf5833149ab676d",
+  "license": "MIT",
+  "files": [
+    {"path": "LICENSE", "git_blob_sha1": "274394e5db7392c356b9231ce25d6618b075a06b"},
+    {"path": "src/stdendian.h", "git_blob_sha1": "9f598b5c579154a8a75e6c8c5eec9d4b5495216a"},
+    {"path": "src/tbchess.c", "git_blob_sha1": "bca4d1a58de446ed84dbfff18bf7457be097736b"},
+    {"path": "src/tbconfig.h", "git_blob_sha1": "5836386e43b8464e14be73dcf60ce2d8134a6ea0"},
+    {"path": "src/tbprobe.c", "git_blob_sha1": "5eac014dc5431d6e23a55b7c5dea45a34a89fa2a"},
+    {"path": "src/tbprobe.h", "git_blob_sha1": "82850e72686b6e116e18123775716a66fb8ea060"}
+  ],
+  "purpose": "Standalone Syzygy probing donor with minimal coupling to any engine board/search architecture."
+}
