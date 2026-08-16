@@ -9,9 +9,9 @@
       spend depth where being wrong is asymmetric;
       recover that depth from genuinely stable late quiet branches.
 
-  This revision also fixes a v2.1 phase bug: lmr_adjustment() runs after
-  do_move(), so reading pos.moved_piece(move) there reads the now-empty from
-  square. Every move classifier below is valid both before and after do_move().
+  v2.2 also fixes a v2.1 phase bug: lmr_adjustment() runs after do_move(), so
+  reading pos.moved_piece(move) there reads the now-empty from square. Every
+  move classifier below is valid both before and after do_move().
 */
 #ifndef LEVIATHAN_FUNDAMENTALS_H_INCLUDED
 #define LEVIATHAN_FUNDAMENTALS_H_INCLUDED
@@ -72,8 +72,16 @@ inline int non_pawn_count(const Position& pos) {
     return pos.count<KNIGHT>() + pos.count<BISHOP>() + pos.count<ROOK>() + pos.count<QUEEN>();
 }
 
+// Fast exact low-material predicate. With >=20 total pieces there must be at
+// least four non-pawns because at most sixteen pawns can exist, so the expensive
+// four-type popcount can be skipped in normal middlegames/openings.
 inline bool low_material(const Position& pos) {
-    return pos.count<ALL_PIECES>() <= 10 || non_pawn_count(pos) <= 3;
+    const int pieces = pos.count<ALL_PIECES>();
+    if (pieces <= 10)
+        return true;
+    if (pieces >= 20)
+        return false;
+    return non_pawn_count(pos) <= 3;
 }
 
 inline int square_distance(Square a, Square b) {
@@ -88,49 +96,13 @@ inline Piece moving_piece(const Position& pos, Move move) {
     return pc != NO_PIECE ? pc : pos.piece_on(move.to_sq());
 }
 
-inline Color mover_color(const Position& pos, Move move) {
-    Piece pc = moving_piece(pos, move);
-    return pc != NO_PIECE ? color_of(pc) : pos.side_to_move();
-}
-
-inline bool pawn_move(const Position& pos, Move move) {
-    if (!move.is_ok())
-        return false;
-    if (move.type_of() == PROMOTION || move.type_of() == EN_PASSANT)
-        return true;
-    Piece pc = moving_piece(pos, move);
-    return pc != NO_PIECE && type_of(pc) == PAWN;
-}
-
-inline bool king_move(const Position& pos, Move move) {
-    Piece pc = moving_piece(pos, move);
-    return pc != NO_PIECE && type_of(pc) == KING;
-}
-
-inline bool heavy_move(const Position& pos, Move move) {
-    Piece pc = moving_piece(pos, move);
-    if (pc == NO_PIECE)
-        return false;
-    PieceType pt = type_of(pc);
-    return pt == ROOK || pt == QUEEN;
-}
-
-inline bool advanced_pawn_move(const Position& pos, Move move) {
-    return pawn_move(pos, move)
-        && relative_rank(mover_color(pos, move), move.to_sq()) >= RANK_6;
-}
-
 inline bool recapture(Move move, Square prevSq, bool capture) {
     return capture && prevSq != SQ_NONE && move.to_sq() == prevSq;
 }
 
-inline bool zeroing_quiet(const Position& pos, Move move, bool capture) {
-    return capture || pawn_move(pos, move);
-}
-
 inline Bitboard advanced_pawn_candidates(const Position& pos, Color c, bool broad) {
-    constexpr Bitboard WhiteBroad = Rank4BB | Rank5BB | Rank6BB | Rank7BB;
-    constexpr Bitboard BlackBroad = Rank2BB | Rank3BB | Rank4BB | Rank5BB;
+    constexpr Bitboard WhiteBroad  = Rank4BB | Rank5BB | Rank6BB | Rank7BB;
+    constexpr Bitboard BlackBroad  = Rank2BB | Rank3BB | Rank4BB | Rank5BB;
     constexpr Bitboard WhiteUrgent = Rank6BB | Rank7BB;
     constexpr Bitboard BlackUrgent = Rank2BB | Rank3BB;
     const Bitboard mask = broad ? (c == WHITE ? WhiteBroad : BlackBroad)
@@ -138,8 +110,6 @@ inline Bitboard advanced_pawn_candidates(const Position& pos, Color c, bool broa
     return pos.pieces(c, PAWN) & mask;
 }
 
-// This is search geometry, not an evaluation term. It only marks branches in
-// which pruning/reduction errors are unusually expensive.
 inline bool passed_pawn(const Position& pos, Color c, Square s) {
     Bitboard file = file_bb(s);
     Bitboard files = file | shift<EAST>(file) | shift<WEST>(file);
@@ -160,9 +130,12 @@ struct PasserThreat {
     int urgency = 0;  // 0 none, 1 watch, 2 serious, 3 critical, 4 imminent
 };
 
-inline PasserThreat most_urgent_passer(const Position& pos, Color c, bool broad) {
+inline PasserThreat most_urgent_passer(const Position& pos,
+                                       Color c,
+                                       bool broad,
+                                       Bitboard candidates = 0) {
     PasserThreat best;
-    Bitboard pawns = advanced_pawn_candidates(pos, c, broad);
+    Bitboard pawns = candidates ? candidates : advanced_pawn_candidates(pos, c, broad);
 
     while (pawns)
     {
@@ -178,22 +151,59 @@ inline PasserThreat most_urgent_passer(const Position& pos, Color c, bool broad)
     return best;
 }
 
-inline PasserThreat enemy_passer_threat(const Position& pos, Move move, bool sparse) {
-    const Color enemy = ~mover_color(pos, move);
-    if (!advanced_pawn_candidates(pos, enemy, sparse))
-        return {};
-    return most_urgent_passer(pos, enemy, sparse);
+struct MoveState {
+    Piece pc = NO_PIECE;
+    PieceType pt = NO_PIECE_TYPE;
+    Color us = WHITE;
+    bool pawn = false;
+    bool king = false;
+    bool heavy = false;
+    bool sparse = false;
+    Bitboard enemyCandidates = 0;
+    PasserThreat enemyPasser{};
+};
+
+inline MoveState classify(const Position& pos, Move move, bool needPasser = true) {
+    MoveState m;
+    m.pc = moving_piece(pos, move);
+    if (m.pc != NO_PIECE)
+    {
+        m.pt = type_of(m.pc);
+        m.us = color_of(m.pc);
+    }
+    else
+        m.us = pos.side_to_move();
+
+    m.pawn = move.is_ok() && (move.type_of() == PROMOTION || move.type_of() == EN_PASSANT
+                              || m.pt == PAWN);
+    m.king = m.pt == KING;
+    m.heavy = m.pt == ROOK || m.pt == QUEEN;
+    m.sparse = low_material(pos);
+
+    if (needPasser)
+    {
+        const Color enemy = ~m.us;
+        m.enemyCandidates = advanced_pawn_candidates(pos, enemy, m.sparse);
+        if (m.enemyCandidates)
+            m.enemyPasser = most_urgent_passer(pos, enemy, m.sparse, m.enemyCandidates);
+    }
+    return m;
+}
+
+inline bool advanced_pawn_move(const MoveState& m, Move move) {
+    return m.pawn && relative_rank(m.us, move.to_sq()) >= RANK_6;
 }
 
 inline bool moves_toward(Square from, Square to, Square target) {
     return square_distance(to, target) < square_distance(from, target);
 }
 
-inline bool passer_defense_move(const Position& pos, Move move, const PasserThreat& threat) {
+inline bool passer_defense_move(const Position& pos, Move move, const MoveState& m) {
+    const PasserThreat& threat = m.enemyPasser;
     if (!move.is_ok() || threat.urgency < 2)
         return false;
 
-    const Color enemy = ~mover_color(pos, move);
+    const Color enemy = ~m.us;
     const Square to = move.to_sq();
     const Square from = move.from_sq();
     const Square blockSq = Square(int(threat.sq) + int(pawn_push(enemy)));
@@ -201,56 +211,54 @@ inline bool passer_defense_move(const Position& pos, Move move, const PasserThre
     if (is_ok(blockSq) && to == blockSq)
         return true;
 
-    if (king_move(pos, move))
+    if (m.king)
     {
         Square promotionSq = make_square(file_of(threat.sq), enemy == WHITE ? RANK_8 : RANK_1);
         return moves_toward(from, to, threat.sq) || moves_toward(from, to, promotionSq);
     }
 
-    if (heavy_move(pos, move))
+    if (m.heavy)
         return file_of(to) == file_of(threat.sq) || rank_of(to) == rank_of(threat.sq);
 
     return false;
 }
 
-inline bool own_passer_support_move(const Position& pos, Move move, const PasserThreat& own) {
-    return king_move(pos, move) && own.urgency >= 2
-        && moves_toward(move.from_sq(), move.to_sq(), own.sq);
+inline PasserThreat own_passer(const Position& pos, const MoveState& m) {
+    if (!m.sparse || !m.king)
+        return {};
+    Bitboard candidates = advanced_pawn_candidates(pos, m.us, true);
+    return candidates ? most_urgent_passer(pos, m.us, true, candidates) : PasserThreat{};
 }
 
-inline bool active_heavy_move(const Position& pos,
-                              Move move,
-                              bool givesCheck,
-                              const PasserThreat& threat) {
-    if (!heavy_move(pos, move) || !low_material(pos))
+inline bool own_passer_support_move(Move move, const MoveState& m, const PasserThreat& own) {
+    return m.king && own.urgency >= 2 && moves_toward(move.from_sq(), move.to_sq(), own.sq);
+}
+
+inline bool active_heavy_move(Move move, const MoveState& m, bool givesCheck) {
+    if (!m.heavy || !m.sparse)
         return false;
 
-    if (givesCheck)
+    if (givesCheck || relative_rank(m.us, move.to_sq()) >= RANK_7)
         return true;
 
-    const Color us = mover_color(pos, move);
-    if (relative_rank(us, move.to_sq()) >= RANK_7)
-        return true;
-
-    return threat.urgency >= 3
-        && (file_of(move.to_sq()) == file_of(threat.sq)
-            || rank_of(move.to_sq()) == rank_of(threat.sq));
+    return m.enemyPasser.urgency >= 3
+        && (file_of(move.to_sq()) == file_of(m.enemyPasser.sq)
+            || rank_of(move.to_sq()) == rank_of(m.enemyPasser.sq));
 }
 
-inline bool dangerous_pawn_push(const Position& pos, Move move) {
+inline bool dangerous_pawn_push(const Position& pos, Move move, const MoveState& m) {
     if (move.type_of() == PROMOTION)
         return true;
-    if (!advanced_pawn_move(pos, move))
+    if (!advanced_pawn_move(m, move))
         return false;
 
-    const Color us = mover_color(pos, move);
-    const Rank rr = relative_rank(us, move.to_sq());
-    return rr >= RANK_7 || passed_pawn(pos, us, move.to_sq());
+    const Rank rr = relative_rank(m.us, move.to_sq());
+    return rr >= RANK_7 || passed_pawn(pos, m.us, move.to_sq());
 }
 
 inline bool stable_late_quiet(const Position& pos,
                               Move move,
-                              const PasserThreat& threat,
+                              const MoveState& m,
                               Depth depth,
                               int moveCount,
                               bool pvNode,
@@ -259,9 +267,8 @@ inline bool stable_late_quiet(const Position& pos,
     if (state().authority < 2 || depth < 5 || moveCount < 6 || pvNode || capture || givesCheck)
         return false;
 
-    // Irreversible and structurally fragile moves never fund the speed budget.
-    if (move.type_of() == PROMOTION || pawn_move(pos, move) || low_material(pos)
-        || pos.rule50_count() >= 60 || pos.checkers() || threat.urgency >= 2)
+    if (move.type_of() == PROMOTION || m.pawn || m.sparse || pos.rule50_count() >= 60
+        || pos.checkers() || m.enemyPasser.urgency >= 2)
         return false;
 
     return true;
@@ -272,15 +279,19 @@ inline bool zugzwang_risk(const Position& pos) {
         return false;
 
     const int pieces = pos.count<ALL_PIECES>();
-    const int nonPawns = non_pawn_count(pos);
+    if (pieces >= 13)
+        return false;
 
+    const int nonPawns = non_pawn_count(pos);
     if (pieces <= 9 && nonPawns <= 2)
         return true;
 
-    if (pieces <= 12 && nonPawns <= 2)
+    if (nonPawns <= 2)
     {
-        PasserThreat w = most_urgent_passer(pos, WHITE, true);
-        PasserThreat b = most_urgent_passer(pos, BLACK, true);
+        Bitboard wc = advanced_pawn_candidates(pos, WHITE, true);
+        Bitboard bc = advanced_pawn_candidates(pos, BLACK, true);
+        PasserThreat w = wc ? most_urgent_passer(pos, WHITE, true, wc) : PasserThreat{};
+        PasserThreat b = bc ? most_urgent_passer(pos, BLACK, true, bc) : PasserThreat{};
         return std::max(w.urgency, b.urgency) >= 2;
     }
     return false;
@@ -294,23 +305,16 @@ inline bool protected_scope_move(const Position& pos,
     if (!ready())
         return false;
 
-    if (givesCheck || move.type_of() == PROMOTION || dangerous_pawn_push(pos, move)
-        || recapture(move, prevSq, capture))
+    MoveState m = classify(pos, move);
+    if (givesCheck || move.type_of() == PROMOTION || dangerous_pawn_push(pos, move, m)
+        || recapture(move, prevSq, capture) || passer_defense_move(pos, move, m))
         return true;
 
-    const bool sparse = low_material(pos);
-    PasserThreat threat = enemy_passer_threat(pos, move, sparse);
-    if (passer_defense_move(pos, move, threat))
-        return true;
-
-    if (!sparse)
+    if (!m.sparse)
         return false;
 
-    PasserThreat own = king_move(pos, move)
-                         ? most_urgent_passer(pos, mover_color(pos, move), true)
-                         : PasserThreat{};
-    return own_passer_support_move(pos, move, own)
-        || active_heavy_move(pos, move, givesCheck, threat);
+    PasserThreat own = own_passer(pos, m);
+    return own_passer_support_move(move, m, own) || active_heavy_move(move, m, givesCheck);
 }
 
 inline bool rescue_bad_see(const Position& pos,
@@ -324,19 +328,25 @@ inline bool rescue_bad_see(const Position& pos,
     if (move.type_of() == PROMOTION)
         return true;
 
+    // Captures usually do not need the full dimensional scan. Only construct it
+    // when sparse geometry or an urgent enemy pawn can actually affect the veto.
     const bool sparse = low_material(pos);
     if (capture)
     {
-        PasserThreat threat = enemy_passer_threat(pos, move, sparse);
-        if (threat.urgency >= 3 && move.to_sq() == threat.sq && pos.see_ge(move, -600))
-            return true;
+        Piece pc = moving_piece(pos, move);
+        Color us = pc != NO_PIECE ? color_of(pc) : pos.side_to_move();
+        Bitboard candidates = advanced_pawn_candidates(pos, ~us, sparse);
+        if (candidates)
+        {
+            PasserThreat threat = most_urgent_passer(pos, ~us, sparse, candidates);
+            if (threat.urgency >= 3 && move.to_sq() == threat.sq && pos.see_ge(move, -600))
+                return true;
+        }
     }
 
     if (recapture(move, prevSq, capture))
         return sparse ? pos.see_ge(move, -300) : pos.see_ge(move, -100);
 
-    // Stockfish already handles ordinary checks well. Rescue material-losing
-    // checking sacrifices primarily in the positions where tempo is existential.
     return givesCheck && sparse && !pos.see_ge(move, 0);
 }
 
@@ -351,14 +361,10 @@ inline int lmr_adjustment(const Position& pos,
     if (!ready())
         return 0;
 
+    MoveState m = classify(pos, move);
     int delta = 0;
-    const bool sparse = low_material(pos);
-    const PasserThreat threat = enemy_passer_threat(pos, move, sparse);
-    const bool emergency = sparse || threat.urgency >= 2;
+    const bool emergency = m.sparse || m.enemyPasser.urgency >= 2;
 
-    // Normal positions stay close to Stockfish. Large buybacks happen only when
-    // the dimensional state says that tempo, activity, or promotion timing is
-    // fragile. This prevents generic forcing-move inflation of the tree.
     if (givesCheck)
         delta -= emergency ? state().forcingBuyback + state().forcingBuyback / 2
                            : state().forcingBuyback / 4;
@@ -366,31 +372,26 @@ inline int lmr_adjustment(const Position& pos,
     if (recapture(move, prevSq, capture))
         delta -= emergency ? state().recaptureBuyback : state().recaptureBuyback / 4;
 
-    if (dangerous_pawn_push(pos, move))
+    if (dangerous_pawn_push(pos, move, m))
         delta -= emergency ? state().passerBuyback + state().passerBuyback / 2
                            : state().passerBuyback;
 
-    if (passer_defense_move(pos, move, threat))
+    if (passer_defense_move(pos, move, m))
         delta -= state().passerBuyback + state().endgameBuyback;
 
-    PasserThreat own;
-    if (sparse && king_move(pos, move))
-        own = most_urgent_passer(pos, mover_color(pos, move), true);
-
-    if (own_passer_support_move(pos, move, own))
+    PasserThreat own = own_passer(pos, m);
+    if (own_passer_support_move(move, m, own))
         delta -= state().endgameBuyback + state().passerBuyback / 2;
 
-    if (active_heavy_move(pos, move, givesCheck, threat))
+    if (active_heavy_move(move, m, givesCheck))
         delta -= state().endgameBuyback + state().forcingBuyback / 3;
 
-    if (sparse && (moveCount <= 3 || capture || givesCheck) && threat.urgency >= 1)
+    if (m.sparse && (moveCount <= 3 || capture || givesCheck) && m.enemyPasser.urgency >= 1)
         delta -= state().endgameBuyback;
 
-    // Hard budget model: genuinely stable, reversible, late quiet branches pay
-    // back roughly a ply or more. More danger => no overdrive. This is the speed
-    // engine for Authority 2 and is deliberately stronger than v2.1's fractional
-    // funding, while pawn moves and fragile endings are explicitly excluded.
-    if (stable_late_quiet(pos, move, threat, depth, moveCount, pvNode, capture, givesCheck))
+    // Hard budget model. Reversible, stable late quiet branches fund expensive
+    // dimensional rescue. Irreversible pawn moves and fragile endings cannot.
+    if (stable_late_quiet(pos, move, m, depth, moveCount, pvNode, capture, givesCheck))
     {
         const int lateness = std::min(moveCount - 5, 10);
         const int depthScale = std::min(int(depth), 12) + 2;
@@ -406,24 +407,22 @@ inline int quiet_ordering_bonus(const Position& pos, Move move) {
     if (!ready())
         return 0;
 
+    MoveState m = classify(pos, move);
     int bonus = 0;
-    if (state().rule50Pressure && pos.rule50_count() >= 70 && pawn_move(pos, move))
+
+    if (state().rule50Pressure && pos.rule50_count() >= 70 && m.pawn)
         bonus += state().rule50PawnBonus;
 
-    const bool sparse = low_material(pos);
-    PasserThreat threat = enemy_passer_threat(pos, move, sparse);
-    if (passer_defense_move(pos, move, threat))
+    if (passer_defense_move(pos, move, m))
         bonus += 12288;
 
-    if (!sparse)
+    if (!m.sparse)
         return bonus;
 
-    PasserThreat own = king_move(pos, move)
-                         ? most_urgent_passer(pos, mover_color(pos, move), true)
-                         : PasserThreat{};
-    if (own_passer_support_move(pos, move, own))
+    PasserThreat own = own_passer(pos, m);
+    if (own_passer_support_move(move, m, own))
         bonus += 4096;
-    if (active_heavy_move(pos, move, false, threat))
+    if (active_heavy_move(move, m, false))
         bonus += 6144;
 
     return bonus;
