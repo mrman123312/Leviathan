@@ -1,3 +1,4 @@
+# Final V8.1 build trigger at 714feb079755ca8e812ca74ebccde5e29b5b4914
 name: Leviathan strength v8 build
 
 on:
@@ -29,15 +30,17 @@ jobs:
           int main() {
               static_assert(KNOWN_MASK == 1023);
               State s;
-              assert(s.debt == 0 && s.classes() == 0);
+              assert(s.debt == 0 && s.classes() == 0 && s.domains() == 0);
               s.add(Kind::HISTORY, 2);
-              assert(s.debt == 2 && s.classes() == 1 && tt_sensitive(s));
-              assert(!s.multi_source() && !s.severe());
+              assert(s.debt == 2 && s.classes() == 1 && s.domains() == 1 && tt_sensitive(s));
+              s.add(Kind::RULE50, 1);
+              assert(s.debt == 3 && s.classes() == 2 && s.domains() == 1);
+              assert(!s.multi_source());
               s.add(Kind::EVAL_DISAGREEMENT, 1);
-              assert(s.debt == 3 && s.classes() == 2 && s.multi_source());
+              assert(s.debt == 4 && s.domains() == 2 && s.multi_source());
               assert(root_time_factor(s) == 1.12);
               s.add(Kind::LMR_COUNTEREXAMPLE, 1);
-              assert(s.debt == 4 && s.classes() == 3 && s.severe());
+              assert(s.debt == 5 && s.domains() == 3 && s.severe());
               assert(pruning_sensitive(s));
               assert(root_time_factor(s) == 1.20);
               s.add(Kind::RIVAL_AMBIGUITY, 50);
