@@ -1,0 +1,159 @@
+name: Leviathan v2.6 threat-pressure screen
+
+on:
+  push:
+    branches: [leviathan/fundamentals-v2.6-threat-pressure]
+    paths: ['.github/workflows/v26-threat-pressure-screen.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  screen:
+    runs-on: ubuntu-22.04
+    strategy:
+      fail-fast: false
+      matrix:
+        profile: [control, threatlmr, sentinel, both]
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: fbccfb6eb5cd335b1ce8fc5c5efad9e36be4e19d
+          path: leviathan
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          repository: official-stockfish/Stockfish
+          ref: 5062aee519a1ba262d472d8ab139851ced56573e
+          path: stockfish
+
+      - name: Apply threat-pressure profile
+        working-directory: leviathan
+        env:
+          PROFILE: ${{ matrix.profile }}
+        run: |
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+          q=os.environ['PROFILE']
+          p=Path('src/search.cpp'); s=p.read_text()
+
+          # Introduce a node-local pressure value. Zero means no usable null-move
+          # counterfactual was observed at this node.
+          decl='''    int   priorReduction;\n    Piece movedPiece;'''
+          repl='''    int   priorReduction;\n    int   leviathanNullPressure = 0;\n    Piece movedPiece;'''
+          if s.count(decl)!=1: raise SystemExit('decl anchor')
+          s=s.replace(decl,repl,1)
+
+          # Reuse the null-move result if it fails low. The deeper below beta, the
+          # stronger the opponent threat / zugzwang-like pressure signal.
+          anchor='''        Value nullValue = -search<NonPV>(pos, ss + 1, -beta, -beta + 1, depth - R, false);\n\n        undo_null_move(pos);'''
+          repl='''        Value nullValue = -search<NonPV>(pos, ss + 1, -beta, -beta + 1, depth - R, false);\n\n        undo_null_move(pos);\n\n        if (nullValue < beta && !is_decisive(nullValue))\n            leviathanNullPressure = std::clamp(int(beta - nullValue), 0, 384);'''
+          if s.count(anchor)!=1: raise SystemExit('null anchor')
+          s=s.replace(anchor,repl,1)
+
+          if q in ('sentinel','both'):
+              anchor='''            // Skip quiet moves if movecount exceeds our threshold\n            if (moveCount >= (3 + depth * depth) / (2 - improving))\n                mp.skip_quiet_moves();'''
+              repl='''            // Threat sentinel: if the already-paid-for null search says\n            // "passing is dangerous", preserve a few more quiet defensive moves\n            // before the global quiet-skip gate closes.\n            const int leviathanQuietAllowance = leviathanNullPressure >= 128 ? 3\n                                              : leviathanNullPressure >= 48  ? 1 : 0;\n            if (moveCount >= (3 + depth * depth) / (2 - improving) + leviathanQuietAllowance)\n                mp.skip_quiet_moves();'''
+              if s.count(anchor)!=1: raise SystemExit('quiet-skip anchor')
+              s=s.replace(anchor,repl,1)
+
+          if q in ('threatlmr','both'):
+              anchor='''        // Decrease/increase reduction for moves with a good/bad history\n        r -= ss->statScore * 439 / 4096;'''
+              repl='''        // Decrease/increase reduction for moves with a good/bad history\n        r -= ss->statScore * 439 / 4096;\n\n        // Threat pressure is a counterfactual dimension: only quiet replies get\n        // extra depth, and only when the null search already demonstrated that\n        // doing nothing would be dangerous. No extra probe is required.\n        if (!capture && !givesCheck && leviathanNullPressure)\n            r -= std::min(128 + leviathanNullPressure, 448);'''
+              if s.count(anchor)!=1: raise SystemExit('lmr anchor')
+              s=s.replace(anchor,repl,1)
+
+          p.write_text(s)
+          PY
+          git diff --check
+          git diff -- src/search.cpp
+
+      - run: python3 -m pip install --disable-pip-version-check 'python-chess>=1.999,<2'
+      - name: Build both AVX2 engines
+        run: |
+          cd leviathan/src && make net && make clean && make -j2 ARCH=x86-64-avx2 build && mv stockfish leviathan
+          cd ../../stockfish/src && make net && make clean && make -j2 ARCH=x86-64-avx2 build && mv stockfish parent
+
+      - name: Configure and generate common 20-opening panel
+        working-directory: leviathan
+        run: |
+          mkdir -p screen
+          cat > screen/a.json <<'EOF'
+          {"Threads":1,"Hash":64,"Leviathan Fundamentals":true,"Leviathan Fundamentals Authority":2,"Leviathan Forcing Buyback":384,"Leviathan Recapture Buyback":256,"Leviathan Passer Buyback":320,"Leviathan Endgame Buyback":128,"Leviathan Quiet Overdrive":160,"Leviathan Rule50 Pawn Bonus":3072,"Leviathan Zugzwang Guard":true,"Leviathan Sacrifice Rescue":true,"Leviathan Rule50 Pressure":true,"Leviathan Policy":false,"Leviathan MetaSearch":false,"Leviathan Risk":false,"Leviathan Specialist":false,"Leviathan Atlas":false,"Leviathan Search DSL":false}
+          EOF
+          echo '{"Threads":1,"Hash":64}' > screen/b.json
+          python3 - <<'PY'
+          import random
+          from pathlib import Path
+          import chess,chess.engine
+          sf=chess.engine.SimpleEngine.popen_uci('../stockfish/src/parent'); sf.configure({'Threads':1,'Hash':64})
+          out=[]; seen=set()
+          try:
+            for shard in range(5):
+              rng=random.Random(1729+shard*31337); local=[]
+              while len(local)<4:
+                b=chess.Board()
+                for _ in range(rng.randint(8,16)):
+                  if b.is_game_over(): break
+                  infos=sf.analyse(b,chess.engine.Limit(nodes=2000),multipv=min(6,b.legal_moves.count()))
+                  if not isinstance(infos,list): infos=[infos]
+                  ranked=[]
+                  for info in infos:
+                    pv=info.get('pv',[])
+                    if pv:
+                      cp=info['score'].pov(b.turn).score(mate_score=100000)
+                      ranked.append((pv[0],int(cp or 0)))
+                  if not ranked: break
+                  best=ranked[0][1]
+                  viable=[x for x in ranked if best-x[1] <= 120] or ranked[:1]
+                  b.push(rng.choices([m for m,_ in viable],weights=list(range(len(viable),0,-1)),k=1)[0])
+                if b.is_game_over(): continue
+                k=' '.join(b.fen().split()[:4])
+                if k in seen: continue
+                seen.add(k); local.append(b.fen())
+              out.extend(local)
+          finally: sf.quit()
+          Path('screen/openings.fen').write_text('\n'.join(out)+'\n')
+          PY
+
+      - name: Bench
+        working-directory: leviathan/src
+        env:
+          PROFILE: ${{ matrix.profile }}
+        run: |
+          ./leviathan bench 2>&1 | tee ../screen/off-${PROFILE}.txt
+          printf 'setoption name Leviathan Fundamentals value true\nsetoption name Leviathan Fundamentals Authority value 2\nbench\nquit\n' | ./leviathan 2>&1 | tee ../screen/on-${PROFILE}.txt
+
+      - name: 40 equal-node games
+        working-directory: leviathan
+        env:
+          PROFILE: ${{ matrix.profile }}
+        run: |
+          python3 tools/run_match.py --engine-a "$GITHUB_WORKSPACE/leviathan/src/leviathan" --engine-b "$GITHUB_WORKSPACE/stockfish/src/parent" --options-a screen/a.json --options-b screen/b.json --openings screen/openings.fen --games 40 --nodes-per-move 18000 --max-plies 220 --out screen/nodes-${PROFILE}.json | tee screen/nodes-${PROFILE}.log
+
+      - name: 40 fixed-time games
+        working-directory: leviathan
+        env:
+          PROFILE: ${{ matrix.profile }}
+        run: |
+          python3 tools/run_match.py --engine-a "$GITHUB_WORKSPACE/leviathan/src/leviathan" --engine-b "$GITHUB_WORKSPACE/stockfish/src/parent" --options-a screen/a.json --options-b screen/b.json --openings screen/openings.fen --games 40 --movetime-ms 100 --max-plies 220 --out screen/time-${PROFILE}.json | tee screen/time-${PROFILE}.log
+
+      - name: Summarize
+        working-directory: leviathan
+        env:
+          PROFILE: ${{ matrix.profile }}
+        run: |
+          python3 - <<'PY'
+          import json,os,re
+          from pathlib import Path
+          q=os.environ['PROFILE']; n=json.loads(Path(f'screen/nodes-{q}.json').read_text())['summary']; t=json.loads(Path(f'screen/time-{q}.json').read_text())['summary']; off=Path(f'screen/off-{q}.txt').read_text(); on=Path(f'screen/on-{q}.txt').read_text(); x=lambda p,s:int(re.findall(p,s)[-1]); om=x(r'Total time \(ms\)\s*:\s*(\d+)',off); am=x(r'Total time \(ms\)\s*:\s*(\d+)',on); onodes=x(r'Nodes searched\s*:\s*(\d+)',off); anodes=x(r'Nodes searched\s*:\s*(\d+)',on); r={'profile':q,'equal_node':n,'fixed_time':t,'bench_speed_ratio':om/am,'node_change_pct':(anodes/onodes-1)*100,'active_nodes':anodes,'off_ms':om,'active_ms':am}; Path(f'screen/report-{q}.json').write_text(json.dumps(r,indent=2)+'\n'); print(json.dumps(r,indent=2))
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: v26-${{ matrix.profile }}
+          path: |
+            leviathan/screen/report-${{ matrix.profile }}.json
+            leviathan/screen/nodes-${{ matrix.profile }}.json
+            leviathan/screen/time-${{ matrix.profile }}.json
+            leviathan/screen/openings.fen
