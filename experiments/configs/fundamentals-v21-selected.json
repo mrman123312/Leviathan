@@ -1,0 +1,21 @@
+{
+  "Threads": 1,
+  "Hash": 64,
+  "Leviathan Fundamentals": true,
+  "Leviathan Zugzwang Guard": true,
+  "Leviathan Sacrifice Rescue": true,
+  "Leviathan Rule50 Pressure": true,
+  "Leviathan Policy": false,
+  "Leviathan MetaSearch": false,
+  "Leviathan Risk": false,
+  "Leviathan Specialist": false,
+  "Leviathan Atlas": false,
+  "Leviathan Search DSL": false,
+  "Leviathan Fundamentals Authority": 1,
+  "Leviathan Forcing Buyback": 384,
+  "Leviathan Recapture Buyback": 256,
+  "Leviathan Passer Buyback": 320,
+  "Leviathan Endgame Buyback": 128,
+  "Leviathan Quiet Overdrive": 0,
+  "Leviathan Rule50 Pawn Bonus": 3072
+}
