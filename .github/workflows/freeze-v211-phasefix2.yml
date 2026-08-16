@@ -1,0 +1,34 @@
+name: Freeze v2.1.1 phase fix retry
+on:
+  push:
+    branches: [leviathan/fundamentals-v2.1.1-phasefix]
+    paths: ['.github/workflows/freeze-v211-phasefix2.yml']
+permissions: {contents: write}
+jobs:
+  freeze:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with: {ref: leviathan/fundamentals-v2.1.1-phasefix}
+      - name: Patch
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path('src/leviathan_fundamentals.h');s=p.read_text()
+          a='''inline bool advanced_pawn_move(const Position& pos, Move move) {\n    if (!move.is_ok() || type_of(pos.moved_piece(move)) != PAWN)\n        return false;\n    const Color us = pos.side_to_move();\n    return relative_rank(us, move.to_sq()) >= RANK_6;\n}'''
+          b='''inline Piece moving_piece(const Position& pos, Move move) {\n    if (!move.is_ok()) return NO_PIECE;\n    Piece pc = pos.piece_on(move.from_sq());\n    return pc != NO_PIECE ? pc : pos.piece_on(move.to_sq());\n}\n\ninline bool pawn_move(const Position& pos, Move move) {\n    if (!move.is_ok()) return false;\n    if (move.type_of() == PROMOTION || move.type_of() == EN_PASSANT) return true;\n    Piece pc = moving_piece(pos, move);\n    return pc != NO_PIECE && type_of(pc) == PAWN;\n}\n\ninline Color mover_color(const Position& pos, Move move) {\n    Piece pc = moving_piece(pos, move);\n    return pc != NO_PIECE ? color_of(pc) : pos.side_to_move();\n}\n\ninline bool advanced_pawn_move(const Position& pos, Move move) {\n    return pawn_move(pos, move) && relative_rank(mover_color(pos, move), move.to_sq()) >= RANK_6;\n}'''
+          c='''inline bool zeroing_quiet(const Position& pos, Move move, bool capture) {\n    return capture || (move.is_ok() && type_of(pos.moved_piece(move)) == PAWN);\n}'''
+          d='''inline bool zeroing_quiet(const Position& pos, Move move, bool capture) {\n    return capture || pawn_move(pos, move);\n}'''
+          e='''    return type_of(pos.moved_piece(move)) == PAWN ? state().rule50PawnBonus : 0;'''
+          f='''    return pawn_move(pos, move) ? state().rule50PawnBonus : 0;'''
+          assert s.count(a)==1 and s.count(c)==1 and s.count(e)==1
+          p.write_text(s.replace(a,b,1).replace(c,d,1).replace(e,f,1))
+          PY
+          git diff --check
+      - name: Commit
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add src/leviathan_fundamentals.h
+          git commit -m 'Fix post-move pawn identity and mover color in Fundamentals v2.1.1'
+          git push origin HEAD:leviathan/fundamentals-v2.1.1-phasefix
