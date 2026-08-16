@@ -1,0 +1,35 @@
+name: Apply strength v8.5 causal LMR receipt
+
+on:
+  push:
+    branches:
+      - leviathan/strength-v8-5-lmr-receipt
+    paths:
+      - '.github/workflows/apply-strength-v8-5-receipt.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout V8.5
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: leviathan/strength-v8-5-lmr-receipt
+
+      - name: Apply minimal receipt
+        run: |
+          set -euo pipefail
+          python3 tools/leviathan_apply_v8_5_receipt.py
+          git diff --check
+          git diff -- src/search.h src/search.cpp
+
+      - name: Commit V8.5 source
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add src/search.h src/search.cpp
+          git commit -m 'Strength v8.5: compress proof memory to causal LMR receipt'
+          git push origin HEAD:leviathan/strength-v8-5-lmr-receipt
