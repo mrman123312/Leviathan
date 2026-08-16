@@ -398,9 +398,11 @@ class Worker {
     // it never stores a move or evaluation as truth. Per-worker ownership keeps
     // it lock-free, and the cache survives consecutive go commands in one game.
     struct LeviathanProofMemoryEntry {
-        Key          key     = 0;
-        unsigned int debt    = 0;
-        Move         witness = Move::none();
+        Key          key             = 0;
+        unsigned int debt            = 0;
+        Move         witness         = Move::none();
+        bool         witnessWasLmr   = false;
+        unsigned int witnessDepth    = 0;
     };
     static constexpr usize LEVIATHAN_PROOF_MEMORY_SIZE = 4096;
     std::array<LeviathanProofMemoryEntry, LEVIATHAN_PROOF_MEMORY_SIZE> leviathanProofMemory{};
@@ -416,18 +418,46 @@ class Worker {
         return e.key == key ? e.witness : Move::none();
     }
 
-    void leviathan_proof_memory_store(Key key, int debt, Move witness = Move::none()) {
+    bool leviathan_proof_memory_witness_was_lmr(Key key) const {
+        const auto& e = leviathanProofMemory[usize(key) & (LEVIATHAN_PROOF_MEMORY_SIZE - 1)];
+        return e.key == key && e.witnessWasLmr;
+    }
+
+    unsigned int leviathan_proof_memory_witness_depth(Key key) const {
+        const auto& e = leviathanProofMemory[usize(key) & (LEVIATHAN_PROOF_MEMORY_SIZE - 1)];
+        return e.key == key ? e.witnessDepth : 0;
+    }
+
+    void leviathan_proof_memory_store(Key key,
+                                      int debt,
+                                      Move witness = Move::none(),
+                                      bool witnessWasLmr = false,
+                                      int witnessDepth = 0) {
         if (debt < 3 && !witness)
             return;
         auto& e = leviathanProofMemory[usize(key) & (LEVIATHAN_PROOF_MEMORY_SIZE - 1)];
         const unsigned boundedDebt = unsigned(std::clamp(debt, 0, 5));
+        const unsigned boundedWitnessDepth = unsigned(std::max(0, witnessDepth));
         if (e.key != key)
-            e = {key, boundedDebt, witness};
+            e = {key, boundedDebt, witness, witness && witnessWasLmr,
+                 witness && witnessWasLmr ? boundedWitnessDepth : 0U};
         else
         {
             e.debt = std::max(e.debt, boundedDebt);
             if (witness)
-                e.witness = witness;
+            {
+                if (e.witness != witness)
+                {
+                    e.witness       = witness;
+                    e.witnessWasLmr = witnessWasLmr;
+                    e.witnessDepth  = witnessWasLmr ? boundedWitnessDepth : 0U;
+                }
+                else if (witnessWasLmr)
+                {
+                    e.witnessWasLmr = true;
+                    e.witnessDepth  = std::max(e.witnessDepth, boundedWitnessDepth);
+                }
+            }
         }
     }
 
