@@ -2,8 +2,11 @@
 
 Each opening is played with reversed colors. A and B may point to the same
 binary with different UCI option JSON files, eliminating compiler/build noise in
-ablation tests. For final claims prefer fixed wall-clock move time; fixed nodes
-is useful for search-efficiency diagnostics.
+ablation tests. Every nominal match game gets a distinct python-chess ``game``
+token so UCI engines receive an explicit ``ucinewgame`` boundary; state intended
+to persist within a real game may survive moves, but must never leak into the next
+independent test game. For final claims prefer fixed wall-clock move time; fixed
+nodes is useful for search-efficiency diagnostics.
 """
 from __future__ import annotations
 
@@ -14,6 +17,9 @@ from typing import Any
 
 import chess
 import chess.engine
+
+HARNESS_VERSION = 2
+GAME_BOUNDARY_MODE = "python-chess-game-token/ucinewgame"
 
 
 def load_options(path: Path | None) -> dict[str, Any]:
@@ -61,12 +67,17 @@ def play_one(
     moves: list[str] = []
     limit = game_limit(args)
 
+    # A fresh object is unequal by identity to the previous game's token. Passing
+    # this same token on every move of this game lets python-chess preserve normal
+    # within-game state while sending ucinewgame exactly when a new test game starts.
+    game_token = object()
+
     for _ in range(args.max_plies):
         if board.is_game_over(claim_draw=True):
             break
         a_to_move = board.turn == chess.WHITE if a_white else board.turn == chess.BLACK
         engine = eng_a if a_to_move else eng_b
-        result = engine.play(board, limit, ponder=False)
+        result = engine.play(board, limit, game=game_token, ponder=False)
         move = result.move
         if move is None or move not in board.legal_moves:
             raise RuntimeError(f"engine returned illegal/no move at {board.fen()}: {move}")
@@ -151,6 +162,8 @@ def main() -> None:
         "resource": {"movetime_ms": args.movetime_ms, "nodes_per_move": args.nodes_per_move},
         "options_a": opts_a,
         "options_b": opts_b,
+        "harness_version": HARNESS_VERSION,
+        "game_boundary_mode": GAME_BOUNDARY_MODE,
     }
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_text(json.dumps({"summary": summary, "games": rows}, indent=2) + "\n", encoding="utf-8")
