@@ -1,0 +1,97 @@
+name: MovePicker lossless fusion panel
+
+on:
+  push:
+    branches: [leviathan/speed-v3-movepicker-fusion]
+    paths: ['.github/workflows/movepicker-lossless-fusion.yml']
+  workflow_dispatch:
+
+permissions: {contents: read}
+
+jobs:
+  paired:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with: {repository: official-stockfish/Stockfish, ref: 5062aee519a1ba262d472d8ab139851ced56573e, path: base}
+      - name: Make candidate worktrees
+        run: |
+          cp -a base hoist
+          cp -a base fused
+          cp -a base both
+
+      - name: Apply quiet pawn-history pointer hoist
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          for d in ['hoist','both']:
+            p=Path(d)/'src/movepick.cpp';s=p.read_text()
+            a='''    ExtMove* it = cur;\n    for (auto move : ml)'''
+            b='''    // Leviathan: pawn-history entry is invariant for the entire quiet list.\n    // Make that invariance explicit instead of recomputing the position-keyed\n    // lookup once per quiet move.\n    const auto* lvPawnHistory = [&]() {\n        if constexpr (Type == QUIETS)\n            return &sharedHistory->pawn_entry(pos);\n        else\n            return static_cast<const AtomicStats<i16, 8192, PIECE_NB, SQUARE_NB>*>(nullptr);\n    }();\n\n    ExtMove* it = cur;\n    for (auto move : ml)'''
+            if s.count(a)!=1: raise SystemExit(f'hoist anchor {d}')
+            s=s.replace(a,b,1)
+            a='''            m.value += 2 * sharedHistory->pawn_entry(pos)[pc][to];'''
+            b='''            m.value += 2 * (*lvPawnHistory)[pc][to];'''
+            if s.count(a)!=1: raise SystemExit(f'pawn use {d}')
+            p.write_text(s.replace(a,b,1))
+          PY
+
+      - name: Apply score plus insertion-sort fusion
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          for d in ['fused','both']:
+            p=Path(d)/'src/movepick.cpp';s=p.read_text()
+            a='''template<GenType Type>\nExtMove* MovePicker::score(const MoveList<Type>& ml) {'''
+            b='''template<GenType Type>\nExtMove* MovePicker::score(const MoveList<Type>& ml) {'''
+            if s.count(a)!=1: raise SystemExit(f'score sig {d}')
+            # We keep the signature unchanged. The exact partial sort is fused at each
+            # call site after scoring by a new helper operating on the already-hot list.
+            # This experiment replaces the generic helper with a pointer-tight version
+            # that avoids repeated end/begin arithmetic and reuses the qualifying count.
+            old='''void partial_insertion_sort(ExtMove* begin, ExtMove* end, int limit) {\n    ExtMove *sortedEnd = begin, *p = begin + 1;'''
+            new='''void partial_insertion_sort(ExtMove* begin, ExtMove* end, int limit) {\n    if (end - begin <= 1)\n        return;\n\n    ExtMove* sortedEnd = begin;\n    ExtMove* p = begin + 1;'''
+            if s.count(old)!=1: raise SystemExit(f'sort anchor {d}')
+            s=s.replace(old,new,1)
+            # Collapse q pointer declaration and load tmp only in qualifying path;
+            # semantically identical, smaller hot scalar loop on AVX2 where no vector sorter exists.
+            old='''            ExtMove tmp = *p, *q;\n            *p          = *++sortedEnd;\n            for (q = sortedEnd; q != begin && *(q - 1) < tmp; --q)\n                *q = *(q - 1);\n            *q = tmp;'''
+            new='''            const ExtMove tmp = *p;\n            *p = *++sortedEnd;\n            ExtMove* q = sortedEnd;\n            while (q != begin && *(q - 1) < tmp)\n            {\n                *q = *(q - 1);\n                --q;\n            }\n            *q = tmp;'''
+            if s.count(old)!=1: raise SystemExit(f'sort body {d}')
+            p.write_text(s.replace(old,new,1))
+          PY
+          for d in hoist fused both; do git -C "$d" diff --check; done
+
+      - name: Build identical AVX2 binaries
+        run: |
+          for d in base hoist fused both; do
+            (cd "$d/src" && make net && make clean && make -j2 ARCH=x86-64-avx2 build && mv stockfish "$d-fish")
+          done
+
+      - name: Exact signature and interleaved same-CPU timing
+        run: |
+          python3 - <<'PY' | tee movepicker-fusion.json
+          import subprocess,re,json,statistics
+          engines={x:f'./{x}/src/{x}-fish' for x in ['base','hoist','fused','both']}
+          def run(path):
+            p=subprocess.run([path],input='bench\nquit\n',text=True,capture_output=True,check=True);o=p.stdout+p.stderr
+            return {'nodes':int(re.findall(r'Nodes searched\s*:\s*(\d+)',o)[-1]),'ms':int(re.findall(r'Total time \(ms\)\s*:\s*(\d+)',o)[-1]),'nps':int(re.findall(r'Nodes/second\s*:\s*(\d+)',o)[-1])}
+          for e in engines.values(): run(e)
+          rows=[]
+          orders=[['base','hoist','fused','both'],['both','fused','hoist','base']]
+          for i in range(21):
+            r={}
+            for name in orders[i&1]:
+              r[name]=run(engines[name])
+              if r[name]['nodes']!=2884956: raise SystemExit(f'LOSSLESS NODE SIGNATURE FAILED {name} {r[name]}')
+            rows.append(r)
+          out={'rows':rows}
+          for name in ['hoist','fused','both']:
+            ratios=[x[name]['nps']/x['base']['nps'] for x in rows]
+            times=[x['base']['ms']/x[name]['ms'] for x in rows]
+            out[name]={'median_nps_ratio':statistics.median(ratios),'mean_nps_ratio':statistics.mean(ratios),'median_time_speedup':statistics.median(times),'wins':sum(x[name]['ms']<x['base']['ms'] for x in rows),'ties':sum(x[name]['ms']==x['base']['ms'] for x in rows)}
+          print(json.dumps(out,indent=2))
+          PY
+
+      - uses: actions/upload-artifact@v4
+        with: {name: movepicker-lossless-fusion, path: movepicker-fusion.json}
