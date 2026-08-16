@@ -1,0 +1,101 @@
+name: Leviathan TT provenance v3
+
+on:
+  push:
+    branches: [leviathan/speed-v3-profile]
+    paths: ['.github/workflows/tt-provenance-v3.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  screen:
+    runs-on: ubuntu-22.04
+    strategy:
+      fail-fast: false
+      matrix:
+        profile: [control, repetition, rule50, combined]
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with: {ref: fbccfb6eb5cd335b1ce8fc5c5efad9e36be4e19d, path: leviathan}
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with: {repository: official-stockfish/Stockfish, ref: 5062aee519a1ba262d472d8ab139851ced56573e, path: stockfish}
+      - name: Apply TT provenance profile
+        if: matrix.profile != 'control'
+        working-directory: leviathan
+        env: {PROFILE: '${{ matrix.profile }}'}
+        run: |
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+          q=os.environ['PROFILE'];p=Path('src/search.cpp');s=p.read_text()
+          anchor='''    if (!PvNode && !excludedMove && ttData.depth > depth - (ttData.value <= beta)\n        && is_valid(ttData.value)  // Can happen when !ttHit or when access race in probe()\n        && (ttData.bound & (ttData.value >= beta ? BOUND_LOWER : BOUND_UPPER))\n        && (cutNode == (ttData.value >= beta) || depth > 4))'''
+          if q=='repetition': guard='&& !pos.has_repeated()'
+          elif q=='rule50': guard='&& pos.rule50_count() < 64'
+          elif q=='combined': guard='&& !pos.has_repeated() && pos.rule50_count() < 72'
+          else: raise SystemExit(q)
+          repl='''    if (!PvNode && !excludedMove && ttData.depth > depth - (ttData.value <= beta)\n        && is_valid(ttData.value)  // Can happen when !ttHit or when access race in probe()\n        && (ttData.bound & (ttData.value >= beta ? BOUND_LOWER : BOUND_UPPER))\n        && (cutNode == (ttData.value >= beta) || depth > 4)\n        '''+guard+''')'''
+          if s.count(anchor)!=1: raise SystemExit('TT cutoff anchor missing')
+          p.write_text(s.replace(anchor,repl,1))
+          PY
+      - run: python3 -m pip install --disable-pip-version-check 'python-chess>=1.999,<2'
+      - name: Build
+        run: |
+          cd leviathan/src && make net && make -j2 ARCH=x86-64-avx2 build && mv stockfish leviathan
+          cd ../../stockfish/src && make net && make -j2 ARCH=x86-64-avx2 build && mv stockfish parent
+      - name: Configure and history-rich openings
+        working-directory: leviathan
+        run: |
+          mkdir -p q
+          cat > q/a.json <<'EOF'
+          {"Threads":1,"Hash":64,"Leviathan Fundamentals":true,"Leviathan Fundamentals Authority":2,"Leviathan Forcing Buyback":384,"Leviathan Recapture Buyback":256,"Leviathan Passer Buyback":320,"Leviathan Endgame Buyback":128,"Leviathan Quiet Overdrive":160,"Leviathan Rule50 Pawn Bonus":3072,"Leviathan Zugzwang Guard":true,"Leviathan Sacrifice Rescue":true,"Leviathan Rule50 Pressure":true,"Leviathan Policy":false,"Leviathan MetaSearch":false,"Leviathan Risk":false,"Leviathan Specialist":false,"Leviathan Atlas":false,"Leviathan Search DSL":false}
+          EOF
+          echo '{"Threads":1,"Hash":64}' > q/b.json
+          python3 - <<'PY'
+          import random,chess,chess.engine
+          from pathlib import Path
+          sf=chess.engine.SimpleEngine.popen_uci('../stockfish/src/parent');sf.configure({'Threads':1,'Hash':64});r=random.Random(20260816);out=[];seen=set()
+          try:
+            while len(out)<20:
+              b=chess.Board()
+              for _ in range(r.randint(18,40)):
+                if b.is_game_over(): break
+                I=sf.analyse(b,chess.engine.Limit(nodes=1200),multipv=min(5,b.legal_moves.count()));I=I if isinstance(I,list) else [I];R=[]
+                for z in I:
+                  if z.get('pv'):
+                    cp=z['score'].pov(b.turn).score(mate_score=100000);R.append((z['pv'][0],int(cp or 0)))
+                if not R: break
+                best=R[0][1];V=[x for x in R if best-x[1]<=90] or R[:1];b.push(r.choices([m for m,_ in V],weights=list(range(len(V),0,-1)),k=1)[0])
+              k=' '.join(b.fen().split()[:4])
+              if b.is_game_over() or k in seen: continue
+              seen.add(k);out.append(b.fen())
+          finally: sf.quit()
+          Path('q/openings.fen').write_text('\n'.join(out)+'\n')
+          PY
+      - name: Bench
+        working-directory: leviathan/src
+        run: |
+          cat > ../q/on.uci <<'EOF'
+          setoption name Leviathan Fundamentals value true
+          setoption name Leviathan Fundamentals Authority value 2
+          bench
+          quit
+          EOF
+          ./leviathan < ../q/on.uci 2>&1 | tee ../q/bench.txt
+      - name: 40 equal-node games
+        working-directory: leviathan
+        run: |
+          python3 tools/run_match.py --engine-a "$GITHUB_WORKSPACE/leviathan/src/leviathan" --engine-b "$GITHUB_WORKSPACE/stockfish/src/parent" --options-a q/a.json --options-b q/b.json --openings q/openings.fen --games 40 --nodes-per-move 18000 --max-plies 260 --out q/nodes.json | tee q/nodes.log
+      - name: 40 fixed-time games
+        working-directory: leviathan
+        run: |
+          python3 tools/run_match.py --engine-a "$GITHUB_WORKSPACE/leviathan/src/leviathan" --engine-b "$GITHUB_WORKSPACE/stockfish/src/parent" --options-a q/a.json --options-b q/b.json --openings q/openings.fen --games 40 --movetime-ms 100 --max-plies 260 --out q/time.json | tee q/time.log
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tt-provenance-${{ matrix.profile }}
+          path: |
+            leviathan/q/bench.txt
+            leviathan/q/nodes.json
+            leviathan/q/time.json
+            leviathan/q/openings.fen
