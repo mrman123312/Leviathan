@@ -1,0 +1,20 @@
+{
+  "schema": "LV_EXPERIMENT_MANIFEST_V1",
+  "id": "W029",
+  "family": "parent-relative-speed-reconciliation",
+  "question": "At one fixed requested node budget on fresh positions, how fast are active Leviathan and the lossless P01 stack relative to the frozen official Stockfish parent?",
+  "parent_sha": "5062aee519a1ba262d472d8ab139851ced56573e",
+  "active_reference_sha": "fbccfb6eb5cd335b1ce8fc5c5efad9e36be4e19d",
+  "p01_sha": "a38620d49cd28d0f1bddd776658dda4b47dd4c96",
+  "design": {
+    "positions": 50,
+    "position_corpus": "experiments/holdouts/parent_speed_seed2026081613.fen",
+    "corpus_generation": "Frozen parent, seed 2026081613, 2,000 nodes/move, seeded weighted choice among top three, two positions from each of 25 games",
+    "position_offset": 0,
+    "nodes_per_position": 60000,
+    "rounds": 9,
+    "timing": "Frozen-parent A/candidate/B drift-corrected corpus sandwiches",
+    "exactness": "A/A parent transcripts and active-reference/P01 transcripts must match exactly. Parent and active behavior are expected to differ and are never called lossless."
+  },
+  "interpretation_guard": "This resolves parent-relative fixed-node throughput only. It is neither a lossless parent-relative optimization claim nor strength evidence."
+}

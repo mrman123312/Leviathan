@@ -1,0 +1,131 @@
+name: Leviathan parent-relative fixed-node speed panel
+
+on:
+  push:
+    branches: [leviathan/lab-v4-parent-speed]
+    paths:
+      - '.github/workflows/lab-parent-relative-speed-panel.yml'
+      - 'tools/parent_speed_panel.py'
+      - 'tools/generate_speed_holdout.py'
+      - 'experiments/holdouts/parent_speed_seed2026081613.fen'
+      - 'experiments/options/active_fundamentals.json'
+      - 'experiments/requirements-chess-hashed.txt'
+      - 'experiments/manifests/parent_speed_panel.json'
+  workflow_dispatch:
+
+permissions: {contents: read}
+
+concurrency:
+  group: lab-parent-relative-speed-panel-${{ github.ref }}
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  parent-relative-panel:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ github.sha }}
+          path: lab
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: 5062aee519a1ba262d472d8ab139851ced56573e
+          path: parent
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: fbccfb6eb5cd335b1ce8fc5c5efad9e36be4e19d
+          path: active-reference
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: a38620d49cd28d0f1bddd776658dda4b47dd4c96
+          path: p01
+      - name: Record immutable provenance
+        run: |
+          set -euo pipefail
+          {
+            echo "runner_image=${ImageOS:-unknown}"
+            echo "runner_image_version=${ImageVersion:-unknown}"
+            uname -a
+            lscpu
+            g++ --version
+            python3 --version
+            for engine in lab parent active-reference p01; do
+              git -C "$engine" rev-parse HEAD
+              git -C "$engine" rev-parse 'HEAD^{tree}'
+            done
+            sha256sum lab/tools/parent_speed_panel.py
+            sha256sum lab/experiments/holdouts/parent_speed_seed2026081613.fen
+            sha256sum lab/tools/generate_speed_holdout.py
+            sha256sum lab/experiments/options/active_fundamentals.json
+            sha256sum lab/experiments/requirements-chess-hashed.txt
+            sha256sum lab/experiments/manifests/parent_speed_panel.json
+          } | tee provenance.txt
+          set +e
+          diff -ru --exclude='*.nnue' parent/src active-reference/src > parent-to-active.patch
+          first_status=$?
+          diff -ru --exclude='*.nnue' active-reference/src p01/src > active-to-p01.patch
+          second_status=$?
+          set -e
+          if (( first_status > 1 || second_status > 1 )); then exit 2; fi
+          test -s parent-to-active.patch
+          test -s active-to-p01.patch
+      - name: Install hash-locked chess harness dependency
+        run: |
+          set -euo pipefail
+          PIP_CACHE_DIR="$RUNNER_TEMP/pip-cache" python3 -m pip install \
+            --disable-pip-version-check --require-hashes \
+            -r lab/experiments/requirements-chess-hashed.txt
+          python3 -m pip freeze | sort | tee dependency-freeze.txt
+      - name: Build frozen parent, active reference, and P01
+        run: |
+          set -euo pipefail
+          make -C parent/src net
+          cp parent/src/nn-ab28990d4ea3.nnue active-reference/src/
+          cp parent/src/nn-ab28990d4ea3.nnue p01/src/
+          make -C parent/src -j2 ARCH=x86-64-avx2 build
+          mv parent/src/stockfish parent/src/control_a
+          cp parent/src/control_a parent/src/control_b
+          make -C active-reference/src -j2 ARCH=x86-64-avx2 build
+          mv active-reference/src/stockfish active-reference/src/active-reference
+          make -C p01/src -j2 ARCH=x86-64-avx2 build
+          mv p01/src/stockfish p01/src/p01
+          sha256sum parent/src/control_a parent/src/control_b \
+            active-reference/src/active-reference p01/src/p01 | tee binary-sha256.txt
+          sha256sum parent/src/nn-ab28990d4ea3.nnue \
+            active-reference/src/nn-ab28990d4ea3.nnue p01/src/nn-ab28990d4ea3.nnue \
+            | tee network-sha256.txt
+      - name: Fresh fixed-node parent comparison
+        run: |
+          set -euo pipefail
+          mkdir -p results
+          python3 lab/tools/parent_speed_panel.py \
+            --engine control_a="$GITHUB_WORKSPACE/parent/src/control_a" \
+            --engine control_b="$GITHUB_WORKSPACE/parent/src/control_b" \
+            --engine active_ref="$GITHUB_WORKSPACE/active-reference/src/active-reference" \
+            --engine p01="$GITHUB_WORKSPACE/p01/src/p01" \
+            --options active_ref=lab/experiments/options/active_fundamentals.json \
+            --options p01=lab/experiments/options/active_fundamentals.json \
+            --equivalent p01=active_ref \
+            --positions lab/experiments/holdouts/parent_speed_seed2026081613.fen \
+            --offset 0 --count 50 --nodes 60000 --rounds 9 --seed 2026081611 \
+            --output results/parent-speed-panel.json \
+            | tee results/parent-speed-panel.log
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: parent-relative-speed-panel
+          retention-days: 90
+          if-no-files-found: error
+          path: |
+            provenance.txt
+            dependency-freeze.txt
+            parent-to-active.patch
+            active-to-p01.patch
+            binary-sha256.txt
+            network-sha256.txt
+            results/

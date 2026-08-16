@@ -95,3 +95,22 @@ Mandatory rules for new evidence:
 - `W019`: direct Sparse Uncertainty retest: 100 paired equal-node games, 100 paired fixed-time games, and 40 deep-oracle disagreements against the exact same active reference.
 - If Sparse survives, the next test is verification-only versus rival-preservation-only versus both.
 - If any lossless speed composition survives twice, the next test is a same-run frozen-parent / fbcc-off / fbcc-on / candidate ladder followed by a game-position timing panel.
+
+## Work laboratory results after reconciliation
+
+The strict factorial and replication work froze the actual candidates instead of reconstructing them inside CI:
+
+| Candidate | Frozen commit | Composition | Decision |
+|---|---|---|---|
+| P01 | `a38620d49cd28d0f1bddd776658dda4b47dd4c96` | Optional-organ fast paths plus cached readiness | PROMOTED lossless speed baseline relative to active `fbccfb6e`. |
+| P013 | `e157b9332a0c71263b57b39757b22431e3f7f31c` | P01 plus NNUE capture lane | DROP P3; the extra lane repeatedly reduced total gain. |
+
+On run `31932620602`, P013 replicated at +3.906% median versus active reference with exact transcripts, while its direct P3 increment over P01 was only +0.202% and missed the predeclared magnitude/consistency gate. The subsequent 50-position promotion panel (`31933515456`, job `95131830611`) was stronger evidence: all variants searched exactly 3,001,928 nodes and produced the same hash over every position's nodes, score, bound, depth, seldepth, and full PV. P01 delivered +4.706% median, bootstrap 95% CI [+3.855%, +6.695%], faster in 9/9 rounds. P013 delivered +3.867%, CI [+3.268%, +5.769%]. P01 is therefore the retained stack.
+
+This promotion is explicitly relative to active Leviathan, not the frozen Stockfish parent. W029 is the required same-run parent-relative fixed-node throughput experiment; behavior-changing parent comparisons will not be described as lossless or as strength evidence.
+
+The direct Sparse Uncertainty retest failed: 47.5% over 100 equal-node games and 48.5% over 100 fixed-time games. A common 240-position oracle ablation also failed to rescue verification-only, softening-only, or their combination. The earlier apparent positive depended on a candidate-specific disagreement stopping condition and does not survive causal control.
+
+Persistence diagnostics replicated substantial next-root computation reuse, but not better decisions. A four-arm 50-position local ablation attributed most warm-start speed to the existing TT, and a capacity census found 512 MiB was 5.63% slower than 64 MiB. A protected persistent forest is therefore rejected unless a future mechanism demonstrates decision-quality gain rather than mere retained work.
+
+Two structural-compression moonshots were forced through small falsifiable tests. Local geometric failure certificates had only 21.05% exact-best agreement even among preserving neighbors; witness-4 refinement increased footprint, reduced coverage, and did not improve precision. Reject that representation. Partial-order quiet-move diamonds are more interesting: 46/352 (13.07%) engine-top-8 pairs fully commuted across every legal opponent reply at bounded board-state level. This establishes headroom for earlier TT convergence, not pruning authority: different paths preserve different repetition histories, and neither quiet move is forced to occur.

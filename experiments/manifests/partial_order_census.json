@@ -1,0 +1,13 @@
+{
+  "schema": "LV_EXPERIMENT_MANIFEST_V1",
+  "id": "W028",
+  "family": "partial-order-chess-search",
+  "question": "How often do relevant quiet same-side moves form exact bounded board-state diamonds across every intervening opponent reply?",
+  "design": {
+    "positions": 50,
+    "domain": "Non-pawn, non-king, non-rook, non-capture, non-check moves",
+    "engine_filter": "Frozen parent top eight at 20,000 nodes",
+    "history_guard": "Board-state equality never grants pruning authority because repetition provenance differs."
+  },
+  "result": "46 of 352 engine-filtered pairs (13.07%) fully commuted for every legal opponent reply at bounded three-ply board-state level. Advance ordering/TT-convergence research only."
+}

@@ -1,0 +1,15 @@
+{
+  "schema": "LV_EXPERIMENT_MANIFEST_V1",
+  "id": "W026",
+  "family": "persistent-search-capacity-census",
+  "question": "Is next-root reuse constrained by transposition-table capacity enough to justify a protected persistent frontier?",
+  "design": {
+    "positions": 20,
+    "prefix_searches": 2,
+    "nodes_per_prefix": 250000,
+    "target_nodes": 50000,
+    "hash_mib": [4, 16, 64, 512],
+    "reference_hash_mib": 64
+  },
+  "result": "512 MiB was 5.63% slower than 64 MiB and showed no decision-quality advantage; capacity premise rejected."
+}

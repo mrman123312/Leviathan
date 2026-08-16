@@ -1,0 +1,13 @@
+{
+  "schema": "LV_EXPERIMENT_MANIFEST_V1",
+  "id": "W027",
+  "family": "failure-certificate-cegar",
+  "question": "Can a local geometric refutation footprint transfer a failed move conclusion to nearby positions?",
+  "design": {
+    "certificates": 15,
+    "neighbors_per_class": 2,
+    "decision_nodes": 30000,
+    "refinements": ["local geometry", "four causal witnesses"]
+  },
+  "result": "Preserving-neighbor exact agreement was 21.05%; witness refinement increased footprint and reduced coverage without improving precision. Representation rejected."
+}
