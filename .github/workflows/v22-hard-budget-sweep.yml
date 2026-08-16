@@ -1,0 +1,62 @@
+name: Leviathan v2.2 hard-budget sweep
+
+on:
+  push:
+    branches: [leviathan/fundamentals-v2.2]
+    paths: ['.github/workflows/v22-hard-budget-sweep.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  sweep:
+    runs-on: ubuntu-22.04
+    strategy:
+      fail-fast: false
+      matrix:
+        base: [512, 768, 1024, 1280, 1536]
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+      - name: Apply candidate hard budget
+        env:
+          BASE: ${{ matrix.base }}
+        run: |
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+          p=Path('src/leviathan_fundamentals.h')
+          s=p.read_text()
+          old='delta += 512 + state().quietOverdrive * lateness * depthScale / 24;'
+          new=f"delta += {os.environ['BASE']} + state().quietOverdrive * lateness * depthScale / 24;"
+          if old not in s:
+              raise SystemExit('hard-budget anchor not found')
+          p.write_text(s.replace(old,new,1))
+          PY
+      - name: Build
+        working-directory: src
+        run: |
+          make net
+          make -j2 ARCH=x86-64-avx2 build
+      - name: Bench parent-equivalent off and Authority 2
+        working-directory: src
+        env:
+          BASE: ${{ matrix.base }}
+        run: |
+          ./stockfish bench 2>&1 | tee ../off-${BASE}.txt
+          cat > ../active.uci <<'EOF'
+          setoption name Leviathan Fundamentals value true
+          setoption name Leviathan Fundamentals Authority value 2
+          bench
+          quit
+          EOF
+          ./stockfish < ../active.uci 2>&1 | tee ../a2-${BASE}.txt
+          printf 'BASE=%s\n' "$BASE"
+          grep -E 'Nodes searched|Nodes/second' ../off-${BASE}.txt | tail -2
+          grep -E 'Nodes searched|Nodes/second' ../a2-${BASE}.txt | tail -2
+      - uses: actions/upload-artifact@v4
+        with:
+          name: hard-budget-${{ matrix.base }}
+          path: |
+            off-${{ matrix.base }}.txt
+            a2-${{ matrix.base }}.txt
