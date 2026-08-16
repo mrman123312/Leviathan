@@ -1,0 +1,279 @@
+{
+  "schema_version": 1,
+  "verified_on": "2026-08-16",
+  "policy": {
+    "project_code_target": "GPL-3.0-compatible",
+    "allowed_direct_code_classes": ["GPL-3.0", "GPL-3.0-or-later", "MIT", "CC0-1.0"],
+    "reference_only_classes": ["AGPL-3.0-only", "AGPL-3.0"],
+    "rule": "Ideas may be studied from any donor. Direct source reuse requires a verified compatible license and provenance sidecar. AGPL code is reference-only unless the project deliberately changes its distribution obligations. Models and datasets are audited separately from engine code."
+  },
+  "engines": [
+    {
+      "id": "stockfish",
+      "repo": "official-stockfish/Stockfish",
+      "language": "C++",
+      "license": "GPL-3.0",
+      "license_status": "verified",
+      "direct_code_policy": "allowed",
+      "priority": "critical",
+      "roles": ["strength_oracle", "search_reference", "nnue_runtime", "tt", "smp_numa", "time_management", "syzygy", "simd", "movegen"],
+      "harvest": ["proven search mechanisms", "NNUE incremental inference", "transposition-table engineering", "thread/NUMA engineering", "time management", "Syzygy integration", "SIMD and build optimization"],
+      "warning": "Do not inherit search.cpp control flow wholesale; mechanisms must be isolated and re-tested in Leviathan."
+    },
+    {
+      "id": "plentychess",
+      "repo": "Yoshie2000/PlentyChess",
+      "language": "C++",
+      "license": "GPL-3.0",
+      "license_status": "verified",
+      "direct_code_policy": "allowed",
+      "priority": "critical",
+      "roles": ["threat_input_nnue", "fractional_depth", "search_reference", "smp_numa", "selfplay_pipeline"],
+      "harvest": ["threat-input NNUE", "fractional-depth search experiments", "shared correction-history ideas", "NUMA/multithread engineering", "self-distillation/self-play evaluation pipeline"]
+    },
+    {
+      "id": "obsidian",
+      "repo": "gab8192/Obsidian",
+      "language": "C++",
+      "license": "GPL-3.0",
+      "license_status": "verified",
+      "direct_code_policy": "allowed",
+      "priority": "high",
+      "roles": ["independent_top_engine", "search_reference", "nnue", "pgo"],
+      "harvest": ["independent high-strength search decisions", "NNUE inference organization", "PGO/build optimization", "compact alternative implementations of standard heuristics"]
+    },
+    {
+      "id": "berserk",
+      "repo": "jhonnold/berserk",
+      "language": "C",
+      "license": "GPL-3.0",
+      "license_status": "verified",
+      "direct_code_policy": "allowed",
+      "priority": "critical",
+      "roles": ["compact_search_reference", "nnue", "move_ordering", "pruning"],
+      "harvest": ["ProbCut", "futility/LMP", "history pruning", "SEE pruning", "LMR", "killer/countermove heuristics", "singular extensions", "compact NNUE implementation"],
+      "warning": "Use as a mechanism microscope; do not blindly accumulate its entire heuristic stack."
+    },
+    {
+      "id": "alexandria",
+      "repo": "PGG106/Alexandria",
+      "language": "C++",
+      "license": "GPL-3.0",
+      "license_status": "verified",
+      "direct_code_policy": "allowed",
+      "priority": "high",
+      "roles": ["search_reference", "nnue", "bullet_pipeline", "openbench_lineage"],
+      "harvest": ["independent bitboard/search implementation", "modern Bullet-trained NNUE pipeline", "alternative search tuning choices"]
+    },
+    {
+      "id": "koivisto",
+      "repo": "Luecx/Koivisto",
+      "language": "C++/C",
+      "license": "GPL-3.0",
+      "license_status": "verified",
+      "direct_code_policy": "allowed",
+      "priority": "medium",
+      "roles": ["historical_independent_lineage", "search_reference", "nnue_training_history"],
+      "harvest": ["alternative search organization", "historically influential NNUE/trainer lineage", "PGO/build ideas"]
+    },
+    {
+      "id": "ethereal",
+      "repo": "AndyGrant/Ethereal",
+      "language": "C",
+      "license": "GPL-3.0-or-later",
+      "license_status": "verified",
+      "direct_code_policy": "allowed",
+      "priority": "high",
+      "roles": ["readable_search_reference", "nnue_accumulator", "syzygy", "testing_lineage"],
+      "harvest": ["readable search organization", "NNUE accumulator engineering", "Syzygy integration", "OpenBench-oriented experimental structure"]
+    },
+    {
+      "id": "seer",
+      "repo": "connormcmonigle/seer-nnue",
+      "language": "C++",
+      "license": "GPL-3.0",
+      "license_status": "verified",
+      "direct_code_policy": "allowed",
+      "priority": "high",
+      "roles": ["modular_search_architecture", "nnue", "move_orderer", "tt"],
+      "harvest": ["search-worker/orchestrator separation", "explicit move-orderer module", "board/state separation", "compact NNUE design"],
+      "warning": "Architectural donor especially useful for avoiding another monolithic Stockfish-style search unit."
+    },
+    {
+      "id": "rubichess",
+      "repo": "Matthies/RubiChess",
+      "language": "C++",
+      "license": "GPL-3.0",
+      "license_status": "verified",
+      "direct_code_policy": "allowed",
+      "priority": "medium",
+      "roles": ["mature_independent_engine", "search_reference", "nnue", "cpu_optimization"],
+      "harvest": ["mature alternate move generation", "NNUE/search implementation", "CPU architecture optimization", "long development changelog as experimental prior"]
+    },
+    {
+      "id": "stormphrax",
+      "repo": "Ciekce/Stormphrax",
+      "language": "C++",
+      "license": "GPL-3.0",
+      "license_status": "verified",
+      "direct_code_policy": "allowed",
+      "priority": "high",
+      "roles": ["independent_nnue_lineage", "search_reference", "chess960"],
+      "harvest": ["independent NNUE/data lineage", "modern search implementation", "Chess960 robustness", "network packaging patterns"]
+    },
+    {
+      "id": "caissa",
+      "repo": "Witek902/Caissa",
+      "language": "C++20",
+      "license": "MIT",
+      "license_status": "verified",
+      "direct_code_policy": "allowed",
+      "priority": "critical",
+      "roles": ["clean_sheet_architecture", "custom_nnue", "trainer", "node_cache", "numa", "frc_dfrc"],
+      "harvest": ["from-scratch architecture", "custom neural evaluator", "CPU trainer", "node/eval/accumulator caching", "NUMA support", "cuckoo repetition hashing", "FRC/DFRC correctness"],
+      "warning": "High-value permissive donor; still preserve attribution and provenance."
+    },
+    {
+      "id": "arasan",
+      "repo": "jdart1/arasan-chess",
+      "language": "C++",
+      "license": "MIT",
+      "license_status": "verified",
+      "direct_code_policy": "allowed",
+      "priority": "medium",
+      "roles": ["long_lived_independent_lineage", "portability", "testing", "protocols"],
+      "harvest": ["decades-old independent design choices", "portability", "UCI/CECP protocol handling", "tests/tools", "Fathom integration"]
+    },
+    {
+      "id": "patricia",
+      "repo": "Adam-Kulju/Patricia",
+      "language": "C++",
+      "license": "MIT",
+      "license_status": "verified",
+      "direct_code_policy": "allowed",
+      "priority": "high",
+      "roles": ["objective_shaping", "style_control", "specialized_nnue", "aggression_metrics"],
+      "harvest": ["evaluation-data filtering for behavioral style", "aggression objective shaping", "sacrifice-reward mechanisms", "style metrics as non-Elo evaluation"]
+    },
+    {
+      "id": "lc0",
+      "repo": "LeelaChessZero/lc0",
+      "language": "C++",
+      "license": "GPL-3.0",
+      "license_status": "verified",
+      "direct_code_policy": "allowed",
+      "priority": "critical",
+      "roles": ["outside_lattice", "mcts", "policy_value", "gpu_backend", "search_api"],
+      "harvest": ["MCTS/DAG search ontology", "policy/value interfaces", "GPU/ONNX/CUDA backends", "search/backend separation", "batching and neural-cache patterns"],
+      "warning": "Use as a representation/search counterfactual, not merely as another engine to splice into alpha-beta."
+    },
+    {
+      "id": "reckless",
+      "repo": "codedeliveryservice/Reckless",
+      "language": "Rust",
+      "license": "AGPL-3.0",
+      "license_status": "verified",
+      "direct_code_policy": "reference_only",
+      "priority": "critical",
+      "roles": ["top_non_stockfish_reference", "rust_layout", "search_reference", "nnue", "pgo"],
+      "harvest": ["current top-engine search decisions", "Rust memory/layout choices", "benchmark instrumentation", "NNUE and PGO organization"],
+      "warning": "Do not copy current source into Leviathan under present policy. Reimplement ideas independently unless AGPL obligations are explicitly accepted."
+    },
+    {
+      "id": "viridithas_current",
+      "repo": "cosmobobak/viridithas",
+      "language": "Rust",
+      "license": "AGPL-3.0-only",
+      "license_status": "verified",
+      "direct_code_policy": "reference_only",
+      "priority": "high",
+      "roles": ["original_training_data", "rust_search", "nnue", "selfplay"],
+      "harvest": ["original self-play/data methodology", "modern Rust engine architecture", "NNUE/search ideas"],
+      "warning": "Current code reference-only under project policy; networks are separately CC0."
+    },
+    {
+      "id": "viridithas_pre20",
+      "repo": "cosmobobak/viridithas",
+      "version_constraint": "<20.0.0",
+      "language": "Rust",
+      "license": "MIT",
+      "license_status": "verified_by_upstream_statement",
+      "direct_code_policy": "allowed_version_gated",
+      "priority": "high",
+      "roles": ["historical_permissive_lineage", "rust_search", "nnue"],
+      "harvest": ["pre-20 independent Rust engine mechanisms that remain under MIT"],
+      "warning": "Every copied fragment must pin a pre-20 commit/tag; never assume current master is MIT."
+    },
+    {
+      "id": "pawnocchio",
+      "repo": "JonathanHallstrom/pawnocchio",
+      "language": "Zig",
+      "license": "GPL-3.0",
+      "license_status": "verified",
+      "direct_code_policy": "allowed_code_only",
+      "priority": "medium",
+      "roles": ["zig_implementation", "nnue", "search_reference"],
+      "harvest": ["Zig-oriented state/layout ideas", "modern NNUE implementation", "alternate low-level engine structure"],
+      "warning": "Repository assets are CC-BY-ND-4.0 and are not approved for derivative adaptation; code and assets must be tracked separately."
+    }
+  ],
+  "assets_and_infrastructure": [
+    {
+      "id": "stockfish_networks",
+      "repo": "official-stockfish/networks",
+      "license": "CC0-1.0",
+      "license_status": "verified",
+      "direct_use_policy": "allowed",
+      "harvest": ["frozen production NNUE networks", "historical evaluator controls"],
+      "note": "Best immediate path to strong evaluation without training from scratch."
+    },
+    {
+      "id": "viridithas_networks",
+      "repo": "cosmobobak/viridithas-networks",
+      "license": "CC0-1.0",
+      "license_status": "verified_by_engine_upstream_statement",
+      "direct_use_policy": "allowed",
+      "harvest": ["independently trained NNUE networks", "cross-evaluator experiments"]
+    },
+    {
+      "id": "lc0_training_data",
+      "source": "Leela Chess Zero training data",
+      "license": "ODbL",
+      "license_status": "verified_via_stockfish_acknowledgement",
+      "direct_use_policy": "dataset_obligations_apply",
+      "harvest": ["large-scale chess position/game data for training or distillation"]
+    },
+    {
+      "id": "openbench",
+      "repo": "AndyGrant/OpenBench",
+      "license": "GPL-3.0",
+      "license_status": "verified",
+      "direct_use_policy": "allowed",
+      "harvest": ["distributed fixed-game tests", "SPRT", "engine development infrastructure"]
+    },
+    {
+      "id": "fastchess",
+      "repo": "Disservin/fastchess",
+      "license": "MIT",
+      "license_status": "verified",
+      "direct_use_policy": "allowed",
+      "harvest": ["high-concurrency matches", "SPRT orchestration", "UCI compliance testing", "PGN telemetry"]
+    },
+    {
+      "id": "fathom",
+      "repo": "jdart1/Fathom",
+      "license": "MIT",
+      "license_status": "verified",
+      "direct_use_policy": "allowed",
+      "harvest": ["standalone Syzygy probing with minimal engine coupling"]
+    },
+    {
+      "id": "nnue_pytorch",
+      "repo": "official-stockfish/nnue-pytorch",
+      "license": "GPL-3.0",
+      "license_status": "verified",
+      "direct_use_policy": "allowed",
+      "harvest": ["NNUE training", "checkpoint conversion", "network match selection"]
+    }
+  ]
+}
