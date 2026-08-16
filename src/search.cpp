@@ -299,6 +299,7 @@ bool Search::Worker::iterative_deepening() {
     Color  us            = rootPos.side_to_move();
     double timeReduction = 1, totBestMoveChanges = 0;
     int    delta, iterIdx                        = 0;
+    bool   leviathanVolatilityDecided            = false;
 
     // Allocate stack with extra size to allow access from (ss - 7) to (ss + 2):
     // (ss - 7) is needed for update_continuation_histories(ss - 1) which accesses (ss - 6),
@@ -580,6 +581,23 @@ bool Search::Worker::iterative_deepening() {
         {
             totBestMoveChanges += th->worker->bestMoveChanges;
             th->worker->bestMoveChanges = 0;
+        }
+
+        // Counterexample-guided replacement for the asynchronous W032 driver.
+        // Decide exactly once, at an iteration boundary, so host scheduling
+        // cannot change the stable arm's node allocation. Volatile roots keep
+        // searching until the UCI node cap stops them.
+        if (bool(options["Leviathan Volatility Allocation"]) && multiPV == 1
+            && !leviathanVolatilityDecided && !threads.stop)
+        {
+            const u64 probeNodes = u64(int(options["Leviathan Volatility Probe Nodes"]));
+            const Depth stableDepths = int(options["Leviathan Volatility Stable Depths"]);
+            if (nodes >= probeNodes && rootDepth >= stableDepths)
+            {
+                leviathanVolatilityDecided = true;
+                if (rootDepth - lastBestMoveDepth >= stableDepths - 1)
+                    threads.stop = true;
+            }
         }
 
         // Do we have time for the next iteration? Can we stop searching now?

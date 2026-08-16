@@ -251,6 +251,13 @@ Engine::Engine(std::optional<std::filesystem::path> path) :
         return std::nullopt;
     }));
 
+    // Research-only deterministic value-of-computation gate. When enabled,
+    // search decides once at a completed root iteration whether a stable PV
+    // can stop at the probe; volatile roots retain the caller's full node cap.
+    options.add("Leviathan Volatility Allocation", Option(false));
+    options.add("Leviathan Volatility Probe Nodes", Option(15000, 1000, 100000000));
+    options.add("Leviathan Volatility Stable Depths", Option(5, 1, 16));
+
     options.add("Leviathan Atlas", Option(false, [](const Option& o) {
         Leviathan::Atlas::set_enabled(int(o) != 0);
         return std::nullopt;
