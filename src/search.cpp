@@ -1478,6 +1478,15 @@ moves_loop:  // When in check, search starts here
         r += Leviathan::Fundamentals::lmr_adjustment(
           pos, move, prevSq, depth, moveCount, PvNode, capture, givesCheck);
 
+        // Leviathan strength v6.4 - Proof Regime. Once several independent
+        // warnings agree, incremental buybacks are not enough: accumulated LMR
+        // terms can still bury the very branch we declared uncertain. Cap the
+        // reduction itself so proof debt has real search authority.
+        if (depth >= 7 && leviathanProofDebt >= 4 && moveCount <= 2)
+            r = std::min(r, 0);      // full depth (negative extension remains allowed)
+        else if (depth >= 6 && leviathanProofDebt >= 3 && moveCount <= 4)
+            r = std::min(r, 1024);   // at most about one ply of positive reduction
+
         Value leviathanReducedValue = VALUE_NONE;
         Depth leviathanReducedDepth = DEPTH_NONE;
         bool  leviathanResearched   = false;
