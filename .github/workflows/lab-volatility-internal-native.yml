@@ -1,0 +1,134 @@
+name: Leviathan deterministic volatility vs native time management
+
+on:
+  push:
+    branches: [leviathan/lab-v4-volatility-internal-native]
+    paths:
+      - '.github/workflows/lab-volatility-internal-native.yml'
+      - 'tools/volatility_native_tm.py'
+      - 'tools/volatility_allocator.py'
+      - 'tools/exact_behavior_gate.py'
+      - 'tools/generate_speed_holdout.py'
+      - 'experiments/holdouts/volatility_internal_native_seed2026081622.fen'
+      - 'experiments/options/active_fundamentals.json'
+      - 'experiments/requirements-chess-hashed.txt'
+      - 'experiments/manifests/volatility_internal_native.json'
+  workflow_dispatch:
+
+permissions: {contents: read}
+
+concurrency:
+  group: lab-volatility-internal-native-${{ github.ref }}
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  counterfactual:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ github.sha }}
+          path: lab
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: 63d7c506fc1d0bfafdd892ad762f43c1b68a1514
+          path: candidate
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: a38620d49cd28d0f1bddd776658dda4b47dd4c96
+          path: reference
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: 5062aee519a1ba262d472d8ab139851ced56573e
+          path: oracle
+      - name: Record immutable provenance
+        run: |
+          set -euo pipefail
+          {
+            echo "runner_image=${ImageOS:-unknown}"
+            echo "runner_image_version=${ImageVersion:-unknown}"
+            uname -a
+            lscpu
+            g++ --version
+            python3 --version
+            for tree in lab candidate reference oracle; do
+              git -C "$tree" rev-parse HEAD
+              git -C "$tree" rev-parse 'HEAD^{tree}'
+            done
+            sha256sum lab/tools/volatility_native_tm.py
+            sha256sum lab/tools/volatility_allocator.py
+            sha256sum lab/tools/exact_behavior_gate.py
+            sha256sum lab/tools/generate_speed_holdout.py
+            sha256sum lab/experiments/holdouts/volatility_internal_native_seed2026081622.fen
+            sha256sum lab/experiments/options/active_fundamentals.json
+            sha256sum lab/experiments/requirements-chess-hashed.txt
+            sha256sum lab/experiments/manifests/volatility_internal_native.json
+          } | tee provenance.txt
+          test "$(sha256sum lab/experiments/holdouts/volatility_internal_native_seed2026081622.fen | cut -d' ' -f1)" = \
+            9dd67329987091be54f1f6f3108356157c8f560602c438c254c524f230991cc1
+      - name: Install hash-locked chess harness dependency
+        run: |
+          set -euo pipefail
+          PIP_CACHE_DIR="$RUNNER_TEMP/pip-cache" python3 -m pip install \
+            --disable-pip-version-check --require-hashes \
+            -r lab/experiments/requirements-chess-hashed.txt
+          python3 -m pip freeze | sort | tee dependency-freeze.txt
+      - name: Build frozen candidate, reference, and oracle
+        run: |
+          set -euo pipefail
+          make -C oracle/src net
+          cp oracle/src/nn-ab28990d4ea3.nnue candidate/src/
+          cp oracle/src/nn-ab28990d4ea3.nnue reference/src/
+          make -C candidate/src -j2 ARCH=x86-64-avx2 build
+          mv candidate/src/stockfish candidate/src/candidate
+          make -C reference/src -j2 ARCH=x86-64-avx2 build
+          mv reference/src/stockfish reference/src/reference
+          make -C oracle/src -j2 ARCH=x86-64-avx2 build
+          mv oracle/src/stockfish oracle/src/oracle
+          sha256sum candidate/src/candidate reference/src/reference oracle/src/oracle \
+            | tee binary-sha256.txt
+          sha256sum candidate/src/nn-ab28990d4ea3.nnue reference/src/nn-ab28990d4ea3.nnue \
+            oracle/src/nn-ab28990d4ea3.nnue | tee network-sha256.txt
+      - name: Fail closed on default-off behavior
+        run: |
+          set -euo pipefail
+          mkdir -p results
+          python3 lab/tools/exact_behavior_gate.py \
+            --reference reference/src/reference \
+            --candidate candidate/src/candidate \
+            --options lab/experiments/options/active_fundamentals.json \
+            --output results/default-off-exact.json \
+            2>&1 | tee results/default-off-exact.log
+      - name: Matched-node internal allocator versus native time management
+        run: |
+          set -euo pipefail
+          python3 lab/tools/volatility_native_tm.py \
+            --engine candidate/src/candidate \
+            --oracle oracle/src/oracle \
+            --options lab/experiments/options/active_fundamentals.json \
+            --positions lab/experiments/holdouts/volatility_internal_native_seed2026081622.fen \
+            --adaptive-control internal \
+            --probe-nodes 15000 --cap-nodes 100000 --history-depths 5 \
+            --native-low-clock-nodes 800000 --native-high-clock-nodes 5000000 \
+            --native-remaining-moves 50 --calibration-iterations 7 \
+            --oracle-nodes 500000 --forced-nodes 250000 \
+            --seed 2026081623 --max-node-gap 0.01 \
+            --output results/volatility-internal-native.json \
+            2>&1 | tee results/volatility-internal-native.log
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: volatility-internal-native
+          retention-days: 90
+          if-no-files-found: error
+          path: |
+            provenance.txt
+            dependency-freeze.txt
+            binary-sha256.txt
+            network-sha256.txt
+            results/
