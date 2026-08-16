@@ -1,0 +1,43 @@
+name: Leviathan v2.2 overdrive sweep
+
+on:
+  push:
+    branches: [leviathan/fundamentals-v2.2]
+    paths: ['.github/workflows/v22-overdrive-sweep.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  sweep:
+    runs-on: ubuntu-22.04
+    strategy:
+      fail-fast: false
+      matrix:
+        overdrive: [160, 320, 480, 640, 800, 1024]
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+      - name: Build
+        working-directory: src
+        run: |
+          make net
+          make -j2 ARCH=x86-64-avx2 build
+      - name: Bench
+        working-directory: src
+        env:
+          OD: ${{ matrix.overdrive }}
+        run: |
+          cat > ../sweep.uci <<EOF
+          setoption name Leviathan Fundamentals value true
+          setoption name Leviathan Fundamentals Authority value 2
+          setoption name Leviathan Quiet Overdrive value $OD
+          bench
+          quit
+          EOF
+          ./stockfish < ../sweep.uci 2>&1 | tee ../overdrive-${OD}.txt
+          grep -E 'Nodes searched|Nodes/second' ../overdrive-${OD}.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: overdrive-${{ matrix.overdrive }}
+          path: overdrive-${{ matrix.overdrive }}.txt
