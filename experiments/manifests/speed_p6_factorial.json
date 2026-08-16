@@ -1,0 +1,32 @@
+{
+  "schema": "LV_EXPERIMENT_MANIFEST_V1",
+  "id": "W033",
+  "family": "lossless-speed-causal-factorial",
+  "hypothesis": "Removing the Fundamentals function-local static accessor is a replicable speed gain; hoisting only readiness may add value without P5's fact-object expansion.",
+  "references": {
+    "p01": "a38620d49cd28d0f1bddd776658dda4b47dd4c96",
+    "p6": "8f28d37481243114b6789f584f853859b5f4713d"
+  },
+  "candidates": {
+    "p5a_ready_hoist": "8a4ae46d4f4f69abafc9a3b5298d6bb6cf050cb3",
+    "p6_global_state": "8f28d37481243114b6789f584f853859b5f4713d",
+    "p6_plus_p5a": "1950dda9948c86fd989ab130ea676311bf9a02a7",
+    "p7_cold_outline": "e373f88f31b815f5c25b8ff3922f63b47a807ef9"
+  },
+  "panels": [
+    "P5a vs P01",
+    "P6 vs P01 independent replication",
+    "P6+P5a vs P01",
+    "P6+P5a vs P6 direct interaction",
+    "P7 vs P01 calibrated retry"
+  ],
+  "rounds_per_panel": 41,
+  "gates": [
+    "three exact normalized transcripts",
+    "same-run A/A calibration",
+    "bootstrap median interval",
+    "direct A+B interaction panel"
+  ],
+  "promotion": "P6 or P6+P5a must replicate here and then pass a fresh game-position timing panel. P5a must show both isolated or incremental value before retention.",
+  "rollback": "Reject P5a if isolated and incremental evidence are non-positive or inconclusive. P7 receives no further timing retries if this calibrated retry does not show a clear benefit."
+}

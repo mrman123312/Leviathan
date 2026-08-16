@@ -1,0 +1,132 @@
+name: Leviathan P6 replication and ready-hoist factorial
+
+on:
+  push:
+    branches: [leviathan/lab-v4-speed-p6-factorial]
+    paths:
+      - '.github/workflows/lab-speed-p6-factorial.yml'
+      - 'tools/lossless_pair_benchmark.py'
+      - 'experiments/options/active_fundamentals.json'
+      - 'experiments/manifests/speed_p6_factorial.json'
+  workflow_dispatch:
+
+permissions: {contents: read}
+
+concurrency:
+  group: lab-speed-p6-factorial-${{ github.ref }}
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  strict-panel:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - panel: p5a-isolated
+            reference_sha: a38620d49cd28d0f1bddd776658dda4b47dd4c96
+            candidate_sha: 8a4ae46d4f4f69abafc9a3b5298d6bb6cf050cb3
+          - panel: p6-replication
+            reference_sha: a38620d49cd28d0f1bddd776658dda4b47dd4c96
+            candidate_sha: 8f28d37481243114b6789f584f853859b5f4713d
+          - panel: p65a-total
+            reference_sha: a38620d49cd28d0f1bddd776658dda4b47dd4c96
+            candidate_sha: 1950dda9948c86fd989ab130ea676311bf9a02a7
+          - panel: p5a-increment
+            reference_sha: 8f28d37481243114b6789f584f853859b5f4713d
+            candidate_sha: 1950dda9948c86fd989ab130ea676311bf9a02a7
+          - panel: p7-retry
+            reference_sha: a38620d49cd28d0f1bddd776658dda4b47dd4c96
+            candidate_sha: e373f88f31b815f5c25b8ff3922f63b47a807ef9
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ github.sha }}
+          path: lab
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ matrix.reference_sha }}
+          path: reference
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ matrix.candidate_sha }}
+          path: candidate
+      - name: Record immutable provenance and source delta
+        run: |
+          set -euo pipefail
+          {
+            echo "panel=${{ matrix.panel }}"
+            echo "reference_declared_sha=${{ matrix.reference_sha }}"
+            echo "candidate_declared_sha=${{ matrix.candidate_sha }}"
+            echo "runner_image=${ImageOS:-unknown}"
+            echo "runner_image_version=${ImageVersion:-unknown}"
+            uname -a
+            lscpu
+            g++ --version
+            git -C lab rev-parse HEAD
+            git -C lab rev-parse 'HEAD^{tree}'
+            git -C reference rev-parse HEAD
+            git -C reference rev-parse 'HEAD^{tree}'
+            git -C candidate rev-parse HEAD
+            git -C candidate rev-parse 'HEAD^{tree}'
+            test "$(git -C reference rev-parse HEAD)" = "${{ matrix.reference_sha }}"
+            test "$(git -C candidate rev-parse HEAD)" = "${{ matrix.candidate_sha }}"
+            sha256sum lab/tools/lossless_pair_benchmark.py
+            sha256sum lab/experiments/options/active_fundamentals.json
+            sha256sum lab/experiments/manifests/speed_p6_factorial.json
+          } | tee provenance.txt
+          set +e
+          diff -ru --exclude='*.nnue' reference/src candidate/src > candidate-source.patch
+          diff_status=$?
+          set -e
+          if (( diff_status > 1 )); then exit "$diff_status"; fi
+          test -s candidate-source.patch
+      - name: Build frozen reference and candidate
+        run: |
+          set -euo pipefail
+          make -C reference/src net
+          cp reference/src/nn-ab28990d4ea3.nnue candidate/src/
+          make -C reference/src -j2 ARCH=x86-64-avx2 build
+          mv reference/src/stockfish reference/src/control_a
+          cp reference/src/control_a reference/src/control_b
+          make -C candidate/src -j2 ARCH=x86-64-avx2 build
+          mv candidate/src/stockfish candidate/src/candidate
+          sha256sum reference/src/control_a reference/src/control_b candidate/src/candidate \
+            | tee binary-sha256.txt
+          sha256sum reference/src/nn-ab28990d4ea3.nnue candidate/src/nn-ab28990d4ea3.nnue \
+            | tee network-sha256.txt
+          {
+            size reference/src/control_a candidate/src/candidate
+            readelf -SW reference/src/control_a | grep -F ' .text '
+            readelf -SW candidate/src/candidate | grep -F ' .text '
+          } | tee binary-layout.txt
+      - name: Exact transcripts and calibrated 41-round panel
+        run: |
+          set -euo pipefail
+          python3 lab/tools/lossless_pair_benchmark.py \
+            --control-a reference/src/control_a \
+            --control-b reference/src/control_b \
+            --candidate candidate/src/candidate \
+            --options lab/experiments/options/active_fundamentals.json \
+            --rounds 41 --metric wall \
+            --output "speed-${{ matrix.panel }}.json" \
+            2>&1 | tee "speed-${{ matrix.panel }}.log"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: speed-${{ matrix.panel }}
+          retention-days: 90
+          if-no-files-found: error
+          path: |
+            provenance.txt
+            candidate-source.patch
+            binary-sha256.txt
+            network-sha256.txt
+            binary-layout.txt
+            speed-${{ matrix.panel }}.json
+            speed-${{ matrix.panel }}.log
