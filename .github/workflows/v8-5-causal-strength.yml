@@ -1,0 +1,223 @@
+name: Leviathan V8.5 causal strength decomposition
+
+on:
+  push:
+    branches:
+      - leviathan/strength-v8-5a-witness-hygiene
+    paths:
+      - '.github/workflows/v8-5-causal-strength.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  hygiene-vs-control:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout hygiene A
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: 95b779abefedf158a856d5db7eff9d2a61df2982
+          path: a
+      - name: Checkout V7.4 control
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: 9ffe3f2c43972fc55163300449e97a981a01e358
+          path: c
+      - name: Install match dependency
+        run: python3 -m pip install --disable-pip-version-check 'python-chess==1.999'
+      - name: Build identically
+        run: |
+          set -euo pipefail
+          for D in a c; do cd "$GITHUB_WORKSPACE/$D/src"; make net; make clean; make -j2 ARCH=x86-64-avx2 build; mv stockfish "stockfish-$D"; done
+      - name: Prepare common dev bank
+        run: |
+          set -euo pipefail
+          mkdir -p match
+          cat > match/options.json <<'EOF'
+          {"Threads":1,"Hash":64,"Leviathan Fundamentals":true,"Leviathan Fundamentals Authority":1,"Leviathan Quiet Overdrive":0,"Leviathan Policy":false,"Leviathan MetaSearch":false,"Leviathan Risk":false,"Leviathan Specialist":false,"Leviathan Atlas":false,"Leviathan Search DSL":false}
+          EOF
+          python3 - <<'PY'
+          import chess,random,hashlib
+          from pathlib import Path
+          seeds=[['e2e4','e7e5','g1f3','b8c6'],['e2e4','c7c5','g1f3','d7d6'],['e2e4','e7e6','d2d4','d7d5'],['e2e4','c7c6','d2d4','d7d5'],['d2d4','d7d5','c2c4','e7e6'],['d2d4','g8f6','c2c4','g7g6'],['d2d4','g8f6','c2c4','e7e6'],['c2c4','e7e5','b1c3','g8f6'],['g1f3','d7d5','g2g3','g8f6'],['e2e4','g8f6','e4e5','f6d5'],['c2c4','c7c5','g1f3','g8f6'],['d2d4','f7f5','g2g3','g8f6']]
+          rng=random.Random(89108083); out=[]
+          for i in range(20):
+            b=chess.Board()
+            for u in seeds[i%len(seeds)]:
+              m=chess.Move.from_uci(u)
+              if m in b.legal_moves:b.push(m)
+            for _ in range(4+i%7):
+              ms=sorted(b.legal_moves,key=lambda m:m.uci())
+              if not ms or b.is_game_over():break
+              b.push(ms[rng.randrange(len(ms))])
+            if b.is_game_over():raise SystemExit('terminal opening')
+            out.append(b.fen())
+          text='\n'.join(out)+'\n'; d=hashlib.sha256(text.encode()).hexdigest(); assert d=='87f3e3780aac2deba3730528fb35032228982e6b5268798c5d72144363aaeb2a'; Path('match/openings.fen').write_text(text)
+          PY
+      - name: Equal-node A vs control
+        id: en
+        run: |
+          set -euo pipefail
+          python3 a/tools/run_match.py --engine-a "$GITHUB_WORKSPACE/a/src/stockfish-a" --engine-b "$GITHUB_WORKSPACE/c/src/stockfish-c" --options-a match/options.json --options-b match/options.json --openings match/openings.fen --games 40 --nodes-per-move 20000 --max-plies 220 --out match/equal-node.json | tee match/equal-node.log
+          python3 - <<'PY' >> "$GITHUB_OUTPUT"
+          import json;s=json.load(open('match/equal-node.json'))['summary'];print('survives='+('true' if s['score_a']>=.5 else 'false'))
+          PY
+      - name: Fixed-time A vs control
+        if: steps.en.outputs.survives == 'true'
+        run: |
+          set -euo pipefail
+          python3 a/tools/run_match.py --engine-a "$GITHUB_WORKSPACE/a/src/stockfish-a" --engine-b "$GITHUB_WORKSPACE/c/src/stockfish-c" --options-a match/options.json --options-b match/options.json --openings match/openings.fen --games 40 --movetime-ms 50 --max-plies 220 --out match/fixed-time.json | tee match/fixed-time.log
+      - name: Summarize A
+        if: always() && steps.en.outcome == 'success'
+        run: |
+          python3 - <<'PY'
+          import json, pathlib
+          r={'comparison':'hygiene_vs_control','equal_node':json.load(open('match/equal-node.json'))['summary'],'fixed_time':json.load(open('match/fixed-time.json'))['summary'] if pathlib.Path('match/fixed-time.json').exists() else None}
+          pathlib.Path('match/summary.json').write_text(json.dumps(r,indent=2)+'\n');print(json.dumps(r,indent=2))
+          PY
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: v8-5a-hygiene-vs-v7
+          path: match/
+          if-no-files-found: error
+
+  receipt-vs-control:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout receipt B
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: 6756f490cb48a48eb35d9485512ffc58147ccfab
+          path: b
+      - name: Checkout V7.4 control
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: 9ffe3f2c43972fc55163300449e97a981a01e358
+          path: c
+      - run: python3 -m pip install --disable-pip-version-check 'python-chess==1.999'
+      - name: Build identically
+        run: |
+          set -euo pipefail
+          for D in b c; do cd "$GITHUB_WORKSPACE/$D/src"; make net; make clean; make -j2 ARCH=x86-64-avx2 build; mv stockfish "stockfish-$D"; done
+      - name: Prepare common dev bank
+        run: |
+          set -euo pipefail
+          mkdir -p match
+          cat > match/options.json <<'EOF'
+          {"Threads":1,"Hash":64,"Leviathan Fundamentals":true,"Leviathan Fundamentals Authority":1,"Leviathan Quiet Overdrive":0,"Leviathan Policy":false,"Leviathan MetaSearch":false,"Leviathan Risk":false,"Leviathan Specialist":false,"Leviathan Atlas":false,"Leviathan Search DSL":false}
+          EOF
+          python3 - <<'PY'
+          import chess,random,hashlib
+          from pathlib import Path
+          seeds=[['e2e4','e7e5','g1f3','b8c6'],['e2e4','c7c5','g1f3','d7d6'],['e2e4','e7e6','d2d4','d7d5'],['e2e4','c7c6','d2d4','d7d5'],['d2d4','d7d5','c2c4','e7e6'],['d2d4','g8f6','c2c4','g7g6'],['d2d4','g8f6','c2c4','e7e6'],['c2c4','e7e5','b1c3','g8f6'],['g1f3','d7d5','g2g3','g8f6'],['e2e4','g8f6','e4e5','f6d5'],['c2c4','c7c5','g1f3','g8f6'],['d2d4','f7f5','g2g3','g8f6']]
+          rng=random.Random(89108083);out=[]
+          for i in range(20):
+            q=chess.Board()
+            for u in seeds[i%len(seeds)]:
+              m=chess.Move.from_uci(u)
+              if m in q.legal_moves:q.push(m)
+            for _ in range(4+i%7):
+              ms=sorted(q.legal_moves,key=lambda m:m.uci())
+              if not ms or q.is_game_over():break
+              q.push(ms[rng.randrange(len(ms))])
+            if q.is_game_over():raise SystemExit('terminal');out.append(q.fen())
+          text='\n'.join(out)+'\n';d=hashlib.sha256(text.encode()).hexdigest();assert d=='87f3e3780aac2deba3730528fb35032228982e6b5268798c5d72144363aaeb2a';Path('match/openings.fen').write_text(text)
+          PY
+      - name: Equal-node B vs control
+        id: en
+        run: |
+          set -euo pipefail
+          python3 b/tools/run_match.py --engine-a "$GITHUB_WORKSPACE/b/src/stockfish-b" --engine-b "$GITHUB_WORKSPACE/c/src/stockfish-c" --options-a match/options.json --options-b match/options.json --openings match/openings.fen --games 40 --nodes-per-move 20000 --max-plies 220 --out match/equal-node.json | tee match/equal-node.log
+          python3 - <<'PY' >> "$GITHUB_OUTPUT"
+          import json;s=json.load(open('match/equal-node.json'))['summary'];print('survives='+('true' if s['score_a']>=.5 else 'false'))
+          PY
+      - name: Fixed-time B vs control
+        if: steps.en.outputs.survives == 'true'
+        run: |
+          set -euo pipefail
+          python3 b/tools/run_match.py --engine-a "$GITHUB_WORKSPACE/b/src/stockfish-b" --engine-b "$GITHUB_WORKSPACE/c/src/stockfish-c" --options-a match/options.json --options-b match/options.json --openings match/openings.fen --games 40 --movetime-ms 50 --max-plies 220 --out match/fixed-time.json | tee match/fixed-time.log
+      - name: Summarize B
+        if: always() && steps.en.outcome == 'success'
+        run: |
+          python3 - <<'PY'
+          import json,pathlib;r={'comparison':'receipt_vs_control','equal_node':json.load(open('match/equal-node.json'))['summary'],'fixed_time':json.load(open('match/fixed-time.json'))['summary'] if pathlib.Path('match/fixed-time.json').exists() else None};pathlib.Path('match/summary.json').write_text(json.dumps(r,indent=2)+'\n');print(json.dumps(r,indent=2))
+          PY
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: v8-5b-receipt-vs-v7
+          path: match/
+          if-no-files-found: error
+
+  combined-vs-hygiene:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout combined A+B
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: 5541261dccec82d7c76dcb8298d8ce7bd8f69b9a
+          path: ab
+      - name: Checkout hygiene A
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: 95b779abefedf158a856d5db7eff9d2a61df2982
+          path: a
+      - run: python3 -m pip install --disable-pip-version-check 'python-chess==1.999'
+      - name: Build identically
+        run: |
+          set -euo pipefail
+          for D in ab a; do cd "$GITHUB_WORKSPACE/$D/src"; make net; make clean; make -j2 ARCH=x86-64-avx2 build; mv stockfish "stockfish-$D"; done
+      - name: Prepare common dev bank
+        run: |
+          set -euo pipefail
+          mkdir -p match
+          cat > match/options.json <<'EOF'
+          {"Threads":1,"Hash":64,"Leviathan Fundamentals":true,"Leviathan Fundamentals Authority":1,"Leviathan Quiet Overdrive":0,"Leviathan Policy":false,"Leviathan MetaSearch":false,"Leviathan Risk":false,"Leviathan Specialist":false,"Leviathan Atlas":false,"Leviathan Search DSL":false}
+          EOF
+          cp /dev/null match/openings.fen
+          python3 - <<'PY'
+          import chess,random,hashlib
+          from pathlib import Path
+          seeds=[['e2e4','e7e5','g1f3','b8c6'],['e2e4','c7c5','g1f3','d7d6'],['e2e4','e7e6','d2d4','d7d5'],['e2e4','c7c6','d2d4','d7d5'],['d2d4','d7d5','c2c4','e7e6'],['d2d4','g8f6','c2c4','g7g6'],['d2d4','g8f6','c2c4','e7e6'],['c2c4','e7e5','b1c3','g8f6'],['g1f3','d7d5','g2g3','g8f6'],['e2e4','g8f6','e4e5','f6d5'],['c2c4','c7c5','g1f3','g8f6'],['d2d4','f7f5','g2g3','g8f6']]
+          rng=random.Random(89108083);out=[]
+          for i in range(20):
+            q=chess.Board()
+            for u in seeds[i%len(seeds)]:
+              m=chess.Move.from_uci(u)
+              if m in q.legal_moves:q.push(m)
+            for _ in range(4+i%7):
+              ms=sorted(q.legal_moves,key=lambda m:m.uci())
+              if not ms or q.is_game_over():break
+              q.push(ms[rng.randrange(len(ms))])
+            if q.is_game_over():raise SystemExit('terminal')
+            out.append(q.fen())
+          text='\n'.join(out)+'\n';d=hashlib.sha256(text.encode()).hexdigest();assert d=='87f3e3780aac2deba3730528fb35032228982e6b5268798c5d72144363aaeb2a';Path('match/openings.fen').write_text(text)
+          PY
+      - name: Equal-node combined vs hygiene
+        id: en
+        run: |
+          set -euo pipefail
+          python3 ab/tools/run_match.py --engine-a "$GITHUB_WORKSPACE/ab/src/stockfish-ab" --engine-b "$GITHUB_WORKSPACE/a/src/stockfish-a" --options-a match/options.json --options-b match/options.json --openings match/openings.fen --games 40 --nodes-per-move 20000 --max-plies 220 --out match/equal-node.json | tee match/equal-node.log
+          python3 - <<'PY' >> "$GITHUB_OUTPUT"
+          import json;s=json.load(open('match/equal-node.json'))['summary'];print('survives='+('true' if s['score_a']>=.5 else 'false'))
+          PY
+      - name: Fixed-time combined vs hygiene
+        if: steps.en.outputs.survives == 'true'
+        run: |
+          set -euo pipefail
+          python3 ab/tools/run_match.py --engine-a "$GITHUB_WORKSPACE/ab/src/stockfish-ab" --engine-b "$GITHUB_WORKSPACE/a/src/stockfish-a" --options-a match/options.json --options-b match/options.json --openings match/openings.fen --games 40 --movetime-ms 50 --max-plies 220 --out match/fixed-time.json | tee match/fixed-time.log
+      - name: Summarize interaction
+        if: always() && steps.en.outcome == 'success'
+        run: |
+          python3 - <<'PY'
+          import json,pathlib;r={'comparison':'combined_vs_hygiene','equal_node':json.load(open('match/equal-node.json'))['summary'],'fixed_time':json.load(open('match/fixed-time.json'))['summary'] if pathlib.Path('match/fixed-time.json').exists() else None};pathlib.Path('match/summary.json').write_text(json.dumps(r,indent=2)+'\n');print(json.dumps(r,indent=2))
+          PY
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: v8-5ab-vs-v8-5a
+          path: match/
+          if-no-files-found: error
