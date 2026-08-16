@@ -1,0 +1,136 @@
+name: Apply strength v7 persistent proof memory
+
+on:
+  push:
+    branches:
+      - leviathan/strength-v7-persistent-proof
+    paths:
+      - '.github/workflows/apply-strength-v7-persistent-proof.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout strength v7
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: leviathan/strength-v7-persistent-proof
+
+      - name: Add persistent proof memory
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          hp = Path('src/search.h')
+          h = hp.read_text()
+          old = '''    PVMoves lastIterationIdxPV;
+
+    usize                     threadIdx, numaThreadIdx, numaTotal;
+'''
+          new = '''    PVMoves lastIterationIdxPV;
+
+    // Leviathan strength v7 - Persistent Proof Memory. This stores only the
+    // epistemic warning that search shortcuts were unreliable at a position;
+    // it never stores a move or evaluation as truth. Per-worker ownership keeps
+    // it lock-free, and the cache survives consecutive go commands in one game.
+    struct LeviathanProofMemoryEntry {
+        Key          key  = 0;
+        unsigned int debt = 0;
+    };
+    static constexpr usize LEVIATHAN_PROOF_MEMORY_SIZE = 4096;
+    std::array<LeviathanProofMemoryEntry, LEVIATHAN_PROOF_MEMORY_SIZE> leviathanProofMemory{};
+    int leviathanLastRootGamePly = -1;
+
+    unsigned int leviathan_proof_memory_load(Key key) const {
+        const auto& e = leviathanProofMemory[usize(key) & (LEVIATHAN_PROOF_MEMORY_SIZE - 1)];
+        return e.key == key ? e.debt : 0;
+    }
+
+    void leviathan_proof_memory_store(Key key, int debt) {
+        if (debt < 3)
+            return;
+        auto& e = leviathanProofMemory[usize(key) & (LEVIATHAN_PROOF_MEMORY_SIZE - 1)];
+        if (e.key != key)
+            e = {key, unsigned(std::min(debt, 5))};
+        else
+            e.debt = std::max(e.debt, unsigned(std::min(debt, 5)));
+    }
+
+    void leviathan_proof_memory_reset() {
+        leviathanProofMemory.fill({});
+    }
+
+    usize                     threadIdx, numaThreadIdx, numaTotal;
+'''
+          if h.count(old) != 1:
+              raise SystemExit(f'header memory anchor count {h.count(old)}')
+          hp.write_text(h.replace(old, new, 1))
+
+          sp = Path('src/search.cpp')
+          s = sp.read_text()
+
+          old = '''void Search::Worker::start_searching() {
+
+    accumulatorStack.reset();
+'''
+          new = '''void Search::Worker::start_searching() {
+
+    accumulatorStack.reset();
+
+    // Persist proof warnings while the actual game advances, but never leak
+    // them into a new game, a takeback, or repeated analysis of the same root.
+    const int leviathanRootGamePly = rootPos.game_ply();
+    if (leviathanLastRootGamePly >= 0 && leviathanRootGamePly <= leviathanLastRootGamePly)
+        leviathan_proof_memory_reset();
+    leviathanLastRootGamePly = leviathanRootGamePly;
+'''
+          if s.count(old) != 1:
+              raise SystemExit(f'start memory anchor count {s.count(old)}')
+          s = s.replace(old, new, 1)
+
+          old = '''    excludedMove                   = ss->excludedMove;
+    posKey                         = leviathan_tt_key(pos);
+    auto [ttHit, ttData, ttWriter] = tt.probe(posKey);
+'''
+          new = '''    excludedMove                   = ss->excludedMove;
+    posKey                         = leviathan_tt_key(pos);
+    // If this worker already discovered that heuristics disagree here, begin
+    // the revisit with that proof debt instead of paying to rediscover it.
+    leviathanProofDebt = std::max(leviathanProofDebt,
+                                  int(leviathan_proof_memory_load(posKey)));
+    auto [ttHit, ttData, ttWriter] = tt.probe(posKey);
+'''
+          if s.count(old) != 1:
+              raise SystemExit(f'load memory anchor count {s.count(old)}')
+          s = s.replace(old, new, 1)
+
+          old = '''    // Write gathered information in transposition table. Note that the
+    // static evaluation is saved as it was before correction history.
+    if (!excludedMove && !(rootNode && pvIdx))
+'''
+          new = '''    // Persist only substantial proof debt. This is deliberately separate
+    // from TT score authority: future visits inherit skepticism, not a verdict.
+    if (!excludedMove && leviathanProofDebt >= 3)
+        leviathan_proof_memory_store(posKey, leviathanProofDebt);
+
+    // Write gathered information in transposition table. Note that the
+    // static evaluation is saved as it was before correction history.
+    if (!excludedMove && !(rootNode && pvIdx))
+'''
+          if s.count(old) != 1:
+              raise SystemExit(f'store memory anchor count {s.count(old)}')
+          sp.write_text(s.replace(old, new, 1))
+          PY
+          git diff --check
+          git diff -- src/search.h src/search.cpp
+
+      - name: Commit persistent proof memory
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add src/search.h src/search.cpp
+          git commit -m 'Strength v7: persist proof debt across game moves'
+          git push origin HEAD:leviathan/strength-v7-persistent-proof
