@@ -1,0 +1,269 @@
+name: Leviathan V8.5 fresh holdout
+
+on:
+  push:
+    branches:
+      - leviathan/strength-v8-5a-witness-hygiene
+    paths:
+      - '.github/workflows/v8-5-fresh-holdout.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  bank:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Install deterministic bank dependency
+        run: python3 -m pip install --disable-pip-version-check 'python-chess==1.999'
+
+      - name: Generate fresh unseen holdout bank
+        run: |
+          set -euo pipefail
+          mkdir -p holdout
+          python3 - <<'PY'
+          import chess, random, hashlib, json
+          from pathlib import Path
+
+          # Fresh seed chosen only after V8.5/A/B source SHAs were frozen.
+          rng = random.Random(24612864)
+          seeds = [
+              ['e2e4','e7e5','g1f3','b8c6'],
+              ['e2e4','c7c5','g1f3','b8c6'],
+              ['e2e4','c7c5','g1f3','d7d6'],
+              ['e2e4','e7e6','d2d4','d7d5'],
+              ['e2e4','c7c6','d2d4','d7d5'],
+              ['e2e4','d7d6','d2d4','g8f6'],
+              ['d2d4','d7d5','c2c4','e7e6'],
+              ['d2d4','g8f6','c2c4','g7g6'],
+              ['d2d4','g8f6','c2c4','e7e6'],
+              ['d2d4','g8f6','g1f3','e7e6'],
+              ['c2c4','e7e5','b1c3','g8f6'],
+              ['c2c4','c7c5','g1f3','g8f6'],
+              ['g1f3','d7d5','g2g3','g8f6'],
+              ['g1f3','g8f6','g2g3','g7g6'],
+              ['e2e4','g8f6','e4e5','f6d5'],
+              ['d2d4','f7f5','g2g3','g8f6'],
+          ]
+
+          out = []
+          for i in range(32):
+              board = chess.Board()
+              for uci in seeds[i % len(seeds)]:
+                  move = chess.Move.from_uci(uci)
+                  if move not in board.legal_moves:
+                      raise SystemExit(f'illegal seed move {uci} in opening {i}')
+                  board.push(move)
+
+              # Different/deeper perturbation schedule from the dev bank.
+              target = 7 + (i * 5) % 12
+              for _ in range(target):
+                  moves = sorted(board.legal_moves, key=lambda m: m.uci())
+                  if not moves or board.is_game_over():
+                      break
+                  # Blend two deterministic indices to avoid one simple RNG stream shape.
+                  j = (rng.randrange(len(moves)) + 7 * i + board.ply()) % len(moves)
+                  board.push(moves[j])
+
+              if board.is_game_over():
+                  raise SystemExit(f'terminal holdout opening {i}')
+              out.append(board.fen())
+
+          if len(out) != 32 or len(set(out)) != 32:
+              raise SystemExit('holdout bank must contain 32 unique nonterminal positions')
+
+          text = '\n'.join(out) + '\n'
+          digest = hashlib.sha256(text.encode()).hexdigest()
+          Path('holdout/openings.fen').write_text(text)
+          Path('holdout/openings.sha256').write_text(digest + '\n')
+          Path('holdout/manifest.json').write_text(json.dumps({
+              'seed': 24612864,
+              'positions': 32,
+              'sha256': digest,
+              'purpose': 'fresh post-freeze V8.5 causal holdout'
+          }, indent=2) + '\n')
+          print('holdout_sha256', digest)
+          PY
+          test "$(wc -l < holdout/openings.fen)" -eq 32
+
+      - name: Archive immutable holdout bank
+        uses: actions/upload-artifact@v4
+        with:
+          name: v8-5-fresh-holdout-bank
+          path: holdout/
+          if-no-files-found: error
+
+  strength:
+    needs: bank
+    runs-on: ubuntu-22.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - id: hygiene-vs-v7
+            candidate_sha: 95b779abefedf158a856d5db7eff9d2a61df2982
+          - id: combined-vs-v7
+            candidate_sha: 5541261dccec82d7c76dcb8298d8ce7bd8f69b9a
+    steps:
+      - name: Checkout exact candidate
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: ${{ matrix.candidate_sha }}
+          path: candidate
+
+      - name: Checkout exact V7.4 reference
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: 9ffe3f2c43972fc55163300449e97a981a01e358
+          path: reference
+
+      - name: Download exact shared holdout bank
+        uses: actions/download-artifact@v4
+        with:
+          name: v8-5-fresh-holdout-bank
+          path: holdout
+
+      - name: Verify source and bank identities
+        run: |
+          set -euo pipefail
+          test "$(git -C candidate rev-parse HEAD)" = '${{ matrix.candidate_sha }}'
+          test "$(git -C reference rev-parse HEAD)" = '9ffe3f2c43972fc55163300449e97a981a01e358'
+          test "$(wc -l < holdout/openings.fen)" -eq 32
+          python3 - <<'PY'
+          import hashlib, json
+          from pathlib import Path
+          text = Path('holdout/openings.fen').read_bytes()
+          digest = hashlib.sha256(text).hexdigest()
+          manifest = json.loads(Path('holdout/manifest.json').read_text())
+          if digest != manifest['sha256'] or manifest['seed'] != 24612864 or manifest['positions'] != 32:
+              raise SystemExit('holdout identity mismatch')
+          print('verified_holdout_sha256', digest)
+          PY
+
+      - name: Install match dependency
+        run: python3 -m pip install --disable-pip-version-check 'python-chess==1.999'
+
+      - name: Build both engines identically
+        run: |
+          set -euo pipefail
+          for D in candidate reference; do
+            cd "$GITHUB_WORKSPACE/$D/src"
+            make net
+            make clean
+            make -j2 ARCH=x86-64-avx2 build 2>&1 | tee "$GITHUB_WORKSPACE/$D-build.log"
+            mv stockfish "stockfish-$D"
+          done
+
+      - name: Create identical UCI configuration
+        run: |
+          set -euo pipefail
+          cat > holdout/options.json <<'EOF'
+          {
+            "Threads": 1,
+            "Hash": 64,
+            "Leviathan Fundamentals": true,
+            "Leviathan Fundamentals Authority": 1,
+            "Leviathan Quiet Overdrive": 0,
+            "Leviathan Policy": false,
+            "Leviathan MetaSearch": false,
+            "Leviathan Risk": false,
+            "Leviathan Specialist": false,
+            "Leviathan Atlas": false,
+            "Leviathan Search DSL": false
+          }
+          EOF
+
+      - name: Fresh equal-node holdout - 64 paired games
+        id: equalnode
+        run: |
+          set -euo pipefail
+          python3 candidate/tools/run_match.py \
+            --engine-a "$GITHUB_WORKSPACE/candidate/src/stockfish-candidate" \
+            --engine-b "$GITHUB_WORKSPACE/reference/src/stockfish-reference" \
+            --options-a holdout/options.json \
+            --options-b holdout/options.json \
+            --openings holdout/openings.fen \
+            --games 64 \
+            --nodes-per-move 30000 \
+            --max-plies 240 \
+            --out holdout/equal-node.json | tee holdout/equal-node.log
+          python3 - <<'PY' >> "$GITHUB_OUTPUT"
+          import json
+          s = json.load(open('holdout/equal-node.json'))['summary']
+          print('score=' + str(s['score_a']))
+          print('survives=' + ('true' if s['score_a'] >= 0.5 else 'false'))
+          PY
+
+      - name: Fresh fixed-time holdout - 64 paired games
+        if: steps.equalnode.outputs.survives == 'true'
+        run: |
+          set -euo pipefail
+          python3 candidate/tools/run_match.py \
+            --engine-a "$GITHUB_WORKSPACE/candidate/src/stockfish-candidate" \
+            --engine-b "$GITHUB_WORKSPACE/reference/src/stockfish-reference" \
+            --options-a holdout/options.json \
+            --options-b holdout/options.json \
+            --openings holdout/openings.fen \
+            --games 64 \
+            --movetime-ms 75 \
+            --max-plies 240 \
+            --out holdout/fixed-time.json | tee holdout/fixed-time.log
+
+      - name: Produce fresh-holdout report
+        if: always() && steps.equalnode.outcome == 'success'
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json, math
+          from pathlib import Path
+
+          def summarize(path):
+              d = json.loads(Path(path).read_text())
+              s = d['summary']; vals = [g['score_a'] for g in d['games']]
+              n = len(vals); mean = sum(vals) / n
+              var = sum((x - mean) ** 2 for x in vals) / (n - 1) if n > 1 else 0.0
+              se = (var / n) ** 0.5; p = s['score_a']
+              return {
+                  'games': n, 'wins': s['wins_a'], 'draws': s['draws'], 'losses': s['losses_a'],
+                  'score': p,
+                  'naive_elo': 400 * math.log10(p / (1 - p)) if 0 < p < 1 else None,
+                  'normal_95_score_ci': [max(0.0, mean - 1.96 * se), min(1.0, mean + 1.96 * se)],
+                  'resource': s['resource']
+              }
+
+          en = summarize('holdout/equal-node.json')
+          ft = summarize('holdout/fixed-time.json') if Path('holdout/fixed-time.json').exists() else None
+          if en['score'] < 0.5:
+              decision = 'FAIL_FRESH_EQUAL_NODE'
+          elif ft is None:
+              decision = 'RETEST'
+          elif ft['score'] < 0.5:
+              decision = 'FAIL_FRESH_FIXED_TIME'
+          else:
+              decision = 'SURVIVES_FRESH_HOLDOUT'
+          manifest = json.loads(Path('holdout/manifest.json').read_text())
+          report = {
+              'candidate': '${{ matrix.id }}',
+              'candidate_source': '${{ matrix.candidate_sha }}',
+              'reference_source': '9ffe3f2c43972fc55163300449e97a981a01e358',
+              'holdout': manifest,
+              'equal_node': en,
+              'fixed_time': ft,
+              'decision': decision,
+              'statistical_status': 'fresh holdout screen; still not a final Elo proof'
+          }
+          Path('holdout/report.json').write_text(json.dumps(report, indent=2) + '\n')
+          print(json.dumps(report, indent=2))
+          PY
+
+      - name: Archive holdout evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: v8-5-holdout-${{ matrix.id }}
+          path: |
+            holdout/
+            candidate-build.log
+            reference-build.log
+          if-no-files-found: error
