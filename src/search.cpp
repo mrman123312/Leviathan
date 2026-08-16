@@ -663,6 +663,17 @@ bool Search::Worker::iterative_deepening() {
               rootDepth, rootDepth - lastBestMoveDepth, rootMoves[0].previousScore, bestValue,
               totBestMoveChanges, int(nodesEffort), rootMoves.size(), is_decisive(bestValue));
 
+            // Leviathan strength v7.2 - Uncertainty Budget Coupling. Local proof
+            // failures can now propagate to and persist at the root. Convert that
+            // epistemic state into more verification time, while the normal hard
+            // maximum-time clamp below remains authoritative.
+            const unsigned leviathanRootDebt =
+              leviathan_proof_memory_load(leviathan_tt_key(rootPos));
+            if (!is_decisive(bestValue) && leviathanRootDebt >= 3)
+                totalTime *= leviathanRootDebt >= 5 ? 1.18
+                           : leviathanRootDebt >= 4 ? 1.12
+                                                    : 1.06;
+
             // Leviathan strength v6.6 - Root Challenger Certification. A stable
             // leader is not the same as a certified leader when another root move
             // remains close. Use the rolling scores already maintained for every
