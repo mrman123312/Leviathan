@@ -1,0 +1,89 @@
+name: MovePicker true one-pass fusion
+
+on:
+  push:
+    branches: [leviathan/speed-v3-movepicker-fusion]
+    paths: ['.github/workflows/movepicker-true-fusion.yml']
+  workflow_dispatch:
+
+permissions: {contents: read}
+
+jobs:
+  paired:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with: {repository: official-stockfish/Stockfish, ref: 5062aee519a1ba262d472d8ab139851ced56573e, path: base}
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with: {repository: official-stockfish/Stockfish, ref: 5062aee519a1ba262d472d8ab139851ced56573e, path: candidate}
+
+      - name: Rewrite MovePicker into one-pass score plus sort
+        working-directory: candidate
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          h=Path('src/movepick.h');s=h.read_text()
+          a='''    template<GenType T>\n    ExtMove* score(const MoveList<T>&);'''
+          b='''    template<GenType T>\n    ExtMove* score(const MoveList<T>&, int sortLimit);'''
+          if s.count(a)!=1: raise SystemExit('header anchor')
+          h.write_text(s.replace(a,b,1))
+
+          p=Path('src/movepick.cpp');s=p.read_text()
+          a='''template<GenType Type>\nExtMove* MovePicker::score(const MoveList<Type>& ml) {'''
+          b='''template<GenType Type>\nExtMove* MovePicker::score(const MoveList<Type>& ml, int sortLimit) {'''
+          if s.count(a)!=1: raise SystemExit('score signature anchor')
+          s=s.replace(a,b,1)
+
+          a='''    ExtMove* it = cur;\n    for (auto move : ml)\n    {\n        ExtMove& m = *it++;\n        m          = move;'''
+          b='''    // Stockfish normally fills the entire score array, then walks it a\n    // second time with partial_insertion_sort(). On AVX2 that second pass is\n    // scalar. Fuse the exact same left-to-right insertion operation into the\n    // scoring pass while the current ExtMove is already hot in L1/registers.\n    ExtMove* const begin = cur;\n    ExtMove*       sortedEnd = begin;\n    ExtMove*       it = cur;\n    for (auto move : ml)\n    {\n        ExtMove* const p = it++;\n        ExtMove& m = *p;\n        m = move;'''
+          if s.count(a)!=1: raise SystemExit('score loop anchor')
+          s=s.replace(a,b,1)
+
+          # Insert exact original scalar insertion semantics after scoring each move.
+          a='''            if (ply < LOW_PLY_HISTORY_SIZE)\n                m.value += 8 * (*lowPlyHistory)[ply][m.raw()] / (1 + ply);\n        }\n\n        else  // Type == EVASIONS\n        {\n            if (pos.capture_stage(m))\n                m.value = PieceValue[capturedPiece] + (1 << 28);\n            else\n                m.value = (*mainHistory)[us][m.raw()] + (*continuationHistory[0])[pc][to];\n        }\n    }\n    return it;'''
+          b='''            if (ply < LOW_PLY_HISTORY_SIZE)\n                m.value += 8 * (*lowPlyHistory)[ply][m.raw()] / (1 + ply);\n        }\n\n        else  // Type == EVASIONS\n        {\n            if (pos.capture_stage(m))\n                m.value = PieceValue[capturedPiece] + (1 << 28);\n            else\n                m.value = (*mainHistory)[us][m.raw()] + (*continuationHistory[0])[pc][to];\n        }\n\n        // Exact scalar partial-insertion-sort step for this newly scored item.\n        // The first element is the original algorithm's initial sorted prefix.\n        if (p != begin && p->value >= sortLimit)\n        {\n            const ExtMove tmp = *p;\n            *p = *++sortedEnd;\n            ExtMove* q = sortedEnd;\n            for (; q != begin && *(q - 1) < tmp; --q)\n                *q = *(q - 1);\n            *q = tmp;\n        }\n    }\n    return it;'''
+          if s.count(a)!=1: raise SystemExit('score end anchor')
+          s=s.replace(a,b,1)
+
+          # Replace score + second-pass sort pairs with fused calls.
+          pairs=[
+          ('''endCur = endCaptures = score<CAPTURES>(ml);\n\n        partial_insertion_sort(cur, endCur, std::numeric_limits<int>::min());''',
+           '''endCur = endCaptures = score<CAPTURES>(ml, std::numeric_limits<int>::min());'''),
+          ('''endCur = endGenerated = score<QUIETS>(ml);\n\n            partial_insertion_sort(cur, endCur, -3560 * depth);''',
+           '''endCur = endGenerated = score<QUIETS>(ml, -3560 * depth);'''),
+          ('''endCur = endGenerated = score<EVASIONS>(ml);\n\n        partial_insertion_sort(cur, endCur, std::numeric_limits<int>::min());''',
+           '''endCur = endGenerated = score<EVASIONS>(ml, std::numeric_limits<int>::min());''')]
+          for old,new in pairs:
+            if s.count(old)!=1: raise SystemExit('callsite anchor missing: '+old.splitlines()[0])
+            s=s.replace(old,new,1)
+          p.write_text(s)
+          PY
+          git diff --check
+          git diff -- src/movepick.cpp src/movepick.h
+
+      - name: Build identical AVX2 binaries
+        run: |
+          cd base/src && make net && make clean && make -j2 ARCH=x86-64-avx2 build && mv stockfish basefish
+          cd ../../candidate/src && make net && make clean && make -j2 ARCH=x86-64-avx2 build && mv stockfish fusedfish
+
+      - name: Exact semantics and 31 same-runner alternating pairs
+        run: |
+          python3 - <<'PY' | tee true-fusion.json
+          import subprocess,re,json,statistics
+          B='./base/src/basefish'; C='./candidate/src/fusedfish'
+          def run(path):
+            p=subprocess.run([path],input='bench\nquit\n',text=True,capture_output=True,check=True);o=p.stdout+p.stderr
+            return {'nodes':int(re.findall(r'Nodes searched\s*:\s*(\d+)',o)[-1]),'ms':int(re.findall(r'Total time \(ms\)\s*:\s*(\d+)',o)[-1]),'nps':int(re.findall(r'Nodes/second\s*:\s*(\d+)',o)[-1])}
+          run(B);run(C);rows=[]
+          for i in range(31):
+            if i&1:c=run(C);b=run(B)
+            else:b=run(B);c=run(C)
+            if b['nodes']!=2884956 or c['nodes']!=2884956:
+              raise SystemExit(f'LOSSLESS NODE GATE FAILED base={b} candidate={c}')
+            rows.append({'base':b,'candidate':c,'nps_ratio':c['nps']/b['nps'],'time_speedup':b['ms']/c['ms']})
+          R={'rows':rows,'median_nps_ratio':statistics.median(x['nps_ratio'] for x in rows),'mean_nps_ratio':statistics.mean(x['nps_ratio'] for x in rows),'median_time_speedup':statistics.median(x['time_speedup'] for x in rows),'candidate_faster_pairs':sum(x['candidate']['ms']<x['base']['ms'] for x in rows),'ties':sum(x['candidate']['ms']==x['base']['ms'] for x in rows)}
+          print(json.dumps(R,indent=2))
+          PY
+
+      - uses: actions/upload-artifact@v4
+        with: {name: movepicker-true-fusion, path: true-fusion.json}
