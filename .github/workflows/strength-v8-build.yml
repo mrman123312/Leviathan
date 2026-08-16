@@ -23,7 +23,8 @@ jobs:
 
       - name: Source contract invariants
         run: |
-          test ! $(grep -c 'leviathanNullFragile' src/search.cpp) -gt 0
+          set -euo pipefail
+          ! grep -q 'leviathanNullFragile' src/search.cpp
           grep -q 'Leviathan::Evidence::State leviathanEvidence' src/search.cpp
           grep -q 'leviathanWitnessNeedsFullProof' src/search.cpp
           grep -q 'Kind::EVAL_DISAGREEMENT' src/search.cpp
@@ -35,7 +36,7 @@ jobs:
           grep -q 'leviathan_proof_memory_witness_depth' src/search.h
           grep -q 'leviathanEntryDepth > leviathanWitnessCertifiedDepth' src/search.cpp
           grep -q 'newDepth = std::max(newDepth, leviathanEntryDepth - 1)' src/search.cpp
-          grep -q 'e.witnessDepth = 0' src/search.cpp
+          grep -Eq 'e\.witnessDepth[[:space:]]*=[[:space:]]*0' src/search.cpp
           grep -q 'witnessEvidence' src/search.h
           grep -q 'leviathan_proof_memory_witness_evidence' src/search.h
           grep -q 'leviathanWitnessEvidence & leviathanProofWitnessCauses' src/search.cpp
@@ -45,6 +46,7 @@ jobs:
 
       - name: Evidence primitive invariants
         run: |
+          set -euo pipefail
           cat >/tmp/evidence_smoke.cpp <<'CPP'
           #include <cassert>
           #include "leviathan_evidence.h"
@@ -79,6 +81,7 @@ jobs:
       - name: Build AVX2
         working-directory: src
         run: |
+          set -euo pipefail
           make net
           make clean
           make -j2 ARCH=x86-64-avx2 build
@@ -86,6 +89,7 @@ jobs:
       - name: Normal and persistent-search smoke
         working-directory: src
         run: |
+          set -euo pipefail
           {
             echo uci
             echo 'setoption name Threads value 1'
@@ -105,6 +109,7 @@ jobs:
       - name: History-sensitive and rule50 smoke
         working-directory: src
         run: |
+          set -euo pipefail
           {
             echo uci
             echo 'setoption name Threads value 1'
@@ -121,6 +126,7 @@ jobs:
       - name: Fixed-node and bench smoke
         working-directory: src
         run: |
+          set -euo pipefail
           {
             echo uci
             echo 'setoption name Threads value 1'
