@@ -860,7 +860,11 @@ Value Search::Worker::search(
         ss->staticEval = eval = to_corrected_static_eval(unadjustedStaticEval, correctionValue);
 
         // ttValue can be used as a better position evaluation
-        if (is_valid(ttData.value)
+        // Leviathan strength v5: a TT bound is board-key evidence, not full
+        // trajectory proof. After repetition has entered the current history,
+        // keep TT move/static-eval reuse but do not let an old bound replace the
+        // current static evaluation used by pruning decisions.
+        if (!pos.has_repeated() && is_valid(ttData.value)
             && (ttData.bound & (ttData.value > eval ? BOUND_LOWER : BOUND_UPPER)))
             eval = ttData.value;
     }
@@ -909,7 +913,7 @@ Value Search::Worker::search(
 
         // Partial workaround for the graph history interaction problem
         // For high rule50 counts don't produce transposition table cutoffs.
-        if (pos.rule50_count() < 96)
+        if (pos.rule50_count() < 96 && !pos.has_repeated())
         {
             if (depth >= 7 && ttData.move && pos.pseudo_legal(ttData.move) && pos.legal(ttData.move)
                 && !is_decisive(ttData.value))
