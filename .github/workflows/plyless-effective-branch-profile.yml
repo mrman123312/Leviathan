@@ -1,0 +1,55 @@
+name: Plyless effective-branch profiler
+
+on:
+  push:
+    branches: [leviathan/plyless-v0-decision-depth]
+    paths: ['.github/workflows/plyless-effective-branch-profile.yml']
+  workflow_dispatch:
+
+permissions: {contents: read}
+
+jobs:
+  profile:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with: {repository: official-stockfish/Stockfish, ref: 5062aee519a1ba262d472d8ab139851ced56573e}
+      - name: Instrument effective branching
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path('src/search.cpp');s=p.read_text()
+          s=s.replace('#include <utility>','#include <utility>\n#include <iostream>')
+          a='''namespace {\n\nconstexpr u64 NODES_LIMIT_OUTPUT'''
+          b='''namespace {\n\nstruct LVEffProfile {\n    unsigned long long searched[5][17]{};\n    unsigned long long legalSeen[5][17]{};\n    unsigned long long alphaRaises[5][17]{};\n    unsigned long long nodes[5]{};\n    ~LVEffProfile(){\n      for(int d=1;d<=4;++d){\n        std::cerr<<"LVEFF searched "<<d;for(auto v:searched[d])std::cerr<<' '<<v;std::cerr<<'\\n';\n        std::cerr<<"LVEFF legalSeen "<<d;for(auto v:legalSeen[d])std::cerr<<' '<<v;std::cerr<<'\\n';\n        std::cerr<<"LVEFF alphaRaises "<<d;for(auto v:alphaRaises[d])std::cerr<<' '<<v;std::cerr<<'\\n';\n      }\n    }\n};\nthread_local LVEffProfile lvEff;\ninline int lvEffBin(int n){return n<16?n:16;}\n\nconstexpr u64 NODES_LIMIT_OUTPUT'''
+          if s.count(a)!=1: raise SystemExit('namespace')
+          s=s.replace(a,b,1)
+          a='''    bool  capture, ttCapture;\n    int   priorReduction;'''
+          b='''    bool  capture, ttCapture;\n    const int lvEntryDepth = int(depth);\n    int lvSearchedCount = 0;\n    int lvAlphaRaiseCount = 0;\n    int   priorReduction;'''
+          if s.count(a)!=1: raise SystemExit('decl')
+          s=s.replace(a,b,1)
+          # Count actual moves that survive all pre-move pruning and reach do_move.
+          a='''        // Step 16. Make the move\n        do_move(pos, move, st, givesCheck, ss);'''
+          b='''        // Step 16. Make the move\n        if (lvEntryDepth >= 1 && lvEntryDepth <= 4)\n            ++lvSearchedCount;\n        do_move(pos, move, st, givesCheck, ss);'''
+          if s.count(a)!=1: raise SystemExit('do move')
+          s=s.replace(a,b,1)
+          # Count meaningful alpha improvements.
+          a='''                alpha = value;  // Update alpha! Always alpha < beta'''
+          b='''                if (lvEntryDepth >= 1 && lvEntryDepth <= 4)\n                    ++lvAlphaRaiseCount;\n                alpha = value;  // Update alpha! Always alpha < beta'''
+          if s.count(a)!=1: raise SystemExit('alpha')
+          s=s.replace(a,b,1)
+          # Record nodes that reach the normal end of search. moveCount is legal moves
+          # encountered before cutoff/pruning; lvSearchedCount is real recursive children.
+          a='''    assert(bestValue > -VALUE_INFINITE && bestValue < VALUE_INFINITE);\n\n    return bestValue;\n}\n\n\n// Quiescence search function'''
+          b='''    assert(bestValue > -VALUE_INFINITE && bestValue < VALUE_INFINITE);\n\n    if (lvEntryDepth >= 1 && lvEntryDepth <= 4)\n    {\n        ++lvEff.nodes[lvEntryDepth];\n        ++lvEff.searched[lvEntryDepth][lvEffBin(lvSearchedCount)];\n        ++lvEff.legalSeen[lvEntryDepth][lvEffBin(moveCount)];\n        ++lvEff.alphaRaises[lvEntryDepth][lvEffBin(lvAlphaRaiseCount)];\n    }\n\n    return bestValue;\n}\n\n\n// Quiescence search function'''
+          if s.count(a)!=1: raise SystemExit('return')
+          p.write_text(s.replace(a,b,1))
+          PY
+      - name: Build and run diagnostic bench
+        working-directory: src
+        run: |
+          make net && make clean && make -j2 ARCH=x86-64-avx2 build
+          ./stockfish bench 2>&1 | tee ../effective-branch.txt
+          grep '^LVEFF' ../effective-branch.txt
+      - uses: actions/upload-artifact@v4
+        with: {name: plyless-effective-branch, path: effective-branch.txt}
