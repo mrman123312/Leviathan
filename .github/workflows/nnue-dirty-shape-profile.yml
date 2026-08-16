@@ -1,0 +1,45 @@
+name: NNUE dirty-shape profiler
+on:
+  push:
+    branches: [leviathan/speed-v3-profile]
+    paths: ['.github/workflows/nnue-dirty-shape-profile.yml']
+  workflow_dispatch:
+permissions: {contents: read}
+jobs:
+  profile:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with: {repository: official-stockfish/Stockfish, ref: 5062aee519a1ba262d472d8ab139851ced56573e}
+      - name: Instrument exact update shapes
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path('src/nnue/nnue_accumulator.cpp');s=p.read_text()
+          s=s.replace('#include <new>','#include <new>\n#include <iostream>\n#include <array>')
+          anchor='''namespace {\n\ntemplate<bool Forward>'''
+          repl='''namespace {\n\nstruct LeviathanShapeProfile {\n    std::array<unsigned long long, 9> psqRemoved{}, psqAdded{}, thrRemoved{}, thrAdded{}, chain{};\n    unsigned long long calls = 0;\n    ~LeviathanShapeProfile() {\n        auto dump=[&](const char* n,const auto& a){ std::cerr << "LVSHAPE " << n; for(auto v:a) std::cerr << ' ' << v; std::cerr << '\\n'; };\n        std::cerr << "LVSHAPE calls " << calls << '\\n'; dump("psqRemoved",psqRemoved);dump("psqAdded",psqAdded);dump("thrRemoved",thrRemoved);dump("thrAdded",thrAdded);dump("chain",chain);\n    }\n};\nLeviathanShapeProfile lvshape;\ninline int lvbin(int n){ return n < 8 ? n : 8; }\n\ntemplate<bool Forward>'''
+          if s.count(anchor)!=1: raise SystemExit('namespace anchor')
+          s=s.replace(anchor,repl,1)
+          anchor='''    apply_combined(perspective, featureTransformer, computed, target_state, psqAdded, psqRemoved,\n                   thrAdded, thrRemoved);'''
+          repl='''    ++lvshape.calls; ++lvshape.psqRemoved[lvbin(psqRemoved.ssize())]; ++lvshape.psqAdded[lvbin(psqAdded.ssize())]; ++lvshape.thrRemoved[lvbin(thrRemoved.ssize())]; ++lvshape.thrAdded[lvbin(thrAdded.ssize())];\n    apply_combined(perspective, featureTransformer, computed, target_state, psqAdded, psqRemoved,\n                   thrAdded, thrRemoved);'''
+          if s.count(anchor)!=1: raise SystemExit('single apply anchor')
+          s=s.replace(anchor,repl,1)
+          anchor='''    apply_combined(WHITE, featureTransformer, computed, target_state, psq_added[WHITE],\n                   psq_removed[WHITE], thr_added[WHITE], thr_removed[WHITE]);'''
+          repl='''    for (Color c : {WHITE, BLACK}) { ++lvshape.calls; ++lvshape.psqRemoved[lvbin(psq_removed[c].ssize())]; ++lvshape.psqAdded[lvbin(psq_added[c].ssize())]; ++lvshape.thrRemoved[lvbin(thr_removed[c].ssize())]; ++lvshape.thrAdded[lvbin(thr_added[c].ssize())]; }\n    apply_combined(WHITE, featureTransformer, computed, target_state, psq_added[WHITE],\n                   psq_removed[WHITE], thr_added[WHITE], thr_removed[WHITE]);'''
+          if s.count(anchor)!=1: raise SystemExit('both apply anchor')
+          s=s.replace(anchor,repl,1)
+          anchor='''    const usize  shared_begin = std::max(white_begin, black_begin);'''
+          repl='''    const usize  shared_begin = std::max(white_begin, black_begin);\n    ++lvshape.chain[lvbin(int(size - shared_begin - 1))];'''
+          if s.count(anchor)!=1: raise SystemExit('chain anchor')
+          s=s.replace(anchor,repl,1)
+          p.write_text(s)
+          PY
+      - name: Build and run
+        working-directory: src
+        run: |
+          make net && make clean && make -j2 ARCH=x86-64-avx2 build
+          ./stockfish bench 2>&1 | tee ../shape.txt
+          grep '^LVSHAPE' ../shape.txt || true
+      - uses: actions/upload-artifact@v4
+        with: {name: nnue-dirty-shapes, path: shape.txt}
