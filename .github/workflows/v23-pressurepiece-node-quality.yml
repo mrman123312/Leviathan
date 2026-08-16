@@ -1,0 +1,68 @@
+name: Leviathan v2.3 pressure-piece equal-node quality
+on:
+  push:
+    branches: [leviathan/h2h-v22-100-20260815]
+    paths: ['.github/workflows/v23-pressurepiece-node-quality.yml']
+permissions: {contents: read}
+jobs:
+  quality:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with: {ref: b8cbdcbed9bb8bc28b62b3a7b98a5a07d3442f3e, path: leviathan}
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with: {repository: official-stockfish/Stockfish, ref: 5062aee519a1ba262d472d8ab139851ced56573e, path: stockfish}
+      - name: Apply pressure-piece
+        working-directory: leviathan
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          h=Path('src/leviathan_fundamentals.h');s=h.read_text(); a='''                          Depth depth,\n                          int moveCount,''';b='''                          Depth depth,\n                          Value staticEval,\n                          int moveCount,''';x='''        delta += 1024 + state().quietOverdrive * lateness * depthScale / 24;\n        if (moveCount >= 10 && depth >= 7)\n            delta += 256;''';y='''        const int evalCp = staticEval == VALUE_NONE ? 0 : int(staticEval);\n        int evalBudget = evalCp >= 150 ? 960 : evalCp >= 0 ? 672 : evalCp >= -150 ? 384 : 128;\n        const int pieceCap = (m.pt == KNIGHT || m.pt == BISHOP) ? 896 : (m.pt == ROOK || m.pt == QUEEN) ? 384 : m.king ? 128 : 512;\n        int hardBudget = std::min(evalBudget, pieceCap);\n        if (moveCount < 8 || depth < 6) hardBudget = std::min(hardBudget, 320);\n        delta += hardBudget + state().quietOverdrive * lateness * depthScale / 24;\n        if (evalCp >= 100 && (m.pt == KNIGHT || m.pt == BISHOP) && moveCount >= 11 && depth >= 8) delta += 128;''';assert s.count(a)==1 and s.count(x)==1;h.write_text(s.replace(a,b,1).replace(x,y,1));p=Path('src/search.cpp');t=p.read_text();c='''        r += Leviathan::Fundamentals::lmr_adjustment(\n          pos, move, prevSq, depth, moveCount, PvNode, capture, givesCheck);''';d='''        r += Leviathan::Fundamentals::lmr_adjustment(\n          pos, move, prevSq, depth, ss->staticEval, moveCount, PvNode, capture, givesCheck);''';assert t.count(c)==1;p.write_text(t.replace(c,d,1))
+          PY
+      - run: python3 -m pip install --disable-pip-version-check 'python-chess>=1.999,<2'
+      - name: Build
+        run: |
+          cd leviathan/src && make net && make -j2 ARCH=x86-64-avx2 build && mv stockfish leviathan
+          cd ../../stockfish/src && make net && make -j2 ARCH=x86-64-avx2 build && mv stockfish parent
+      - name: Configure and generate 20 diverse openings
+        working-directory: leviathan
+        run: |
+          mkdir q
+          cat > q/a.json <<'EOF'
+          {"Threads":1,"Hash":64,"Leviathan Fundamentals":true,"Leviathan Fundamentals Authority":2,"Leviathan Policy":false,"Leviathan MetaSearch":false,"Leviathan Risk":false,"Leviathan Specialist":false,"Leviathan Atlas":false,"Leviathan Search DSL":false}
+          EOF
+          echo '{"Threads":1,"Hash":64}' > q/b.json
+          python3 - <<'PY'
+          import random,chess,chess.engine
+          from pathlib import Path
+          sf=chess.engine.SimpleEngine.popen_uci('../stockfish/src/parent');sf.configure({'Threads':1,'Hash':64});out=[];seen=set()
+          try:
+            for sh in range(5):
+              r=random.Random(8910+sh*100003);local=[]
+              while len(local)<4:
+                b=chess.Board()
+                for _ in range(r.randint(6,12)):
+                  I=sf.analyse(b,chess.engine.Limit(nodes=1800),multipv=min(6,b.legal_moves.count()));I=I if isinstance(I,list) else [I];R=[]
+                  for x in I:
+                    pv=x.get('pv',[])
+                    if pv:R.append((pv[0],int(x['score'].pov(b.turn).score(mate_score=100000) or 0)))
+                  if not R:break
+                  best=R[0][1];V=[x for x in R if best-x[1]<=100] or R[:1];b.push(r.choices([m for m,_ in V],weights=list(range(len(V),0,-1)),k=1)[0])
+                k=' '.join(b.fen().split()[:4])
+                if b.is_game_over() or k in seen:continue
+                seen.add(k);local.append(b.fen())
+              out+=local
+          finally:sf.quit()
+          Path('q/openings.fen').write_text('\n'.join(out)+'\n')
+          PY
+      - name: 40 equal-node games
+        working-directory: leviathan
+        run: |
+          python3 tools/run_match.py --engine-a "$GITHUB_WORKSPACE/leviathan/src/leviathan" --engine-b "$GITHUB_WORKSPACE/stockfish/src/parent" --options-a q/a.json --options-b q/b.json --openings q/openings.fen --games 40 --nodes-per-move 15000 --max-plies 220 --out q/match.json | tee q/match.log
+      - uses: actions/upload-artifact@v4
+        with:
+          name: v23-pressurepiece-node-quality
+          path: |
+            leviathan/q/match.json
+            leviathan/q/match.log
+            leviathan/q/openings.fen
