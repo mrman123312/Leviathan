@@ -1,0 +1,97 @@
+name: Leviathan speed v3 phase B
+
+on:
+  push:
+    branches: [leviathan/speed-v3-profile]
+    paths: ['.github/workflows/speed-v3-phase-b.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  exact-speed:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: leviathan/speed-v3-profile
+          path: candidate
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: fbccfb6eb5cd335b1ce8fc5c5efad9e36be4e19d
+          path: reference
+      - name: Apply lossless hot-loop elision
+        working-directory: candidate
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path('src/search.cpp'); s=p.read_text()
+          a='''    int moveCount = 0;\n\n    // Step 13.'''
+          b='''    int moveCount = 0;\n\n    // Cache optional-organ readiness once per node. UCI options are immutable during search.\n    const bool leviathanRiskReady  = Leviathan::Control::risk_ready();\n    const bool leviathanDslReady   = Leviathan::DSL::ready();\n    const bool leviathanTraceReady = Leviathan::Trace::ready();\n\n    // Step 13.'''
+          if a not in s: raise SystemExit('move loop anchor missing')
+          s=s.replace(a,b,1)
+          a='''        const u64 leviathanParentKey = u64(pos.key());'''
+          b='''        const u64 leviathanParentKey = leviathanTraceReady ? u64(pos.key()) : 0;'''
+          if a not in s: raise SystemExit('parent key anchor missing')
+          s=s.replace(a,b,1)
+          a='''        r += Leviathan::Control::lmr_adjustment(\n          depth, moveCount, ss->statScore, correctionValue, PvNode, cutNode, allNode, capture,\n          givesCheck, ttData.depth, ss->staticEval, alpha);\n        r += Leviathan::DSL::lmr_adjustment(\n          depth, moveCount, ss->statScore, correctionValue, PvNode, cutNode, allNode, capture,\n          givesCheck, ttData.depth, ss->staticEval, alpha);'''
+          b='''        if (leviathanRiskReady)\n            r += Leviathan::Control::lmr_adjustment(\n              depth, moveCount, ss->statScore, correctionValue, PvNode, cutNode, allNode, capture,\n              givesCheck, ttData.depth, ss->staticEval, alpha);\n        if (leviathanDslReady)\n            r += Leviathan::DSL::lmr_adjustment(\n              depth, moveCount, ss->statScore, correctionValue, PvNode, cutNode, allNode, capture,\n              givesCheck, ttData.depth, ss->staticEval, alpha);'''
+          if a not in s: raise SystemExit('hook anchor missing')
+          s=s.replace(a,b,1)
+          a='''        if (leviathanReducedValue != VALUE_NONE)\n            Leviathan::Trace::record_lmr('''
+          b='''        if (leviathanTraceReady && leviathanReducedValue != VALUE_NONE)\n            Leviathan::Trace::record_lmr('''
+          if a not in s: raise SystemExit('trace anchor missing')
+          s=s.replace(a,b,1)
+          p.write_text(s)
+
+          p=Path('src/movepick.cpp'); s=p.read_text()
+          a='''    ExtMove* it = cur;\n    for (auto move : ml)'''
+          b='''    const bool leviathanPolicyReady = Type == QUIETS && Leviathan::Policy::ready();\n    const bool leviathanAtlasReady  = Type == QUIETS && Leviathan::Atlas::ready();\n    const bool leviathanRule50Ready = Type == QUIETS && Leviathan::Fundamentals::ready()\n                                      && Leviathan::Fundamentals::state().rule50Pressure\n                                      && pos.rule50_count() >= 70;\n\n    ExtMove* it = cur;\n    for (auto move : ml)'''
+          if a not in s: raise SystemExit('score loop anchor missing')
+          s=s.replace(a,b,1)
+          a='''            m.value += Leviathan::Policy::ordering_bonus(pos, m);\n            m.value += Leviathan::Atlas::ordering_bonus(pos, m);\n            m.value += Leviathan::Fundamentals::quiet_ordering_bonus(pos, m);'''
+          b='''            if (leviathanPolicyReady)\n                m.value += Leviathan::Policy::ordering_bonus(pos, m);\n            if (leviathanAtlasReady)\n                m.value += Leviathan::Atlas::ordering_bonus(pos, m);\n            if (leviathanRule50Ready)\n                m.value += Leviathan::Fundamentals::quiet_ordering_bonus(pos, m);'''
+          if a not in s: raise SystemExit('ordering hook anchor missing')
+          s=s.replace(a,b,1)
+          p.write_text(s)
+          PY
+      - name: Build AVX2
+        run: |
+          cd candidate/src && make net && make -j2 ARCH=x86-64-avx2 build && mv stockfish candidate
+          cd ../../reference/src && make net && make -j2 ARCH=x86-64-avx2 build && mv stockfish reference
+      - name: Exact-equivalence 15-pair speed panel
+        run: |
+          python3 - <<'PY' | tee speed-phase-b.txt
+          import json,re,statistics,subprocess
+          opts=[
+            'setoption name Threads value 1','setoption name Hash value 64',
+            'setoption name Leviathan Fundamentals value true','setoption name Leviathan Fundamentals Authority value 2',
+            'setoption name Leviathan Forcing Buyback value 384','setoption name Leviathan Recapture Buyback value 256',
+            'setoption name Leviathan Passer Buyback value 320','setoption name Leviathan Endgame Buyback value 128',
+            'setoption name Leviathan Quiet Overdrive value 160','setoption name Leviathan Rule50 Pawn Bonus value 3072',
+            'setoption name Leviathan Zugzwang Guard value true','setoption name Leviathan Sacrifice Rescue value true',
+            'setoption name Leviathan Rule50 Pressure value true','setoption name Leviathan Policy value false',
+            'setoption name Leviathan MetaSearch value false','setoption name Leviathan Risk value false',
+            'setoption name Leviathan Specialist value false','setoption name Leviathan Atlas value false',
+            'setoption name Leviathan Search DSL value false']
+          cfg='\n'.join(opts)+'\n'
+          def R(path):
+            p=subprocess.run([path],input=cfg+'bench\nquit\n',text=True,capture_output=True,check=True);o=p.stdout+p.stderr
+            return {'ms':int(re.findall(r'Total time \(ms\)\s*:\s*(\d+)',o)[-1]),'nodes':int(re.findall(r'Nodes searched\s*:\s*(\d+)',o)[-1]),'nps':int(re.findall(r'Nodes/second\s*:\s*(\d+)',o)[-1])}
+          ref='./reference/src/reference';cand='./candidate/src/candidate';R(ref);R(cand);P=[]
+          for i in range(15):
+            if i%2:c=R(cand);r=R(ref)
+            else:r=R(ref);c=R(cand)
+            if r['nodes']!=c['nodes']:raise SystemExit(f'DIVERGENCE {r} {c}')
+            P.append({'reference':r,'candidate':c});print(i+1,r,c,r['ms']/c['ms'])
+          sp=[x['reference']['ms']/x['candidate']['ms'] for x in P]
+          out={'pairs':P,'nodes':P[0]['reference']['nodes'],'median_speedup':statistics.median(sp),'mean_speedup':statistics.mean(sp),'reference_median_ms':statistics.median(x['reference']['ms'] for x in P),'candidate_median_ms':statistics.median(x['candidate']['ms'] for x in P)}
+          open('speed-phase-b.json','w').write(json.dumps(out,indent=2)+'\n');print(json.dumps(out,indent=2))
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: speed-v3-phase-b
+          path: |
+            speed-phase-b.json
+            speed-phase-b.txt
