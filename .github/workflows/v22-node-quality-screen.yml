@@ -1,0 +1,113 @@
+name: Leviathan v2.2 node-limited quality screen
+
+on:
+  push:
+    branches: [leviathan/h2h-v22-100-20260815]
+    paths: ['.github/workflows/v22-node-quality-screen.yml']
+
+permissions:
+  contents: read
+
+jobs:
+  quality:
+    runs-on: ubuntu-22.04
+    strategy:
+      fail-fast: false
+      matrix:
+        profile: [control1024, fixed384, fixed512, tiered, pieceaware, strict]
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: b8cbdcbed9bb8bc28b62b3a7b98a5a07d3442f3e
+          path: leviathan
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          repository: official-stockfish/Stockfish
+          ref: 5062aee519a1ba262d472d8ab139851ced56573e
+          path: stockfish
+      - name: Apply profile
+        working-directory: leviathan
+        env:
+          PROFILE: ${{ matrix.profile }}
+        run: |
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+          q=os.environ['PROFILE']; p=Path('src/leviathan_fundamentals.h'); s=p.read_text()
+          old='''        delta += 1024 + state().quietOverdrive * lateness * depthScale / 24;\n        if (moveCount >= 10 && depth >= 7)\n            delta += 256;'''
+          variants={
+          'control1024':old,
+          'fixed384':'''        delta += 384 + state().quietOverdrive * lateness * depthScale / 24;\n        if (moveCount >= 10 && depth >= 7)\n            delta += 128;''',
+          'fixed512':'''        delta += 512 + state().quietOverdrive * lateness * depthScale / 24;\n        if (moveCount >= 10 && depth >= 7)\n            delta += 128;''',
+          'tiered':'''        const int hardBudget =\n          (moveCount >= 10 && depth >= 8) ? 896 :\n          (moveCount >= 8 && depth >= 6)  ? 512 : 192;\n        delta += hardBudget + state().quietOverdrive * lateness * depthScale / 24;\n        if (moveCount >= 12 && depth >= 9)\n            delta += 128;''',
+          'pieceaware':'''        const int hardBudget =\n          (m.pt == KNIGHT || m.pt == BISHOP) ? 768 :\n          (m.pt == ROOK || m.pt == QUEEN)    ? 256 :\n          m.king                              ? 0   : 384;\n        delta += hardBudget + state().quietOverdrive * lateness * depthScale / 24;\n        if ((m.pt == KNIGHT || m.pt == BISHOP) && moveCount >= 10 && depth >= 7)\n            delta += 128;''',
+          'strict':'''        const int hardBudget =\n          (moveCount >= 10 && depth >= 8) ? 1024 : 256;\n        delta += hardBudget + state().quietOverdrive * lateness * depthScale / 24;\n        if (moveCount >= 12 && depth >= 9)\n            delta += 128;'''}
+          if q!='control1024':
+            if s.count(old)!=1: raise SystemExit('anchor')
+            p.write_text(s.replace(old,variants[q],1))
+          PY
+          git diff --check
+      - run: python3 -m pip install --disable-pip-version-check 'python-chess>=1.999,<2'
+      - name: Build
+        run: |
+          cd leviathan/src && make net && make clean && make -j2 ARCH=x86-64-avx2 build && mv stockfish stockfish-leviathan
+          cd ../../stockfish/src && make net && make clean && make -j2 ARCH=x86-64-avx2 build && mv stockfish stockfish-parent
+      - name: Configure
+        working-directory: leviathan
+        run: |
+          mkdir -p quality
+          cat > quality/a.json <<'EOF'
+          {"Threads":1,"Hash":64,"Leviathan Fundamentals":true,"Leviathan Fundamentals Authority":2,"Leviathan Forcing Buyback":384,"Leviathan Recapture Buyback":256,"Leviathan Passer Buyback":320,"Leviathan Endgame Buyback":128,"Leviathan Quiet Overdrive":160,"Leviathan Rule50 Pawn Bonus":3072,"Leviathan Zugzwang Guard":true,"Leviathan Sacrifice Rescue":true,"Leviathan Rule50 Pressure":true,"Leviathan Policy":false,"Leviathan MetaSearch":false,"Leviathan Risk":false,"Leviathan Specialist":false,"Leviathan Atlas":false,"Leviathan Search DSL":false}
+          EOF
+          echo '{"Threads":1,"Hash":64}' > quality/b.json
+      - name: Generate diverse 20-opening panel
+        working-directory: leviathan
+        run: |
+          python3 - <<'PY'
+          import random
+          from pathlib import Path
+          import chess,chess.engine
+          sf=chess.engine.SimpleEngine.popen_uci('../stockfish/src/stockfish-parent'); sf.configure({'Threads':1,'Hash':64})
+          out=[];seen=set()
+          try:
+            for shard in range(5):
+              rng=random.Random(8910+shard*100003); local=[]
+              while len(local)<4:
+                b=chess.Board(); target=rng.randint(6,12)
+                for _ in range(target):
+                  infos=sf.analyse(b,chess.engine.Limit(nodes=1800),multipv=min(6,b.legal_moves.count()))
+                  if not isinstance(infos,list): infos=[infos]
+                  ranked=[]
+                  for info in infos:
+                    pv=info.get('pv',[])
+                    if pv:
+                      cp=info['score'].pov(b.turn).score(mate_score=100000); ranked.append((pv[0],int(cp or 0)))
+                  if not ranked: break
+                  best=ranked[0][1]; viable=[x for x in ranked if best-x[1]<=100] or ranked[:1]
+                  b.push(rng.choices([m for m,_ in viable],weights=list(range(len(viable),0,-1)),k=1)[0])
+                if b.is_game_over(): continue
+                key=' '.join(b.fen().split()[:4])
+                if key in seen: continue
+                seen.add(key); local.append(b.fen())
+              out.extend(local)
+          finally: sf.quit()
+          Path('quality/openings.fen').write_text('\n'.join(out)+'\n')
+          PY
+      - name: Run 40 equal-node games
+        working-directory: leviathan
+        env:
+          PROFILE: ${{ matrix.profile }}
+        run: |
+          python3 tools/run_match.py --engine-a "$GITHUB_WORKSPACE/leviathan/src/stockfish-leviathan" --engine-b "$GITHUB_WORKSPACE/stockfish/src/stockfish-parent" --options-a quality/a.json --options-b quality/b.json --openings quality/openings.fen --games 40 --nodes-per-move 15000 --max-plies 220 --out quality/${PROFILE}.json | tee quality/${PROFILE}.log
+          python3 - <<'PY'
+          import json,os
+          from pathlib import Path
+          q=os.environ['PROFILE']; d=json.loads(Path(f'quality/{q}.json').read_text()); print(json.dumps({'profile':q,'summary':d['summary']},indent=2))
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: v22-quality-${{ matrix.profile }}
+          path: |
+            leviathan/quality/${{ matrix.profile }}.json
+            leviathan/quality/${{ matrix.profile }}.log
+            leviathan/quality/openings.fen
