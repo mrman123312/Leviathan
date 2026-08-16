@@ -1,0 +1,34 @@
+name: Apply strength v8 evidence lattice
+
+on:
+  push:
+    branches:
+      - leviathan/strength-v8-evidence-lattice
+    paths:
+      - '.github/workflows/apply-strength-v8-evidence-lattice.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout strength v8
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: leviathan/strength-v8-evidence-lattice
+
+      - name: Apply typed evidence lattice
+        run: |
+          python3 tools/leviathan_apply_v8.py
+          git diff --check
+          git diff -- src/search.h src/search.cpp
+
+      - name: Commit evidence lattice
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add src/search.h src/search.cpp
+          git commit -m 'Strength v8: route typed evidence through search authority'
+          git push origin HEAD:leviathan/strength-v8-evidence-lattice
