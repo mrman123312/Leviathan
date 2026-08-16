@@ -1,0 +1,101 @@
+name: Apply strength v7 persistent witness
+
+on:
+  push:
+    branches:
+      - leviathan/strength-v7-persistent-proof
+    paths:
+      - '.github/workflows/apply-strength-v7-persistent-witness.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout strength v7
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: leviathan/strength-v7-persistent-proof
+
+      - name: Persist concrete proof witness moves
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          hp = Path('src/search.h')
+          h = hp.read_text()
+          old = "    struct LeviathanProofMemoryEntry {\n        Key          key  = 0;\n        unsigned int debt = 0;\n    };"
+          new = "    struct LeviathanProofMemoryEntry {\n        Key          key     = 0;\n        unsigned int debt    = 0;\n        Move         witness = Move::none();\n    };"
+          if h.count(old) != 1:
+              raise SystemExit(f'entry anchor count {h.count(old)}')
+          h = h.replace(old, new, 1)
+          old = "    unsigned int leviathan_proof_memory_load(Key key) const {\n        const auto& e = leviathanProofMemory[usize(key) & (LEVIATHAN_PROOF_MEMORY_SIZE - 1)];\n        return e.key == key ? e.debt : 0;\n    }\n\n    void leviathan_proof_memory_store(Key key, int debt) {\n        if (debt < 3)\n            return;\n        auto& e = leviathanProofMemory[usize(key) & (LEVIATHAN_PROOF_MEMORY_SIZE - 1)];\n        if (e.key != key)\n            e = {key, unsigned(std::min(debt, 5))};\n        else\n            e.debt = std::max(e.debt, unsigned(std::min(debt, 5)));\n    }"
+          new = "    unsigned int leviathan_proof_memory_load(Key key) const {\n        const auto& e = leviathanProofMemory[usize(key) & (LEVIATHAN_PROOF_MEMORY_SIZE - 1)];\n        return e.key == key ? e.debt : 0;\n    }\n\n    Move leviathan_proof_memory_witness(Key key) const {\n        const auto& e = leviathanProofMemory[usize(key) & (LEVIATHAN_PROOF_MEMORY_SIZE - 1)];\n        return e.key == key ? e.witness : Move::none();\n    }\n\n    void leviathan_proof_memory_store(Key key, int debt, Move witness = Move::none()) {\n        if (debt < 3 && !witness)\n            return;\n        auto& e = leviathanProofMemory[usize(key) & (LEVIATHAN_PROOF_MEMORY_SIZE - 1)];\n        const unsigned boundedDebt = unsigned(std::clamp(debt, 0, 5));\n        if (e.key != key)\n            e = {key, boundedDebt, witness};\n        else\n        {\n            e.debt = std::max(e.debt, boundedDebt);\n            if (witness)\n                e.witness = witness;\n        }\n    }"
+          if h.count(old) != 1:
+              raise SystemExit(f'method anchor count {h.count(old)}')
+          hp.write_text(h.replace(old, new, 1))
+
+          sp = Path('src/search.cpp')
+          s = sp.read_text()
+          old = "    Move  move, excludedMove, bestMove, probCutNearMiss;"
+          new = "    Move  move, excludedMove, bestMove, probCutNearMiss, leviathanWitness;"
+          if s.count(old) != 1:
+              raise SystemExit(f'decl anchor count {s.count(old)}')
+          s = s.replace(old, new, 1)
+          old = "    leviathanNullFragile = false;\n    leviathanProofDebt   = 0;"
+          new = "    leviathanNullFragile = false;\n    leviathanProofDebt   = 0;\n    leviathanWitness     = Move::none();"
+          if s.count(old) != 1:
+              raise SystemExit(f'init anchor count {s.count(old)}')
+          s = s.replace(old, new, 1)
+          old = "    leviathanProofDebt = std::max(leviathanProofDebt,\n                                  int(leviathan_proof_memory_load(posKey)));\n    auto [ttHit, ttData, ttWriter] = tt.probe(posKey);"
+          new = "    leviathanProofDebt = std::max(leviathanProofDebt,\n                                  int(leviathan_proof_memory_load(posKey)));\n    leviathanWitness = leviathan_proof_memory_witness(posKey);\n    auto [ttHit, ttData, ttWriter] = tt.probe(posKey);"
+          if s.count(old) != 1:
+              raise SystemExit(f'load witness anchor count {s.count(old)}')
+          s = s.replace(old, new, 1)
+          old = "    if (probCutNearMiss)\n        leviathanProofDebt = std::min(5, leviathanProofDebt + 1);"
+          new = "    if (probCutNearMiss)\n    {\n        leviathanProofDebt = std::min(5, leviathanProofDebt + 1);\n        leviathanWitness   = probCutNearMiss;\n    }"
+          if s.count(old) != 1:
+              raise SystemExit(f'probcut witness anchor count {s.count(old)}')
+          s = s.replace(old, new, 1)
+          old = "    const Move leviathanPreferredMove = ttData.move ? ttData.move : probCutNearMiss;"
+          new = "    const Move persistentWitness =\n      leviathanWitness && pos.pseudo_legal(leviathanWitness) ? leviathanWitness : Move::none();\n    const Move leviathanPreferredMove = ttData.move ? ttData.move\n                                      : probCutNearMiss ? probCutNearMiss\n                                                       : persistentWitness;"
+          if s.count(old) != 1:
+              raise SystemExit(f'preferred witness anchor count {s.count(old)}')
+          s = s.replace(old, new, 1)
+          old = "                  || (leviathanProofDebt >= 2\n                      && moveCount <= 6 + std::min(leviathanProofDebt, 4));"
+          new = "                  || move == persistentWitness\n                  || (leviathanProofDebt >= 2\n                      && moveCount <= 6 + std::min(leviathanProofDebt, 4));"
+          if s.count(old) != 1:
+              raise SystemExit(f'scope witness anchor count {s.count(old)}')
+          s = s.replace(old, new, 1)
+          old = "        if (move == probCutNearMiss)\n            r -= 768;"
+          new = "        if (move == probCutNearMiss)\n            r -= 768;\n        else if (move == persistentWitness)\n            r -= 640;"
+          if s.count(old) != 1:
+              raise SystemExit(f'LMR witness anchor count {s.count(old)}')
+          s = s.replace(old, new, 1)
+          old = "                if (PvNode && leviathanReducedValue <= alpha && value > alpha\n                    && depth >= 7 && newDepth < depth)\n                    ++newDepth;"
+          new = "                if (leviathanReducedValue <= alpha && value > alpha)\n                    leviathanWitness = move;\n\n                if (PvNode && leviathanReducedValue <= alpha && value > alpha\n                    && depth >= 7 && newDepth < depth)\n                    ++newDepth;"
+          if s.count(old) != 1:
+              raise SystemExit(f'rescue witness anchor count {s.count(old)}')
+          s = s.replace(old, new, 1)
+          old = "            const int  evidenceBoost = boundaryFlip ? 2 : lmrError >= 160 ? 2 : int(lmrError >= 64);\n            leviathanProofDebt = std::min(5, leviathanProofDebt + evidenceBoost);"
+          new = "            const int  evidenceBoost = boundaryFlip ? 2 : lmrError >= 160 ? 2 : int(lmrError >= 64);\n            leviathanProofDebt = std::min(5, leviathanProofDebt + evidenceBoost);\n            if (boundaryFlip || lmrError >= 160)\n                leviathanWitness = move;"
+          if s.count(old) != 1:
+              raise SystemExit(f'counterexample witness anchor count {s.count(old)}')
+          s = s.replace(old, new, 1)
+          old = "        leviathan_proof_memory_store(posKey, leviathanProofDebt);"
+          new = "        leviathan_proof_memory_store(posKey, leviathanProofDebt, leviathanWitness);"
+          if s.count(old) != 1:
+              raise SystemExit(f'store witness anchor count {s.count(old)}')
+          sp.write_text(s.replace(old, new, 1))
+          PY
+          git diff --check
+          git diff -- src/search.h src/search.cpp
+
+      - name: Commit persistent witness memory
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add src/search.h src/search.cpp
+          git commit -m 'Strength v7.3: persist concrete proof witness moves'
+          git push origin HEAD:leviathan/strength-v7-persistent-proof
