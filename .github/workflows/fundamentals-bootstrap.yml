@@ -1,0 +1,109 @@
+name: Leviathan Fundamentals v2 Bootstrap
+
+on:
+  push:
+    branches:
+      - leviathan/fundamentals-v2
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: fundamentals-bootstrap-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  bootstrap:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          fetch-depth: 0
+
+      - name: Python syntax
+        run: python3 -m py_compile tools/bootstrap_fundamentals.py
+
+      - name: Apply guarded Fundamentals hooks
+        run: python3 tools/bootstrap_fundamentals.py
+
+      - name: Download NNUE
+        working-directory: src
+        run: make net
+
+      - name: Build AVX2
+        working-directory: src
+        run: |
+          make clean
+          make -j2 ARCH=x86-64-avx2 build 2>&1 | tee ../fundamentals-build.txt
+
+      - name: Verify UCI surface
+        working-directory: src
+        run: |
+          printf 'uci\nquit\n' | ./stockfish | tee ../fundamentals-uci.txt
+          grep -q '^uciok$' ../fundamentals-uci.txt
+          grep -q 'option name Leviathan Fundamentals ' ../fundamentals-uci.txt
+          grep -q 'option name Leviathan Fundamentals Authority ' ../fundamentals-uci.txt
+          grep -q 'option name Leviathan Quiet Overdrive ' ../fundamentals-uci.txt
+          grep -q 'option name Leviathan Zugzwang Guard ' ../fundamentals-uci.txt
+
+      - name: Frozen parent bench with Fundamentals off
+        working-directory: src
+        run: |
+          ./stockfish bench 2>&1 | tee ../bench-parent.txt
+          grep 'Nodes searched' ../bench-parent.txt > ../nodes-parent.txt
+          grep -q '2884956' ../nodes-parent.txt
+
+      - name: Authority-zero exact equivalence
+        working-directory: src
+        run: |
+          cat > ../authority0.uci <<'EOF'
+          setoption name Leviathan Fundamentals value true
+          setoption name Leviathan Fundamentals Authority value 0
+          bench
+          quit
+          EOF
+          ./stockfish < ../authority0.uci 2>&1 | tee ../bench-authority0.txt
+          grep 'Nodes searched' ../bench-authority0.txt > ../nodes-authority0.txt
+          diff -u ../nodes-parent.txt ../nodes-authority0.txt
+
+      - name: Active modes smoke
+        working-directory: src
+        run: |
+          for AUTH in 1 2; do
+            cat > ../active.uci <<EOF
+          setoption name Leviathan Fundamentals value true
+          setoption name Leviathan Fundamentals Authority value $AUTH
+          bench
+          quit
+          EOF
+            ./stockfish < ../active.uci 2>&1 | tee ../bench-authority${AUTH}.txt
+            grep 'Nodes searched' ../bench-authority${AUTH}.txt
+          done
+
+      - name: Commit validated source hooks
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add src/engine.cpp src/movepick.cpp src/search.cpp
+          if ! git diff --cached --quiet; then
+            git commit -m 'Integrate Fundamentals v2 deterministic search controls'
+            git push origin HEAD:leviathan/fundamentals-v2
+          fi
+
+      - name: Archive bootstrap evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fundamentals-bootstrap-${{ github.sha }}
+          path: |
+            fundamentals-build.txt
+            fundamentals-uci.txt
+            bench-parent.txt
+            bench-authority0.txt
+            bench-authority1.txt
+            bench-authority2.txt
+            nodes-parent.txt
+            nodes-authority0.txt
+          if-no-files-found: warn
