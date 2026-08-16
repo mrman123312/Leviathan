@@ -1,0 +1,119 @@
+name: Leviathan v2.3 pressure-piece — 100 games
+on:
+  push:
+    branches: [leviathan/h2h-v22-100-20260815]
+    paths: ['.github/workflows/v23-pressurepiece-100game.yml']
+permissions: {contents: read}
+jobs:
+  shard:
+    runs-on: ubuntu-22.04
+    strategy:
+      fail-fast: false
+      matrix: {shard: [0,1,2,3,4]}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with: {ref: b8cbdcbed9bb8bc28b62b3a7b98a5a07d3442f3e, path: leviathan}
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with: {repository: official-stockfish/Stockfish, ref: 5062aee519a1ba262d472d8ab139851ced56573e, path: stockfish}
+      - name: Apply dynamic pressure-piece allocator
+        working-directory: leviathan
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          h=Path('src/leviathan_fundamentals.h'); s=h.read_text()
+          oldsig='''                          Depth depth,\n                          int moveCount,'''
+          newsig='''                          Depth depth,\n                          Value staticEval,\n                          int moveCount,'''
+          old='''        delta += 1024 + state().quietOverdrive * lateness * depthScale / 24;\n        if (moveCount >= 10 && depth >= 7)\n            delta += 256;'''
+          new='''        const int evalCp = staticEval == VALUE_NONE ? 0 : int(staticEval);\n        int evalBudget = evalCp >= 150 ? 960 : evalCp >= 0 ? 672 : evalCp >= -150 ? 384 : 128;\n        const int pieceCap =\n          (m.pt == KNIGHT || m.pt == BISHOP) ? 896 :\n          (m.pt == ROOK || m.pt == QUEEN)    ? 384 :\n          m.king                              ? 128 : 512;\n        int hardBudget = std::min(evalBudget, pieceCap);\n        if (moveCount < 8 || depth < 6) hardBudget = std::min(hardBudget, 320);\n        delta += hardBudget + state().quietOverdrive * lateness * depthScale / 24;\n        if (evalCp >= 100 && (m.pt == KNIGHT || m.pt == BISHOP) && moveCount >= 11 && depth >= 8)\n            delta += 128;'''
+          assert s.count(oldsig)==1 and s.count(old)==1
+          h.write_text(s.replace(oldsig,newsig,1).replace(old,new,1))
+          p=Path('src/search.cpp'); t=p.read_text()
+          a='''        r += Leviathan::Fundamentals::lmr_adjustment(\n          pos, move, prevSq, depth, moveCount, PvNode, capture, givesCheck);'''
+          b='''        r += Leviathan::Fundamentals::lmr_adjustment(\n          pos, move, prevSq, depth, ss->staticEval, moveCount, PvNode, capture, givesCheck);'''
+          assert t.count(a)==1; p.write_text(t.replace(a,b,1))
+          PY
+          git diff --check
+      - run: python3 -m pip install --disable-pip-version-check 'python-chess>=1.999,<2'
+      - name: Build
+        run: |
+          cd leviathan/src && make net && make clean && make -j2 ARCH=x86-64-avx2 build && mv stockfish stockfish-leviathan
+          cd ../../stockfish/src && make net && make clean && make -j2 ARCH=x86-64-avx2 build && mv stockfish stockfish-parent
+      - name: Configure and openings
+        working-directory: leviathan
+        env: {SHARD: '${{ matrix.shard }}'}
+        run: |
+          mkdir -p h2h
+          cat > h2h/a.json <<'EOF'
+          {"Threads":1,"Hash":64,"Leviathan Fundamentals":true,"Leviathan Fundamentals Authority":2,"Leviathan Forcing Buyback":384,"Leviathan Recapture Buyback":256,"Leviathan Passer Buyback":320,"Leviathan Endgame Buyback":128,"Leviathan Quiet Overdrive":160,"Leviathan Rule50 Pawn Bonus":3072,"Leviathan Zugzwang Guard":true,"Leviathan Sacrifice Rescue":true,"Leviathan Rule50 Pressure":true,"Leviathan Policy":false,"Leviathan MetaSearch":false,"Leviathan Risk":false,"Leviathan Specialist":false,"Leviathan Atlas":false,"Leviathan Search DSL":false}
+          EOF
+          echo '{"Threads":1,"Hash":64}' > h2h/b.json
+          python3 - <<'PY'
+          import os,random,chess,chess.engine
+          from pathlib import Path
+          q=int(os.environ['SHARD']); rng=random.Random(8910+q*100003); f=[]; seen=set(); tries=0
+          sf=chess.engine.SimpleEngine.popen_uci('../stockfish/src/stockfish-parent'); sf.configure({'Threads':1,'Hash':64})
+          try:
+            while len(f)<10:
+              tries+=1
+              if tries>300: raise RuntimeError('opening generation exhausted')
+              b=chess.Board()
+              for _ in range(rng.randint(6,12)):
+                if b.is_game_over(): break
+                I=sf.analyse(b,chess.engine.Limit(nodes=1800),multipv=min(6,b.legal_moves.count())); I=I if isinstance(I,list) else [I]
+                R=[]
+                for x in I:
+                  pv=x.get('pv',[])
+                  if pv:
+                    cp=x['score'].pov(b.turn).score(mate_score=100000); R.append((pv[0],int(cp or 0)))
+                if not R: break
+                best=R[0][1]; V=[x for x in R if best-x[1]<=100] or R[:1]
+                b.push(rng.choices([m for m,_ in V],weights=list(range(len(V),0,-1)),k=1)[0])
+              if b.is_game_over(): continue
+              k=' '.join(b.fen().split()[:4])
+              if k in seen: continue
+              seen.add(k); f.append(b.fen())
+          finally: sf.quit()
+          Path('h2h/openings.fen').write_text('\n'.join(f)+'\n')
+          PY
+      - name: Verify baseline and run 20
+        working-directory: leviathan
+        run: |
+          ./src/stockfish-leviathan bench 2>&1 | tee h2h/bench-off.txt
+          grep -q '2884956' h2h/bench-off.txt
+          python3 tools/run_match.py --engine-a "$GITHUB_WORKSPACE/leviathan/src/stockfish-leviathan" --engine-b "$GITHUB_WORKSPACE/stockfish/src/stockfish-parent" --options-a h2h/a.json --options-b h2h/b.json --openings h2h/openings.fen --games 20 --movetime-ms 100 --max-plies 220 --out h2h/shard-${{ matrix.shard }}.json | tee h2h/shard-${{ matrix.shard }}.log
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pressurepiece-shard-${{ matrix.shard }}
+          path: |
+            leviathan/h2h/shard-${{ matrix.shard }}.json
+            leviathan/h2h/shard-${{ matrix.shard }}.log
+            leviathan/h2h/openings.fen
+  aggregate:
+    needs: shard
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/download-artifact@v4
+        with: {pattern: 'pressurepiece-shard-*', path: shards}
+      - name: Aggregate
+        run: |
+          python3 - <<'PY'
+          import json,math,statistics
+          from pathlib import Path
+          G=[]; S=[]
+          for f in sorted(Path('shards').glob('pressurepiece-shard-*/shard-*.json')):
+            d=json.loads(f.read_text()); G+=d['games']; S.append(d['summary'])
+          assert len(G)==100
+          w=sum(g['score_a']==1 for g in G); d=sum(g['score_a']==.5 for g in G); l=sum(g['score_a']==0 for g in G); s=sum(g['score_a'] for g in G)/100
+          elo=lambda x:400*math.log10(x/(1-x)) if 0<x<1 else None
+          P=[sum(G[i+j]['score_a'] for j in (0,1))/2 for i in range(0,100,2)]; se=statistics.stdev(P)/math.sqrt(50); lo=max(.001,s-1.96*se); hi=min(.999,s+1.96*se)
+          W=[g for g in G if g['a_white']]; B=[g for g in G if not g['a_white']]
+          r={'profile':'pressurepiece','wins':w,'draws':d,'losses':l,'score':s,'naive_elo':elo(s),'pair_cluster_approx_95pct_elo_interval':[elo(lo),elo(hi)],'white_score':sum(g['score_a'] for g in W)/50,'black_score':sum(g['score_a'] for g in B)/50,'shards':S}
+          Path('report.json').write_text(json.dumps(r,indent=2)+'\n'); Path('all-games.json').write_text(json.dumps({'report':r,'games':G},indent=2)+'\n'); print(json.dumps(r,indent=2))
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: leviathan-v23-pressurepiece-100games
+          path: |
+            report.json
+            all-games.json
+            shards/
