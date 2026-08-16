@@ -28,6 +28,7 @@ This ledger separates observed results, causal interpretations, and promotion de
 | W015 | Decision-depth | qforced fresh holdout | 100 equal-node 22/51/27 (47.5%); fixed-time 16/59/25 (45.5%). | REJECT | Node reduction and 7.8% faster wall time did not preserve strength. Never call this speed improvement. |
 | W016 | Meta-lab | Strict same-run speed factorial | Local smoke: exact normalized transcripts at default 3,210,480 nodes, depth-11 1,286,415 nodes, and fixed-node 2,451,202 nodes. One-round A/A failed calibration as expected; 15-round hosted panel pending. | RUNNING | Determines whether the surviving lossless fragments replicate and compose. No speed conclusion is allowed unless A/A passes. |
 | W017 | Meta-lab | Historical Actions audit | 90 workflows; most late experiments patch source at runtime; only aggregate nodes were checked in the key speed workflows; experiment registry stops at P012. | REPAIRING | New experiments require immutable refs, normalized per-position behavior transcripts, hard exit propagation, timeouts, pinned actions, and ledger registration. |
+| W018 | Meta-lab | Strict factorial run 1 | Run `31930767544`, job `95125100800`: variant materialization passed, then the first build failed because copied `src/Makefile` expected `../scripts/net.sh`. Timing was correctly skipped and artifacts were retained. | HARNESS FAILURE / REPAIRED | The candidate implementation was not implicated. Copy the repository `scripts` directory into each isolated variant; rerun from the immutable event SHA. |
 
 ## Promotion rule
 
