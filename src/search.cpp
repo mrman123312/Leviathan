@@ -775,6 +775,7 @@ Value Search::Worker::search(
     bool  givesCheck, improving, priorCapture, opponentWorsening;
     bool  capture, ttCapture;
     int   priorReduction;
+    int   leviathanRivalAmbiguity = 0;
     Piece movedPiece;
 
     SearchedList capturesSearched;
@@ -1283,6 +1284,10 @@ moves_loop:  // When in check, search starts here
             value = search<NonPV>(pos, ss, singularBeta - 1, singularBeta, singularDepth, cutNode);
             ss->excludedMove = Move::none();
 
+            // Leviathan RAR: preserve already-paid rival-strength evidence.
+            if (value >= singularBeta && value < beta && !is_decisive(value))
+                leviathanRivalAmbiguity = 1;
+
             if (value < singularBeta)
             {
                 int corrValAdj   = std::abs(correctionValue) / 198368;
@@ -1356,6 +1361,12 @@ moves_loop:  // When in check, search starts here
         // Increase reduction if ttMove is a capture
         if (ttCapture)
             r += 1079;
+
+        // On principal TT routes, do not forget that the singular probe found
+        // a credible rival. Search those later quiet rivals less shallowly.
+        if (leviathanRivalAmbiguity && ss->ttPv && move != ttData.move && !capture
+            && !givesCheck && depth >= 6 && moveCount <= 10)
+            r -= 320;
 
         // Increase reduction if next ply has a lot of fail high
         if ((ss + 1)->cutoffCnt > 1)
