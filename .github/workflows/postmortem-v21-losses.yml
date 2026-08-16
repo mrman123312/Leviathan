@@ -1,0 +1,141 @@
+name: Leviathan v2.1 loss postmortem
+
+on:
+  push:
+    branches:
+      - leviathan/h2h-100-20260815
+    paths:
+      - .github/workflows/postmortem-v21-losses.yml
+
+jobs:
+  analyze:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout branch
+        uses: actions/checkout@v4
+
+      - name: Checkout exact Stockfish source
+        uses: actions/checkout@v4
+        with:
+          repository: official-stockfish/Stockfish
+          ref: 5062aee519a1ba262d472d8ab139851ced56573e
+          path: stockfish-src
+
+      - name: Download 100-game evidence
+        uses: actions/download-artifact@v4
+        with:
+          name: leviathan-v21-vs-stockfish-100games-20260815
+          path: evidence
+          run-id: 31918850106
+          github-token: ${{ github.token }}
+
+      - name: Install python-chess
+        run: python3 -m pip install python-chess
+
+      - name: Build exact Stockfish AVX2
+        run: |
+          make -C stockfish-src/src -j2 build ARCH=x86-64-avx2
+          cp stockfish-src/src/stockfish ./stockfish-exact
+          chmod +x ./stockfish-exact
+
+      - name: Analyze all 11 lost games
+        run: |
+          cat > postmortem.py <<'PY'
+          import chess, chess.engine, json, math
+          from pathlib import Path
+
+          data=json.loads(Path('evidence/all-games.json').read_text())
+          losses=[(i+1,g) for i,g in enumerate(data['games']) if g['score_a']==0.0]
+          assert len(losses)==11, len(losses)
+          engine=chess.engine.SimpleEngine.popen_uci('./stockfish-exact')
+          engine.configure({'Threads':1,'Hash':128})
+
+          def score_cp(info, color):
+              s=info['score'].pov(color)
+              cp=s.score(mate_score=100000)
+              return int(cp if cp is not None else 0)
+
+          def san_line(board, pv, limit=8):
+              b=board.copy(stack=False); out=[]
+              for m in pv[:limit]:
+                  if m not in b.legal_moves: break
+                  out.append(b.san(m)); b.push(m)
+              return out
+
+          reports=[]
+          for global_idx,g in losses:
+              board=chess.Board(g['fen'])
+              lev_color=chess.WHITE if g['a_white'] else chess.BLACK
+              lev_moves=[]
+              for ply,u in enumerate(g['moves']):
+                  m=chess.Move.from_uci(u)
+                  if board.turn==lev_color:
+                      before=engine.analyse(board,chess.engine.Limit(nodes=25000),multipv=1)
+                      best=before['pv'][0]
+                      best_cp=score_cp(before,lev_color)
+                      best_san=board.san(best)
+                      actual_san=board.san(m)
+                      fen_before=board.fen()
+                      move_no=board.fullmove_number
+                      side='White' if lev_color else 'Black'
+                      board.push(m)
+                      after=engine.analyse(board,chess.engine.Limit(nodes=25000),multipv=1)
+                      actual_cp=score_cp(after,lev_color)
+                      drop=best_cp-actual_cp
+                      lev_moves.append({
+                        'ply':ply+1,'move_number':move_no,'side':side,'actual_uci':u,'actual_san':actual_san,
+                        'best_uci':best.uci(),'best_san':best_san,'best_cp':best_cp,'actual_cp':actual_cp,'drop_cp':drop,
+                        'fen_before':fen_before,'best_pv_san':san_line(chess.Board(fen_before),before.get('pv',[]),8),
+                        'after_pv_san':san_line(board,after.get('pv',[]),8)
+                      })
+                  else:
+                      board.push(m)
+
+              # Reanalyze top 4 drops more deeply.
+              top=sorted(lev_moves,key=lambda x:x['drop_cp'],reverse=True)[:4]
+              deep=[]
+              for x in top:
+                  b=chess.Board(x['fen_before'])
+                  before=engine.analyse(b,chess.engine.Limit(nodes=300000),multipv=1)
+                  best=before['pv'][0]; best_cp=score_cp(before,lev_color)
+                  actual=chess.Move.from_uci(x['actual_uci']); b.push(actual)
+                  after=engine.analyse(b,chess.engine.Limit(nodes=300000),multipv=1)
+                  actual_cp=score_cp(after,lev_color)
+                  deep.append({**x,
+                    'deep_best_cp':best_cp,'deep_actual_cp':actual_cp,'deep_drop_cp':best_cp-actual_cp,
+                    'deep_best_san':chess.Board(x['fen_before']).san(best),
+                    'deep_best_uci':best.uci(),
+                    'deep_best_pv_san':san_line(chess.Board(x['fen_before']),before.get('pv',[]),12),
+                    'deep_after_pv_san':san_line(b,after.get('pv',[]),12)
+                  })
+
+              reports.append({
+                'global_game_index':global_idx,'shard_local_game':g.get('game'),'leviathan_color':'White' if g['a_white'] else 'Black',
+                'start_fen':g['fen'],'plies':g['plies'],'termination':g['termination'],'deep_critical_moves':deep,
+                'all_leviathan_moves':lev_moves
+              })
+
+          engine.quit()
+          Path('loss-postmortem.json').write_text(json.dumps({'losses':reports},indent=2)+'\n')
+
+          # Human-readable compact report.
+          lines=[]
+          for r in reports:
+              lines.append(f"GAME {r['global_game_index']} | Leviathan {r['leviathan_color']} | {r['plies']} plies | {r['termination']}")
+              for j,x in enumerate(sorted(r['deep_critical_moves'],key=lambda y:y['deep_drop_cp'],reverse=True),1):
+                  lines.append(f"  #{j} move {x['move_number']} {x['actual_san']} | best {x['deep_best_san']} | eval {x['deep_best_cp']/100:+.2f} -> {x['deep_actual_cp']/100:+.2f} | drop {x['deep_drop_cp']/100:+.2f}")
+                  lines.append('     best PV: '+' '.join(x['deep_best_pv_san']))
+                  lines.append('     after PV: '+' '.join(x['deep_after_pv_san']))
+              lines.append('')
+          Path('loss-postmortem.txt').write_text('\n'.join(lines))
+          print('\n'.join(lines))
+          PY
+          python3 postmortem.py
+
+      - name: Upload postmortem
+        uses: actions/upload-artifact@v4
+        with:
+          name: leviathan-v21-loss-postmortem
+          path: |
+            loss-postmortem.json
+            loss-postmortem.txt
