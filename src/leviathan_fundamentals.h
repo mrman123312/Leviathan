@@ -395,7 +395,7 @@ inline int lmr_adjustment(const Position& pos,
     {
         const int lateness = std::min(moveCount - 5, 10);
         const int depthScale = std::min(int(depth), 12) + 2;
-        delta += 512 + state().quietOverdrive * lateness * depthScale / 24;
+        delta += 1024 + state().quietOverdrive * lateness * depthScale / 24;
         if (moveCount >= 10 && depth >= 7)
             delta += 256;
     }
