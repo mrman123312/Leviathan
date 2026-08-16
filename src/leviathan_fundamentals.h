@@ -79,11 +79,26 @@ inline bool zugzwang_risk(const Position& pos) {
     return pos.count<ALL_PIECES>() <= 9 && non_pawn_count(pos) <= 2;
 }
 
+inline Piece moving_piece(const Position& pos, Move move) {
+    if (!move.is_ok()) return NO_PIECE;
+    Piece pc = pos.piece_on(move.from_sq());
+    return pc != NO_PIECE ? pc : pos.piece_on(move.to_sq());
+}
+
+inline bool pawn_move(const Position& pos, Move move) {
+    if (!move.is_ok()) return false;
+    if (move.type_of() == PROMOTION || move.type_of() == EN_PASSANT) return true;
+    Piece pc = moving_piece(pos, move);
+    return pc != NO_PIECE && type_of(pc) == PAWN;
+}
+
+inline Color mover_color(const Position& pos, Move move) {
+    Piece pc = moving_piece(pos, move);
+    return pc != NO_PIECE ? color_of(pc) : pos.side_to_move();
+}
+
 inline bool advanced_pawn_move(const Position& pos, Move move) {
-    if (!move.is_ok() || type_of(pos.moved_piece(move)) != PAWN)
-        return false;
-    const Color us = pos.side_to_move();
-    return relative_rank(us, move.to_sq()) >= RANK_6;
+    return pawn_move(pos, move) && relative_rank(mover_color(pos, move), move.to_sq()) >= RANK_6;
 }
 
 inline bool recapture(Move move, Square prevSq, bool capture) {
@@ -91,7 +106,7 @@ inline bool recapture(Move move, Square prevSq, bool capture) {
 }
 
 inline bool zeroing_quiet(const Position& pos, Move move, bool capture) {
-    return capture || (move.is_ok() && type_of(pos.moved_piece(move)) == PAWN);
+    return capture || pawn_move(pos, move);
 }
 
 inline bool protected_scope_move(const Position& pos,
@@ -178,7 +193,7 @@ inline int quiet_ordering_bonus(const Position& pos, Move move) {
 
     // Captures are scored in another MovePicker stage. Push pawn moves upward
     // when the fifty-move counter is dangerous because they reset it.
-    return type_of(pos.moved_piece(move)) == PAWN ? state().rule50PawnBonus : 0;
+    return pawn_move(pos, move) ? state().rule50PawnBonus : 0;
 }
 
 inline bool allow_null_move(const Position& pos) {
