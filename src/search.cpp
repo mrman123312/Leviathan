@@ -39,6 +39,7 @@
 #include "leviathan_control.h"
 #include "leviathan_dsl.h"
 #include "leviathan_fundamentals.h"
+#include "leviathan_ready.h"
 #include "leviathan_trace.h"
 #include "misc.h"
 #include "movegen.h"
@@ -208,6 +209,7 @@ void Search::Worker::ensure_network_replicated() {
 void Search::Worker::start_searching() {
 
     accumulatorStack.reset();
+    leviathanReadyMask = Leviathan::Ready::snapshot();
 
     // Non-main threads go directly to iterative_deepening()
     if (!is_mainthread())
@@ -1132,15 +1134,18 @@ moves_loop:  // When in check, search starts here
 
 
     MovePicker mp(pos, ttData.move, depth, &mainHistory, &lowPlyHistory, &captureHistory, contHist,
-                  &sharedHistory, ss->ply);
+                  &sharedHistory, ss->ply, leviathanReadyMask);
 
     value = bestValue;
 
     int moveCount = 0;
 
-    const bool leviathanRiskReady  = Leviathan::Control::risk_ready();
-    const bool leviathanDslReady   = Leviathan::DSL::ready();
-    const bool leviathanTraceReady = Leviathan::Trace::ready();
+    const bool leviathanRiskReady =
+      Leviathan::Ready::has(leviathanReadyMask, Leviathan::Ready::Risk);
+    const bool leviathanDslReady =
+      Leviathan::Ready::has(leviathanReadyMask, Leviathan::Ready::Dsl);
+    const bool leviathanTraceReady =
+      Leviathan::Ready::has(leviathanReadyMask, Leviathan::Ready::Trace);
 
     // Step 13. Loop through all pseudo-legal moves until no moves remain
     // or a beta cutoff occurs.
@@ -1822,7 +1827,7 @@ Value Search::Worker::qsearch(Position& pos, Stack* ss, Value alpha, Value beta)
     // the moves. We presently use two stages of move generator in quiescence search:
     // captures, or evasions only when in check.
     MovePicker mp(pos, ttData.move, DEPTH_QS, &mainHistory, &lowPlyHistory, &captureHistory,
-                  contHist, &sharedHistory, ss->ply);
+                  contHist, &sharedHistory, ss->ply, leviathanReadyMask);
 
     // Step 5. Loop through all pseudo-legal moves until no moves remain or a beta
     // cutoff occurs.

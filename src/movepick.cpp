@@ -26,6 +26,7 @@
 #include "leviathan_atlas.h"
 #include "leviathan_fundamentals.h"
 #include "leviathan_policy.h"
+#include "leviathan_ready.h"
 #include "misc.h"
 #include "position.h"
 
@@ -161,7 +162,8 @@ MovePicker::MovePicker(const Position&              p,
                        const CapturePieceToHistory* cph,
                        const PieceToHistory**       ch,
                        const SharedHistories*       sh,
-                       int                          pl) :
+                       int                          pl,
+                       u8                           readyMask) :
     pos(p),
     mainHistory(mh),
     lowPlyHistory(lph),
@@ -170,7 +172,8 @@ MovePicker::MovePicker(const Position&              p,
     sharedHistory(sh),
     ttMove(ttm),
     depth(d),
-    ply(pl) {
+    ply(pl),
+    leviathanReadyMask(readyMask) {
 
     if (pos.checkers())
         stage = EVASION_TT + !(ttm && pos.pseudo_legal(ttm));
@@ -212,10 +215,12 @@ ExtMove* MovePicker::score(const MoveList<Type>& ml) {
         threatByLesser[KING]  = 0;
     }
 
-    const bool leviathanPolicyReady = Type == QUIETS && Leviathan::Policy::ready();
-    const bool leviathanAtlasReady  = Type == QUIETS && Leviathan::Atlas::ready();
-    const bool leviathanRule50Ready = Type == QUIETS && Leviathan::Fundamentals::ready()
-                                      && Leviathan::Fundamentals::state().rule50Pressure
+    const bool leviathanPolicyReady =
+      Type == QUIETS && Leviathan::Ready::has(leviathanReadyMask, Leviathan::Ready::Policy);
+    const bool leviathanAtlasReady =
+      Type == QUIETS && Leviathan::Ready::has(leviathanReadyMask, Leviathan::Ready::Atlas);
+    const bool leviathanRule50Ready =
+      Type == QUIETS && Leviathan::Ready::has(leviathanReadyMask, Leviathan::Ready::Rule50)
                                       && pos.rule50_count() >= 70;
 
     const auto* pawnEntry = Type == QUIETS ? &sharedHistory->pawn_entry(pos) : nullptr;

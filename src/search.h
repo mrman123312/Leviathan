@@ -385,6 +385,10 @@ class Worker {
 
     Value optimism[COLOR_NB];
 
+    // Global optional-organ readiness is immutable for the duration of a UCI
+    // search and is therefore sampled once in start_searching().
+    u8 leviathanReadyMask = 0;
+
     Position  rootPos;
     StateInfo rootState;
     RootMoves rootMoves;
