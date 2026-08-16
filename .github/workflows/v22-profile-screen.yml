@@ -1,0 +1,186 @@
+name: Leviathan v2.2 dimensional profile screen
+
+on:
+  push:
+    branches: [leviathan/h2h-v22-100-20260815]
+    paths: ['.github/workflows/v22-profile-screen.yml']
+
+permissions:
+  contents: read
+
+jobs:
+  screen:
+    runs-on: ubuntu-22.04
+    strategy:
+      fail-fast: false
+      matrix:
+        profile: [fixed384, fixed512, tiered, pieceaware, strict]
+
+    steps:
+      - name: Checkout exact frozen v2.2
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: b8cbdcbed9bb8bc28b62b3a7b98a5a07d3442f3e
+          path: leviathan
+
+      - name: Checkout exact Stockfish parent
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          repository: official-stockfish/Stockfish
+          ref: 5062aee519a1ba262d472d8ab139851ced56573e
+          path: stockfish
+
+      - name: Apply profile
+        working-directory: leviathan
+        env:
+          PROFILE: ${{ matrix.profile }}
+        run: |
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+          p=Path('src/leviathan_fundamentals.h')
+          s=p.read_text()
+          old='''        delta += 1024 + state().quietOverdrive * lateness * depthScale / 24;\n        if (moveCount >= 10 && depth >= 7)\n            delta += 256;'''
+          profile=os.environ['PROFILE']
+          if profile == 'fixed384':
+              new='''        delta += 384 + state().quietOverdrive * lateness * depthScale / 24;\n        if (moveCount >= 10 && depth >= 7)\n            delta += 128;'''
+          elif profile == 'fixed512':
+              new='''        delta += 512 + state().quietOverdrive * lateness * depthScale / 24;\n        if (moveCount >= 10 && depth >= 7)\n            delta += 128;'''
+          elif profile == 'tiered':
+              new='''        const int hardBudget =\n          (moveCount >= 10 && depth >= 8) ? 896 :\n          (moveCount >= 8 && depth >= 6)  ? 512 : 192;\n        delta += hardBudget + state().quietOverdrive * lateness * depthScale / 24;\n        if (moveCount >= 12 && depth >= 9)\n            delta += 128;'''
+          elif profile == 'pieceaware':
+              new='''        const int hardBudget =\n          (m.pt == KNIGHT || m.pt == BISHOP) ? 768 :\n          (m.pt == ROOK || m.pt == QUEEN)    ? 256 :\n          m.king                              ? 0   : 384;\n        delta += hardBudget + state().quietOverdrive * lateness * depthScale / 24;\n        if ((m.pt == KNIGHT || m.pt == BISHOP) && moveCount >= 10 && depth >= 7)\n            delta += 128;'''
+          elif profile == 'strict':
+              new='''        const int hardBudget =\n          (moveCount >= 10 && depth >= 8) ? 1024 : 256;\n        delta += hardBudget + state().quietOverdrive * lateness * depthScale / 24;\n        if (moveCount >= 12 && depth >= 9)\n            delta += 128;'''
+          else:
+              raise SystemExit(profile)
+          if s.count(old) != 1:
+              raise SystemExit(f'anchor count={s.count(old)}')
+          p.write_text(s.replace(old,new,1))
+          PY
+          git diff --check
+          git diff -- src/leviathan_fundamentals.h
+
+      - name: Install python-chess
+        run: python3 -m pip install --disable-pip-version-check 'python-chess>=1.999,<2'
+
+      - name: Build both AVX2 engines
+        run: |
+          cd leviathan/src
+          make net
+          make clean
+          make -j2 ARCH=x86-64-avx2 build
+          mv stockfish stockfish-leviathan
+          cd ../../stockfish/src
+          make net
+          make clean
+          make -j2 ARCH=x86-64-avx2 build
+          mv stockfish stockfish-parent
+
+      - name: Configure
+        working-directory: leviathan
+        run: |
+          mkdir -p screen
+          cat > screen/leviathan-options.json <<'EOF'
+          {"Threads":1,"Hash":64,"Leviathan Fundamentals":true,"Leviathan Fundamentals Authority":2,"Leviathan Forcing Buyback":384,"Leviathan Recapture Buyback":256,"Leviathan Passer Buyback":320,"Leviathan Endgame Buyback":128,"Leviathan Quiet Overdrive":160,"Leviathan Rule50 Pawn Bonus":3072,"Leviathan Zugzwang Guard":true,"Leviathan Sacrifice Rescue":true,"Leviathan Rule50 Pressure":true,"Leviathan Policy":false,"Leviathan MetaSearch":false,"Leviathan Risk":false,"Leviathan Specialist":false,"Leviathan Atlas":false,"Leviathan Search DSL":false}
+          EOF
+          echo '{"Threads":1,"Hash":64}' > screen/stockfish-options.json
+
+      - name: Generate common 20-opening screen
+        working-directory: leviathan
+        run: |
+          python3 - <<'PY'
+          import random
+          from pathlib import Path
+          import chess, chess.engine
+          rng=random.Random(8910)
+          sf=chess.engine.SimpleEngine.popen_uci('../stockfish/src/stockfish-parent')
+          sf.configure({'Threads':1,'Hash':64})
+          fens=[]; seen=set(); attempts=0
+          try:
+              while len(fens)<20:
+                  attempts+=1
+                  if attempts>600: raise RuntimeError('opening generation exhausted')
+                  b=chess.Board(); target=rng.randint(6,12)
+                  for _ in range(target):
+                      if b.is_game_over(): break
+                      infos=sf.analyse(b,chess.engine.Limit(nodes=1800),multipv=min(6,b.legal_moves.count()))
+                      if not isinstance(infos,list): infos=[infos]
+                      ranked=[]
+                      for info in infos:
+                          pv=info.get('pv',[])
+                          if not pv: continue
+                          cp=info['score'].pov(b.turn).score(mate_score=100000)
+                          ranked.append((pv[0],int(cp if cp is not None else 0)))
+                      if not ranked: break
+                      best=ranked[0][1]
+                      viable=[x for x in ranked if best-x[1]<=100] or ranked[:1]
+                      b.push(rng.choices([m for m,_ in viable],weights=list(range(len(viable),0,-1)),k=1)[0])
+                  if b.is_game_over(): continue
+                  key=' '.join(b.fen().split()[:4])
+                  if key in seen: continue
+                  seen.add(key); fens.append(b.fen())
+          finally: sf.quit()
+          Path('screen/openings.fen').write_text('\n'.join(fens)+'\n')
+          PY
+
+      - name: Fixed-depth speed bench
+        working-directory: leviathan/src
+        env:
+          PROFILE: ${{ matrix.profile }}
+        run: |
+          ./stockfish-leviathan bench 2>&1 | tee ../screen/off-${PROFILE}.txt
+          cat > ../screen/a2.uci <<'EOF'
+          setoption name Leviathan Fundamentals value true
+          setoption name Leviathan Fundamentals Authority value 2
+          setoption name Leviathan Quiet Overdrive value 160
+          bench
+          quit
+          EOF
+          ./stockfish-leviathan < ../screen/a2.uci 2>&1 | tee ../screen/on-${PROFILE}.txt
+          grep -E 'Total time|Nodes searched|Nodes/second' ../screen/off-${PROFILE}.txt | tail -3
+          grep -E 'Total time|Nodes searched|Nodes/second' ../screen/on-${PROFILE}.txt | tail -3
+
+      - name: Run 40 games / 20 paired openings
+        working-directory: leviathan
+        env:
+          PROFILE: ${{ matrix.profile }}
+        run: |
+          python3 tools/run_match.py \
+            --engine-a "$GITHUB_WORKSPACE/leviathan/src/stockfish-leviathan" \
+            --engine-b "$GITHUB_WORKSPACE/stockfish/src/stockfish-parent" \
+            --options-a screen/leviathan-options.json \
+            --options-b screen/stockfish-options.json \
+            --openings screen/openings.fen \
+            --games 40 --movetime-ms 100 --max-plies 220 \
+            --out screen/match-${PROFILE}.json | tee screen/match-${PROFILE}.log
+
+      - name: Summarize
+        working-directory: leviathan
+        env:
+          PROFILE: ${{ matrix.profile }}
+        run: |
+          python3 - <<'PY'
+          import json,os,re
+          from pathlib import Path
+          q=os.environ['PROFILE']
+          d=json.loads(Path(f'screen/match-{q}.json').read_text())
+          off=Path(f'screen/off-{q}.txt').read_text(); on=Path(f'screen/on-{q}.txt').read_text()
+          def last(pat,s): return int(re.findall(pat,s)[-1])
+          om=last(r'Total time \(ms\)\s*:\s*(\d+)',off); am=last(r'Total time \(ms\)\s*:\s*(\d+)',on)
+          onodes=last(r'Nodes searched\s*:\s*(\d+)',off); anodes=last(r'Nodes searched\s*:\s*(\d+)',on)
+          r={'profile':q,'summary':d['summary'],'off_ms':om,'active_ms':am,'speedup_ratio':om/am,'off_nodes':onodes,'active_nodes':anodes,'node_reduction_pct':(1-anodes/onodes)*100}
+          Path(f'screen/report-{q}.json').write_text(json.dumps(r,indent=2)+'\n')
+          print(json.dumps(r,indent=2))
+          PY
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: v22-screen-${{ matrix.profile }}
+          path: |
+            leviathan/screen/report-${{ matrix.profile }}.json
+            leviathan/screen/match-${{ matrix.profile }}.json
+            leviathan/screen/match-${{ matrix.profile }}.log
+            leviathan/screen/off-${{ matrix.profile }}.txt
+            leviathan/screen/on-${{ matrix.profile }}.txt
+            leviathan/screen/openings.fen
