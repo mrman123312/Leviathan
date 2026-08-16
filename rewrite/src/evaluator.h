@@ -32,6 +32,14 @@ public:
     const EvaluatorDescriptor& descriptor() const override;
 };
 
+class DistilledEvaluator final : public Evaluator {
+public:
+    Evaluation evaluate(const Position& position) const override;
+    const EvaluatorDescriptor& descriptor() const override;
+};
+
+const Evaluator& baseline_evaluator();
+const Evaluator& distilled_evaluator();
 const Evaluator& default_evaluator();
 
 } // namespace leviathan
