@@ -1,0 +1,66 @@
+name: Fix V8.5 causal strength harness
+
+on:
+  push:
+    branches:
+      - leviathan/strength-v8-5a-witness-hygiene
+    paths:
+      - '.github/workflows/fix-v8-5-causal-strength.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout harness branch
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: leviathan/strength-v8-5a-witness-hygiene
+
+      - name: Repair receipt-bank generator and add bank cardinality guards
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          p = Path('.github/workflows/v8-5-causal-strength.yml')
+          s = p.read_text()
+
+          broken = "            if q.is_game_over():raise SystemExit('terminal');out.append(q.fen())\n"
+          fixed = "            if q.is_game_over():raise SystemExit('terminal')\n            out.append(q.fen())\n"
+          if s.count(broken) != 1:
+              raise SystemExit(f'expected one broken receipt-bank line, found {s.count(broken)}')
+          s = s.replace(broken, fixed, 1)
+
+          # Every job must prove the generated bank has exactly 20 positions before games.
+          marker = "          PY\n      - name: Equal-node"
+          if s.count(marker) != 3:
+              raise SystemExit(f'expected three equal-node bank boundaries, found {s.count(marker)}')
+          s = s.replace(marker,
+                        "          PY\n          test \"$(wc -l < match/openings.fen)\" -eq 20\n      - name: Equal-node",
+                        3)
+
+          # All three generators must still pin the exact same bank hash.
+          expected = '87f3e3780aac2deba3730528fb35032228982e6b5268798c5d72144363aaeb2a'
+          if s.count(expected) != 3:
+              raise SystemExit(f'expected three identical bank hash assertions, found {s.count(expected)}')
+          if broken in s:
+              raise SystemExit('broken receipt generator survived repair')
+          if s.count('wc -l < match/openings.fen') != 3:
+              raise SystemExit('bank cardinality guard missing from one or more jobs')
+
+          p.write_text(s)
+          print('causal-strength harness repaired with 3/3 cardinality guards')
+          PY
+          git diff --check
+          git diff -- .github/workflows/v8-5-causal-strength.yml
+
+      - name: Commit harness repair
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add .github/workflows/v8-5-causal-strength.yml
+          git commit -m 'Fix V8.5 causal strength opening bank harness'
+          git push origin HEAD:leviathan/strength-v8-5a-witness-hygiene
