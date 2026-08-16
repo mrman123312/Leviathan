@@ -1,0 +1,121 @@
+name: Leviathan strength v8 build
+
+on:
+  push:
+    branches:
+      - leviathan/strength-v8-evidence-lattice
+    paths:
+      - 'src/**'
+      - '.github/workflows/strength-v8-build.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout strength v8
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: leviathan/strength-v8-evidence-lattice
+
+      - name: Evidence primitive invariants
+        run: |
+          cat >/tmp/evidence_smoke.cpp <<'CPP'
+          #include <cassert>
+          #include "leviathan_evidence.h"
+          using namespace Stockfish::Leviathan::Evidence;
+          int main() {
+              static_assert(KNOWN_MASK == 1023);
+              State s;
+              assert(s.debt == 0 && s.classes() == 0);
+              s.add(Kind::HISTORY, 2);
+              assert(s.debt == 2 && s.classes() == 1 && tt_sensitive(s));
+              assert(!s.multi_source() && !s.severe());
+              s.add(Kind::EVAL_DISAGREEMENT, 1);
+              assert(s.debt == 3 && s.classes() == 2 && s.multi_source());
+              assert(root_time_factor(s) == 1.12);
+              s.add(Kind::LMR_COUNTEREXAMPLE, 1);
+              assert(s.debt == 4 && s.classes() == 3 && s.severe());
+              assert(pruning_sensitive(s));
+              assert(root_time_factor(s) == 1.20);
+              s.add(Kind::RIVAL_AMBIGUITY, 50);
+              assert(s.debt == 5 && rival_sensitive(s));
+              State inherited;
+              inherited.merge(s.mask, s.debt);
+              assert(inherited.debt == 5 && inherited.mask == s.mask);
+              return 0;
+          }
+          CPP
+          g++ -std=c++17 -Wall -Wextra -Werror -Isrc /tmp/evidence_smoke.cpp -o /tmp/evidence_smoke
+          /tmp/evidence_smoke
+
+      - name: Build AVX2
+        working-directory: src
+        run: |
+          make net
+          make clean
+          make -j2 ARCH=x86-64-avx2 build
+
+      - name: Normal and persistent-search smoke
+        working-directory: src
+        run: |
+          {
+            echo uci
+            echo 'setoption name Threads value 1'
+            echo 'setoption name Hash value 64'
+            echo 'setoption name Leviathan Fundamentals value true'
+            echo 'setoption name Leviathan Fundamentals Authority value 1'
+            echo 'setoption name Leviathan Quiet Overdrive value 0'
+            echo isready
+            echo 'position startpos moves e2e4 e7e5 g1f3 b8c6 f1b5 a7a6 b5a4 g8f6'
+            echo 'go depth 13'
+            echo 'position startpos moves e2e4 e7e5 g1f3 b8c6 f1b5 a7a6 b5a4 g8f6 e1g1'
+            echo 'go depth 12'
+            echo quit
+          } | ./stockfish | tee ../strength-v8-persistent-smoke.txt
+          test $(grep -c '^bestmove ' ../strength-v8-persistent-smoke.txt) -ge 2
+
+      - name: History-sensitive and rule50 smoke
+        working-directory: src
+        run: |
+          {
+            echo uci
+            echo 'setoption name Threads value 1'
+            echo 'setoption name Hash value 64'
+            echo isready
+            echo 'position startpos moves g1f3 g8f6 f3g1 f6g8 g1f3 g8f6 f3g1 f6g8'
+            echo 'go depth 11'
+            echo 'position fen 8/8/8/8/8/2k5/4K3/7R w - - 90 46'
+            echo 'go depth 11'
+            echo quit
+          } | ./stockfish | tee ../strength-v8-history-smoke.txt
+          test $(grep -c '^bestmove ' ../strength-v8-history-smoke.txt) -ge 2
+
+      - name: Fixed-node and bench smoke
+        working-directory: src
+        run: |
+          {
+            echo uci
+            echo 'setoption name Threads value 1'
+            echo 'setoption name Hash value 64'
+            echo isready
+            echo 'position startpos'
+            echo 'go nodes 100000'
+            echo quit
+          } | ./stockfish | tee ../strength-v8-nodes-smoke.txt
+          grep -q '^bestmove ' ../strength-v8-nodes-smoke.txt
+          ./stockfish bench 16 1 10 default depth | tee ../strength-v8-bench.txt
+          grep -q 'Nodes searched' ../strength-v8-bench.txt
+
+      - name: Archive V8 evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: strength-v8-build-evidence
+          path: |
+            strength-v8-persistent-smoke.txt
+            strength-v8-history-smoke.txt
+            strength-v8-nodes-smoke.txt
+            strength-v8-bench.txt
+          if-no-files-found: error
