@@ -1,4 +1,4 @@
-# Compile trigger for proof-obligation source at 1bad86468fb528c92b3894bd996aa47fe0253f42
+# Final compile trigger for V6.6 proof architecture at f9d026d7e38be99074e474e0d2b64c616aab7e4a
 name: Leviathan strength v6 build
 
 on:
