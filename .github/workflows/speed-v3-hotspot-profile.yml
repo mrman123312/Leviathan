@@ -1,0 +1,94 @@
+name: Leviathan speed v3 hotspot profile
+
+on:
+  push:
+    branches: [leviathan/speed-v3-profile]
+    paths: ['.github/workflows/speed-v3-hotspot-profile.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  profile:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: fbccfb6eb5cd335b1ce8fc5c5efad9e36be4e19d
+          path: leviathan
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          repository: official-stockfish/Stockfish
+          ref: 5062aee519a1ba262d472d8ab139851ced56573e
+          path: stockfish
+      - name: Build AVX2 engines
+        run: |
+          cd leviathan/src && make net && make -j2 ARCH=x86-64-avx2 build && mv stockfish leviathan
+          cd ../../stockfish/src && make net && make -j2 ARCH=x86-64-avx2 build && mv stockfish parent
+      - name: Prepare profiler
+        run: |
+          sudo sysctl -w kernel.perf_event_paranoid=-1 || true
+          sudo sysctl -w kernel.kptr_restrict=0 || true
+          which perf || true
+          perf --version || true
+      - name: Warm and verify exact parent signature
+        working-directory: leviathan/src
+        run: |
+          ./leviathan bench 2>&1 | tee ../../off-bench.txt
+          grep -q '2884956' ../../off-bench.txt
+          printf 'setoption name Leviathan Fundamentals value true\nsetoption name Leviathan Fundamentals Authority value 2\nbench\nquit\n' | ./leviathan 2>&1 | tee ../../active-bench.txt
+      - name: Hardware counter panel
+        run: |
+          set +e
+          P='bench 16 1 13 default depth'
+          perf stat -x, -r 7 -e task-clock,cycles,instructions,branches,branch-misses,cache-references,cache-misses,L1-dcache-loads,L1-dcache-load-misses,LLC-loads,LLC-load-misses -o parent-stat.csv -- ./stockfish/src/parent bench 16 1 13 default depth >/dev/null 2>&1
+          printf 'setoption name Leviathan Fundamentals value true\nsetoption name Leviathan Fundamentals Authority value 2\nbench 16 1 13 default depth\nquit\n' > active.in
+          perf stat -x, -r 7 -e task-clock,cycles,instructions,branches,branch-misses,cache-references,cache-misses,L1-dcache-loads,L1-dcache-load-misses,LLC-loads,LLC-load-misses -o active-stat.csv -- ./leviathan/src/leviathan < active.in >/dev/null 2>&1
+          set -e
+      - name: Flat CPU profiles
+        run: |
+          set +e
+          perf record -F 999 -g -o parent.perf.data -- ./stockfish/src/parent bench 16 1 14 default depth >/dev/null 2>&1
+          perf report -i parent.perf.data --stdio --no-children --sort=symbol --percent-limit 0.25 > parent-perf.txt 2>&1
+          printf 'setoption name Leviathan Fundamentals value true\nsetoption name Leviathan Fundamentals Authority value 2\nbench 16 1 14 default depth\nquit\n' > active14.in
+          perf record -F 999 -g -o active.perf.data -- ./leviathan/src/leviathan < active14.in >/dev/null 2>&1
+          perf report -i active.perf.data --stdio --no-children --sort=symbol --percent-limit 0.25 > active-perf.txt 2>&1
+          set -e
+      - name: Repeated wall-clock and NPS baseline
+        working-directory: leviathan/src
+        run: |
+          python3 - <<'PY' | tee ../../timing.json
+          import subprocess,re,json,statistics
+          def run(active):
+              q=("setoption name Leviathan Fundamentals value true\nsetoption name Leviathan Fundamentals Authority value 2\n" if active else "")+"bench\nquit\n"
+              p=subprocess.run(['./leviathan'],input=q,text=True,capture_output=True,check=True)
+              o=p.stdout+p.stderr
+              return {'ms':int(re.findall(r'Total time \(ms\)\s*:\s*(\d+)',o)[-1]),'nodes':int(re.findall(r'Nodes searched\s*:\s*(\d+)',o)[-1]),'nps':int(re.findall(r'Nodes/second\s*:\s*(\d+)',o)[-1])}
+          run(False);run(True)
+          pairs=[]
+          for i in range(15):
+              if i%2: a=run(True); b=run(False)
+              else: b=run(False); a=run(True)
+              pairs.append({'off':b,'active':a})
+          result={
+            'pairs':pairs,
+            'off_median_nps':statistics.median(x['off']['nps'] for x in pairs),
+            'active_median_nps':statistics.median(x['active']['nps'] for x in pairs),
+            'off_median_ms':statistics.median(x['off']['ms'] for x in pairs),
+            'active_median_ms':statistics.median(x['active']['ms'] for x in pairs),
+            'active_vs_off_nps_ratio':statistics.median(x['active']['nps']/x['off']['nps'] for x in pairs),
+          }
+          print(json.dumps(result,indent=2))
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: speed-v3-hotspot-profile
+          path: |
+            off-bench.txt
+            active-bench.txt
+            parent-stat.csv
+            active-stat.csv
+            parent-perf.txt
+            active-perf.txt
+            timing.json
