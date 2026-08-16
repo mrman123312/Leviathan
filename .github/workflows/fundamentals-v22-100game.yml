@@ -1,0 +1,252 @@
+name: Leviathan v2.2 — 100 games vs Stockfish
+
+on:
+  push:
+    branches:
+      - leviathan/h2h-v22-100-20260815
+    paths:
+      - '.github/workflows/fundamentals-v22-100game.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  shard:
+    name: shard-${{ matrix.shard }}
+    runs-on: ubuntu-22.04
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3, 4]
+
+    steps:
+      - name: Checkout exact frozen Leviathan v2.2 source
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: b8cbdcbed9bb8bc28b62b3a7b98a5a07d3442f3e
+          path: leviathan
+
+      - name: Checkout exact frozen Stockfish parent
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          repository: official-stockfish/Stockfish
+          ref: 5062aee519a1ba262d472d8ab139851ced56573e
+          path: stockfish
+
+      - name: Install python-chess
+        run: python3 -m pip install --disable-pip-version-check 'python-chess>=1.999,<2'
+
+      - name: Build both AVX2 engines
+        run: |
+          cd "$GITHUB_WORKSPACE/leviathan/src"
+          make net
+          make clean
+          make -j2 ARCH=x86-64-avx2 build
+          mv stockfish stockfish-leviathan
+          cd "$GITHUB_WORKSPACE/stockfish/src"
+          make net
+          make clean
+          make -j2 ARCH=x86-64-avx2 build
+          mv stockfish stockfish-parent
+
+      - name: Configure isolated v2.2 dimensional Authority-2 profile
+        working-directory: leviathan
+        run: |
+          mkdir -p h2h100
+          cat > h2h100/leviathan-options.json <<'EOF'
+          {
+            "Threads": 1,
+            "Hash": 64,
+            "Leviathan Fundamentals": true,
+            "Leviathan Fundamentals Authority": 2,
+            "Leviathan Forcing Buyback": 384,
+            "Leviathan Recapture Buyback": 256,
+            "Leviathan Passer Buyback": 320,
+            "Leviathan Endgame Buyback": 128,
+            "Leviathan Quiet Overdrive": 160,
+            "Leviathan Rule50 Pawn Bonus": 3072,
+            "Leviathan Zugzwang Guard": true,
+            "Leviathan Sacrifice Rescue": true,
+            "Leviathan Rule50 Pressure": true,
+            "Leviathan Policy": false,
+            "Leviathan MetaSearch": false,
+            "Leviathan Risk": false,
+            "Leviathan Specialist": false,
+            "Leviathan Atlas": false,
+            "Leviathan Search DSL": false
+          }
+          EOF
+          cat > h2h100/stockfish-options.json <<'EOF'
+          {
+            "Threads": 1,
+            "Hash": 64
+          }
+          EOF
+
+      - name: Generate 10 deterministic balanced openings for shard
+        working-directory: leviathan
+        env:
+          SHARD: ${{ matrix.shard }}
+        run: |
+          python3 - <<'PY'
+          import os, random
+          from pathlib import Path
+          import chess, chess.engine
+
+          shard = int(os.environ['SHARD'])
+          rng = random.Random(8910 + shard * 100003)
+          sf = chess.engine.SimpleEngine.popen_uci('../stockfish/src/stockfish-parent')
+          sf.configure({'Threads': 1, 'Hash': 64})
+          fens=[]; seen=set(); attempts=0
+          try:
+              while len(fens) < 10:
+                  attempts += 1
+                  if attempts > 300:
+                      raise RuntimeError('opening generation exhausted retries')
+                  board = chess.Board()
+                  target = rng.randint(6, 12)
+                  for _ in range(target):
+                      if board.is_game_over(): break
+                      infos = sf.analyse(board, chess.engine.Limit(nodes=1800), multipv=min(6, board.legal_moves.count()))
+                      if not isinstance(infos, list): infos=[infos]
+                      ranked=[]
+                      for info in infos:
+                          pv=info.get('pv', [])
+                          if not pv: continue
+                          cp=info['score'].pov(board.turn).score(mate_score=100000)
+                          ranked.append((pv[0], int(cp if cp is not None else 0)))
+                      if not ranked: break
+                      best=ranked[0][1]
+                      viable=[x for x in ranked if best-x[1] <= 100] or ranked[:1]
+                      weights=list(range(len(viable),0,-1))
+                      board.push(rng.choices([m for m,_ in viable], weights=weights, k=1)[0])
+                  if board.is_game_over(): continue
+                  key=' '.join(board.fen().split()[:4])
+                  if key in seen: continue
+                  seen.add(key); fens.append(board.fen())
+          finally:
+              sf.quit()
+          Path('h2h100/openings.fen').write_text('\n'.join(fens)+'\n')
+          print('\n'.join(fens))
+          PY
+
+      - name: Verify frozen parent behavior with Fundamentals off
+        working-directory: leviathan/src
+        run: |
+          ./stockfish-leviathan bench 2>&1 | tee ../h2h100/bench-off.txt
+          grep -q '2884956' ../h2h100/bench-off.txt
+
+      - name: Run 20 games / 10 paired openings
+        working-directory: leviathan
+        run: |
+          python3 tools/run_match.py \
+            --engine-a "$GITHUB_WORKSPACE/leviathan/src/stockfish-leviathan" \
+            --engine-b "$GITHUB_WORKSPACE/stockfish/src/stockfish-parent" \
+            --options-a h2h100/leviathan-options.json \
+            --options-b h2h100/stockfish-options.json \
+            --openings h2h100/openings.fen \
+            --games 20 \
+            --movetime-ms 100 \
+            --max-plies 220 \
+            --out h2h100/match-shard-${{ matrix.shard }}.json | tee h2h100/match-shard-${{ matrix.shard }}.log
+
+      - name: Upload shard evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: v22-h2h100-shard-${{ matrix.shard }}
+          path: |
+            leviathan/h2h100/match-shard-${{ matrix.shard }}.json
+            leviathan/h2h100/match-shard-${{ matrix.shard }}.log
+            leviathan/h2h100/openings.fen
+            leviathan/h2h100/leviathan-options.json
+            leviathan/h2h100/stockfish-options.json
+            leviathan/h2h100/bench-off.txt
+          if-no-files-found: error
+
+  aggregate:
+    name: aggregate-100-games
+    needs: shard
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Download all shard artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: v22-h2h100-shard-*
+          path: shards
+
+      - name: Aggregate result and statistics
+        run: |
+          python3 - <<'PY'
+          import json, math, statistics
+          from pathlib import Path
+
+          files=sorted(Path('shards').glob('v22-h2h100-shard-*/match-shard-*.json'))
+          if len(files) != 5:
+              raise SystemExit(f'expected 5 shard files, got {len(files)}')
+          games=[]
+          shard_summaries=[]
+          for f in files:
+              d=json.loads(f.read_text())
+              shard_summaries.append(d['summary'])
+              games.extend(d['games'])
+          if len(games) != 100:
+              raise SystemExit(f'expected 100 games, got {len(games)}')
+
+          wins=sum(g['score_a']==1.0 for g in games)
+          draws=sum(g['score_a']==0.5 for g in games)
+          losses=sum(g['score_a']==0.0 for g in games)
+          score=sum(g['score_a'] for g in games)/len(games)
+
+          def elo(s):
+              if not 0 < s < 1: return None
+              return 400*math.log10(s/(1-s))
+
+          pair_scores=[]
+          pair_details=[]
+          for i in range(0,100,2):
+              p=games[i:i+2]
+              pts=sum(x['score_a'] for x in p)
+              pair_scores.append(pts/2)
+              pair_details.append({'pair':i//2+1,'points':pts,'scores':[x['score_a'] for x in p],'results':[x['result'] for x in p]})
+
+          se=statistics.stdev(pair_scores)/math.sqrt(len(pair_scores))
+          lo=max(.001, score-1.96*se); hi=min(.999, score+1.96*se)
+          term={}
+          for g in games: term[g['termination']]=term.get(g['termination'],0)+1
+          white=[g for g in games if g['a_white']]
+          black=[g for g in games if not g['a_white']]
+          white_score=sum(g['score_a'] for g in white)/len(white)
+          black_score=sum(g['score_a'] for g in black)/len(black)
+
+          report={
+            'leviathan_source_commit':'b8cbdcbed9bb8bc28b62b3a7b98a5a07d3442f3e',
+            'stockfish_source_commit':'5062aee519a1ba262d472d8ab139851ced56573e',
+            'protocol':'100 games / 50 paired openings / reversed colors / 100 ms per move / 1 thread / 64 MB hash / 5 parallel shards',
+            'configuration':'Fundamentals v2.2 consequence-aware dimensional Authority 2; frozen hard budget 1024; all learned and other Leviathan organs off',
+            'wins':wins,
+            'draws':draws,
+            'losses':losses,
+            'score':score,
+            'naive_elo':elo(score),
+            'pair_cluster_approx_95pct_elo_interval':[elo(lo),elo(hi)],
+            'white_score':white_score,
+            'black_score':black_score,
+            'terminations':term,
+            'paired_matches':pair_details,
+            'shard_summaries':shard_summaries
+          }
+          Path('report.json').write_text(json.dumps(report,indent=2)+'\n')
+          Path('all-games.json').write_text(json.dumps({'report':report,'games':games},indent=2)+'\n')
+          print(json.dumps(report,indent=2))
+          PY
+
+      - name: Upload complete 100-game evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: leviathan-v22-vs-stockfish-100games-20260815
+          path: |
+            report.json
+            all-games.json
+            shards/
+          if-no-files-found: error
