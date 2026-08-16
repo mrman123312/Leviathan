@@ -252,7 +252,15 @@ void Search::Worker::start_searching() {
                 if (e.debt <= decay)
                     e = {};
                 else
+                {
                     e.debt -= decay;
+                    // V8.5A causal ablation: once the stored warning is below the
+                    // actionable Proof-Debt threshold, its witness must not retain
+                    // ordering/protection authority by itself. Keep the residual
+                    // debt for normal V7 behavior, but retire the stale move identity.
+                    if (e.debt < 3)
+                        e.witness = Move::none();
+                }
             }
         }
     }
