@@ -1,0 +1,133 @@
+name: Leviathan V8.5 causal factorial bench
+
+on:
+  push:
+    branches:
+      - leviathan/strength-v8-5a-witness-hygiene
+    paths:
+      - '.github/workflows/v8-5-factorial-bench.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  factorial:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout control V7.4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: 9ffe3f2c43972fc55163300449e97a981a01e358
+          path: control
+      - name: Checkout A witness hygiene
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: 95b779abefedf158a856d5db7eff9d2a61df2982
+          path: hygiene
+      - name: Checkout B LMR receipt
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: 6756f490cb48a48eb35d9485512ffc58147ccfab
+          path: receipt
+      - name: Checkout A+B V8.5
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: 5541261dccec82d7c76dcb8298d8ce7bd8f69b9a
+          path: combined
+
+      - name: Verify exact causal identities
+        run: |
+          set -euo pipefail
+          test "$(git -C control rev-parse HEAD)" = 9ffe3f2c43972fc55163300449e97a981a01e358
+          test "$(git -C hygiene rev-parse HEAD)" = 95b779abefedf158a856d5db7eff9d2a61df2982
+          test "$(git -C receipt rev-parse HEAD)" = 6756f490cb48a48eb35d9485512ffc58147ccfab
+          test "$(git -C combined rev-parse HEAD)" = 5541261dccec82d7c76dcb8298d8ce7bd8f69b9a
+          grep -q 'if (e.debt < 3)' hygiene/src/search.cpp
+          ! grep -q 'witnessWasLmr' hygiene/src/search.h
+          grep -q 'witnessWasLmr' receipt/src/search.h
+          ! grep -q 'if (e.debt < 3)' receipt/src/search.cpp
+          grep -q 'witnessWasLmr' combined/src/search.h
+          grep -q 'if (e.debt < 3)' combined/src/search.cpp
+
+      - name: Build all four identically
+        run: |
+          set -euo pipefail
+          for D in control hygiene receipt combined; do
+            cd "$GITHUB_WORKSPACE/$D/src"
+            make net
+            make clean
+            make -j2 ARCH=x86-64-avx2 build 2>&1 | tee "$GITHUB_WORKSPACE/$D-build.log"
+            mv stockfish "stockfish-$D"
+          done
+
+      - name: Interleaved five-run deterministic benches
+        run: |
+          set -euo pipefail
+          mkdir -p results
+          for i in 1 2 3 4 5; do
+            for D in control hygiene receipt combined; do
+              /usr/bin/time -f '%e' -o "results/$D-$i.time" \
+                "./$D/src/stockfish-$D" bench 16 1 10 default depth \
+                >"results/$D-$i.out" 2>&1
+              grep -q 'Nodes searched' "results/$D-$i.out"
+              grep -q 'Nodes/second' "results/$D-$i.out"
+            done
+          done
+
+      - name: Factorial analysis
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          import json, re, statistics
+
+          names=['control','hygiene','receipt','combined']
+          r={}
+          for name in names:
+              times=[float(Path(f'results/{name}-{i}.time').read_text()) for i in range(1,6)]
+              nodes=[]
+              for i in range(1,6):
+                  text=Path(f'results/{name}-{i}.out').read_text()
+                  m=re.search(r'Nodes searched\s*:\s*(\d+)',text)
+                  if not m: raise SystemExit(f'no nodes for {name}-{i}')
+                  nodes.append(int(m.group(1)))
+              if len(set(nodes)) != 1:
+                  raise SystemExit(f'nondeterministic node count for {name}: {nodes}')
+              r[name]={'nodes':nodes[0],'times':times,
+                       'median_seconds':statistics.median(times),
+                       'mean_seconds':statistics.mean(times)}
+          c=r['control']['nodes']; a=r['hygiene']['nodes']; b=r['receipt']['nodes']; ab=r['combined']['nodes']
+          r['effects']={
+              'hygiene_node_delta_pct':100*(a-c)/c,
+              'receipt_node_delta_pct':100*(b-c)/c,
+              'combined_node_delta_pct':100*(ab-c)/c,
+              'interaction_nodes':ab-a-b+c,
+              'interaction_pct_of_control':100*(ab-a-b+c)/c,
+              'hygiene_time_ratio':r['hygiene']['median_seconds']/r['control']['median_seconds'],
+              'receipt_time_ratio':r['receipt']['median_seconds']/r['control']['median_seconds'],
+              'combined_time_ratio':r['combined']['median_seconds']/r['control']['median_seconds'],
+          }
+          # Mechanism classification based on deterministic tree behavior.
+          deltas={k:abs(r['effects'][k]) for k in ['hygiene_node_delta_pct','receipt_node_delta_pct']}
+          if deltas['hygiene_node_delta_pct'] > 30 and deltas['receipt_node_delta_pct'] < 10:
+              verdict='HYGIENE_DOMINANT'
+          elif deltas['receipt_node_delta_pct'] > 30 and deltas['hygiene_node_delta_pct'] < 10:
+              verdict='RECEIPT_DOMINANT'
+          elif abs(r['effects']['interaction_pct_of_control']) > 20:
+              verdict='STRONG_INTERACTION'
+          else:
+              verdict='MIXED_OR_MODERATE'
+          r['verdict']=verdict
+          Path('results/factorial-report.json').write_text(json.dumps(r,indent=2)+'\n')
+          print(json.dumps(r,indent=2))
+          PY
+
+      - name: Archive factorial evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: v8-5-factorial-bench
+          path: |
+            results/
+            *-build.log
+          if-no-files-found: error
