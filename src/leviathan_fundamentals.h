@@ -116,10 +116,17 @@ inline bool rescue_bad_see(const Position& pos,
     if (!ready() || !state().sacrificeRescue)
         return false;
 
-    if (move.type_of() == PROMOTION || recapture(move, prevSq, capture))
+    if (move.type_of() == PROMOTION)
         return true;
 
-    // Checking sacrifices are the narrowest useful non-trained rescue class.
+    // v2.1: a recapture is not automatically worthy of rescue. Keep only
+    // near-balanced recaptures; obviously losing exchanges should still be
+    // allowed to die in SEE pruning instead of inflating the tree.
+    if (recapture(move, prevSq, capture))
+        return pos.see_ge(move, -300);
+
+    // Checking sacrifices retain the broad rescue path. They are rare and are
+    // exactly where a purely material SEE gate can miss forced tactical ideas.
     return givesCheck && !pos.see_ge(move, 0);
 }
 
@@ -142,20 +149,27 @@ inline int lmr_adjustment(const Position& pos,
         delta -= state().recaptureBuyback;
     if (move.type_of() == PROMOTION || advanced_pawn_move(pos, move))
         delta -= state().passerBuyback;
-    if (low_material(pos))
+
+    // v2.1: blanket endgame buyback made every sparse branch expensive. Keep
+    // the extra protection concentrated on early candidates and forcing moves.
+    if (low_material(pos) && (moveCount <= 4 || capture || givesCheck))
         delta -= state().endgameBuyback;
 
-    // Authority 2 is the funding mechanism. Only clearly late, quiet,
-    // non-PV, non-forcing moves are overdriven, and the adjustment is small.
-    if (state().authority >= 2 && depth >= 4 && moveCount >= 5 && !pvNode && !capture
+    // Authority 2 is the funding mechanism. v2.1 deliberately avoids
+    // overdriving pawn moves: even a quiet pawn move irreversibly changes the
+    // position and is a poor place to buy generic speed. We also start one move
+    // later and one ply deeper than v2 to concentrate the extra reduction on
+    // genuinely late, stable-looking branches.
+    if (state().authority >= 2 && depth >= 5 && moveCount >= 6 && !pvNode && !capture
         && !givesCheck && move.type_of() != PROMOTION && !advanced_pawn_move(pos, move)
-        && pos.rule50_count() < 70 && !low_material(pos))
+        && !zeroing_quiet(pos, move, capture) && pos.rule50_count() < 70 && !low_material(pos))
     {
-        const int lateness = std::min(moveCount - 4, 8);
-        delta += state().quietOverdrive * lateness / 4;
+        const int lateness   = std::min(moveCount - 5, 8);
+        const int depthScale = std::min(int(depth), 10) + 2;
+        delta += state().quietOverdrive * lateness * depthScale / 48;
     }
 
-    return std::clamp(delta, -2048, 1024);
+    return std::clamp(delta, -2048, 768);
 }
 
 inline int quiet_ordering_bonus(const Position& pos, Move move) {
