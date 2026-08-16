@@ -1,0 +1,52 @@
+name: Apply strength v6 counterexample feedback
+
+on:
+  push:
+    branches:
+      - leviathan/strength-v6-proof-obligation
+    paths:
+      - '.github/workflows/apply-strength-v6-counterexample-feedback.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout strength v6
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: leviathan/strength-v6-proof-obligation
+
+      - name: Add local heuristic counterexample feedback
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('src/search.cpp')
+          s = p.read_text()
+
+          old = "        if (leviathanTraceReady && leviathanReducedValue != VALUE_NONE)\n            Leviathan::Trace::record_lmr("
+          new = "        // Leviathan strength v6.1 - Counterexample Feedback. If a full-depth\n        // verification materially contradicts the reduced LMR estimate, the node\n        // has produced direct evidence that our reduction model is unreliable here.\n        // Raise proof debt immediately so later siblings inherit that lesson.\n        if (leviathanReducedValue != VALUE_NONE && leviathanResearched\n            && !is_decisive(leviathanReducedValue) && !is_decisive(value))\n        {\n            const int  lmrError      = std::abs(int(value - leviathanReducedValue));\n            const bool boundaryFlip  = (leviathanReducedValue > alpha) != (value > alpha);\n            const int  evidenceBoost = boundaryFlip ? 2 : lmrError >= 160 ? 2 : int(lmrError >= 64);\n            leviathanProofDebt = std::min(5, leviathanProofDebt + evidenceBoost);\n        }\n\n        if (leviathanTraceReady && leviathanReducedValue != VALUE_NONE)\n            Leviathan::Trace::record_lmr("
+          if s.count(old) != 1:
+              raise SystemExit(f'LMR feedback anchor count {s.count(old)}')
+          s = s.replace(old, new, 1)
+
+          old = "                assert(depth > 0);\n                alpha = value;  // Update alpha! Always alpha < beta"
+          new = "                // Multiple non-cutoff alpha improvements are another direct\n                // ambiguity signal: several siblings are competitive at this node.\n                if (moveCount > 1 && value < beta && !is_decisive(value))\n                    leviathanProofDebt = std::min(5, leviathanProofDebt + 1);\n\n                assert(depth > 0);\n                alpha = value;  // Update alpha! Always alpha < beta"
+          if s.count(old) != 1:
+              raise SystemExit(f'rival feedback anchor count {s.count(old)}')
+          s = s.replace(old, new, 1)
+
+          p.write_text(s)
+          PY
+          git diff --check
+          git diff -- src/search.cpp
+
+      - name: Commit counterexample feedback
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add src/search.cpp
+          git commit -m 'Strength v6.1: feed search counterexamples into proof debt'
+          git push origin HEAD:leviathan/strength-v6-proof-obligation
