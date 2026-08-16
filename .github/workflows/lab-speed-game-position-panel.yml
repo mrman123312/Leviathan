@@ -1,0 +1,126 @@
+name: Leviathan lossless game-position speed panel
+
+on:
+  push:
+    branches: [leviathan/lab-v4-speed-game-panel]
+    paths:
+      - '.github/workflows/lab-speed-game-position-panel.yml'
+      - 'tools/lossless_position_panel.py'
+      - 'experiments/holdouts/sparse_v3_direct_seed910247.fen'
+      - 'experiments/options/active_fundamentals.json'
+      - 'experiments/requirements-chess-hashed.txt'
+      - 'experiments/manifests/speed_game_position_panel.json'
+  workflow_dispatch:
+
+permissions: {contents: read}
+
+concurrency:
+  group: lab-speed-game-position-panel-${{ github.ref }}
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  strict-position-panel:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ github.sha }}
+          path: lab
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: fbccfb6eb5cd335b1ce8fc5c5efad9e36be4e19d
+          path: reference
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: a38620d49cd28d0f1bddd776658dda4b47dd4c96
+          path: p01
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: e157b9332a0c71263b57b39757b22431e3f7f31c
+          path: p013
+      - name: Record immutable provenance
+        run: |
+          set -euo pipefail
+          {
+            echo "runner_image=${ImageOS:-unknown}"
+            echo "runner_image_version=${ImageVersion:-unknown}"
+            uname -a
+            lscpu
+            g++ --version
+            python3 --version
+            for engine in lab reference p01 p013; do
+              git -C "$engine" rev-parse HEAD
+              git -C "$engine" rev-parse 'HEAD^{tree}'
+            done
+            sha256sum lab/tools/lossless_position_panel.py
+            sha256sum lab/experiments/holdouts/sparse_v3_direct_seed910247.fen
+            sha256sum lab/experiments/options/active_fundamentals.json
+            sha256sum lab/experiments/requirements-chess-hashed.txt
+            sha256sum lab/experiments/manifests/speed_game_position_panel.json
+          } | tee provenance.txt
+          for candidate in p01 p013; do
+            set +e
+            diff -ru --exclude='*.nnue' reference/src "$candidate/src" \
+              > "$candidate-source.patch"
+            diff_status=$?
+            set -e
+            if (( diff_status > 1 )); then exit "$diff_status"; fi
+            test -s "$candidate-source.patch"
+          done
+      - name: Install hash-locked chess harness dependency
+        run: |
+          set -euo pipefail
+          PIP_CACHE_DIR="$RUNNER_TEMP/pip-cache" python3 -m pip install \
+            --disable-pip-version-check --require-hashes \
+            -r lab/experiments/requirements-chess-hashed.txt
+          python3 -m pip freeze | sort | tee dependency-freeze.txt
+      - name: Build active reference and both frozen candidates
+        run: |
+          set -euo pipefail
+          make -C reference/src net
+          cp reference/src/nn-ab28990d4ea3.nnue p01/src/
+          cp reference/src/nn-ab28990d4ea3.nnue p013/src/
+          make -C reference/src -j2 ARCH=x86-64-avx2 build
+          mv reference/src/stockfish reference/src/control_a
+          cp reference/src/control_a reference/src/control_b
+          for candidate in p01 p013; do
+            make -C "$candidate/src" -j2 ARCH=x86-64-avx2 build
+            mv "$candidate/src/stockfish" "$candidate/src/$candidate"
+          done
+          sha256sum reference/src/control_a reference/src/control_b p01/src/p01 p013/src/p013 \
+            | tee binary-sha256.txt
+          sha256sum reference/src/nn-ab28990d4ea3.nnue p01/src/nn-ab28990d4ea3.nnue \
+            p013/src/nn-ab28990d4ea3.nnue | tee network-sha256.txt
+      - name: Strict fifty-position calibrated timing panel
+        run: |
+          set -euo pipefail
+          mkdir -p results
+          python3 lab/tools/lossless_position_panel.py \
+            --engine control_a="$GITHUB_WORKSPACE/reference/src/control_a" \
+            --engine control_b="$GITHUB_WORKSPACE/reference/src/control_b" \
+            --engine p01="$GITHUB_WORKSPACE/p01/src/p01" \
+            --engine p013="$GITHUB_WORKSPACE/p013/src/p013" \
+            --options lab/experiments/options/active_fundamentals.json \
+            --positions lab/experiments/holdouts/sparse_v3_direct_seed910247.fen \
+            --count 50 --nodes 60000 --rounds 9 --seed 2026081607 \
+            --output results/lossless-game-position-panel.json \
+            | tee results/lossless-game-position-panel.log
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: lossless-game-position-panel
+          retention-days: 90
+          if-no-files-found: error
+          path: |
+            provenance.txt
+            dependency-freeze.txt
+            *-source.patch
+            binary-sha256.txt
+            network-sha256.txt
+            results/
+

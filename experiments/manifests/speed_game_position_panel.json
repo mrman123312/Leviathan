@@ -1,0 +1,20 @@
+{
+  "schema": "LV_EXPERIMENT_MANIFEST_V1",
+  "id": "W024",
+  "family": "lossless-speed-promotion-gate",
+  "question": "Does the replicated bench gain survive a fixed panel of game positions, and does P3 earn its complexity beyond P01?",
+  "reference_sha": "fbccfb6eb5cd335b1ce8fc5c5efad9e36be4e19d",
+  "candidates": {
+    "p01": "a38620d49cd28d0f1bddd776658dda4b47dd4c96",
+    "p013": "e157b9332a0c71263b57b39757b22431e3f7f31c"
+  },
+  "design": {
+    "positions": 50,
+    "nodes_per_position": 60000,
+    "rounds": 9,
+    "timing": "A/candidate/B drift-corrected corpus sandwiches",
+    "exactness": "Per-position nodes, scores, bounds, depth, seldepth, and full PV are hashed and must match."
+  },
+  "promotion_gate": "A/A must pass. P01 must have a bootstrap lower bound above +0.5% and be faster in at least 7/9 rounds. P3 remains excluded unless P013 materially and consistently exceeds P01."
+}
+
