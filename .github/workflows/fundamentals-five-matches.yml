@@ -1,0 +1,159 @@
+name: Fundamentals v2 — five paired matches vs Stockfish
+
+on:
+  push:
+    branches:
+      - leviathan/fundamentals-v2
+    paths:
+      - '.github/workflows/fundamentals-five-matches.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  match:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout Leviathan Fundamentals v2
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          path: leviathan
+
+      - name: Checkout frozen Stockfish parent
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          repository: official-stockfish/Stockfish
+          ref: 5062aee519a1ba262d472d8ab139851ced56573e
+          path: stockfish
+
+      - name: Install match dependency
+        run: python3 -m pip install --disable-pip-version-check 'python-chess>=1.999,<2'
+
+      - name: Build both AVX2 engines
+        run: |
+          cd "$GITHUB_WORKSPACE/leviathan/src"
+          make net
+          make clean
+          make -j2 ARCH=x86-64-avx2 build
+          mv stockfish stockfish-leviathan
+          cd "$GITHUB_WORKSPACE/stockfish/src"
+          make net
+          make clean
+          make -j2 ARCH=x86-64-avx2 build
+          mv stockfish stockfish-parent
+
+      - name: Configure isolated Fundamentals v2
+        working-directory: leviathan
+        run: |
+          mkdir -p five-match
+          cat > five-match/leviathan-options.json <<'EOF'
+          {
+            "Threads": 1,
+            "Hash": 64,
+            "Leviathan Fundamentals": true,
+            "Leviathan Fundamentals Authority": 2,
+            "Leviathan Forcing Buyback": 384,
+            "Leviathan Recapture Buyback": 256,
+            "Leviathan Passer Buyback": 320,
+            "Leviathan Endgame Buyback": 128,
+            "Leviathan Quiet Overdrive": 160,
+            "Leviathan Rule50 Pawn Bonus": 3072,
+            "Leviathan Zugzwang Guard": true,
+            "Leviathan Sacrifice Rescue": true,
+            "Leviathan Rule50 Pressure": true,
+            "Leviathan Policy": false,
+            "Leviathan MetaSearch": false,
+            "Leviathan Risk": false,
+            "Leviathan Specialist": false,
+            "Leviathan Atlas": false,
+            "Leviathan Search DSL": false
+          }
+          EOF
+          cat > five-match/stockfish-options.json <<'EOF'
+          {
+            "Threads": 1,
+            "Hash": 64
+          }
+          EOF
+
+      - name: Generate five deterministic openings
+        working-directory: leviathan
+        run: |
+          cat > five-match/openings.fen <<'EOF'
+          r1bqkbnr/pppp1ppp/2n5/1B2p3/4P3/5N2/PPPP1PPP/RNBQK2R b KQkq - 3 3
+          rnbqkbnr/pp2pppp/3p4/8/3NP3/8/PPP2PPP/RNBQKB1R b KQkq - 0 4
+          rnbqkb1r/pp2pppp/2p2n2/3p4/2PP4/2N5/PP2PPPP/R1BQKBNR w KQkq - 2 4
+          r1bqk2r/pppp1ppp/2n2n2/1B2p3/4P3/2N2N2/PPPP1PPP/R1BQK2R b KQkq - 5 5
+          rnbq1rk1/pp2bppp/2pp1n2/4p3/2PPP3/2N2N2/PP3PPP/R1BQKB1R w KQ - 3 7
+          EOF
+
+      - name: Verify Fundamentals options are exposed
+        working-directory: leviathan
+        run: |
+          printf 'uci\nquit\n' | ./src/stockfish-leviathan | tee five-match/uci.txt
+          grep -q 'option name Leviathan Fundamentals ' five-match/uci.txt
+          grep -q 'option name Leviathan Fundamentals Authority ' five-match/uci.txt
+
+      - name: Run five paired matches — ten games total
+        working-directory: leviathan
+        run: |
+          python3 tools/run_match.py \
+            --engine-a "$GITHUB_WORKSPACE/leviathan/src/stockfish-leviathan" \
+            --engine-b "$GITHUB_WORKSPACE/stockfish/src/stockfish-parent" \
+            --options-a five-match/leviathan-options.json \
+            --options-b five-match/stockfish-options.json \
+            --openings five-match/openings.fen \
+            --games 10 \
+            --movetime-ms 100 \
+            --max-plies 220 \
+            --out five-match/match.json | tee five-match/match.log
+
+      - name: Summarize five paired matches
+        working-directory: leviathan
+        run: |
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          d=json.loads(Path('five-match/match.json').read_text())
+          games=d['games']
+          pairs=[]
+          for i in range(0,10,2):
+              pair=games[i:i+2]
+              score=sum(g['score_a'] for g in pair)
+              pairs.append({
+                  'match': i//2+1,
+                  'leviathan_points': score,
+                  'game_scores': [g['score_a'] for g in pair],
+                  'results': [g['result'] for g in pair],
+                  'terminations': [g['termination'] for g in pair]
+              })
+          s=d['summary']
+          report={
+              'leviathan_commit':'${{ github.sha }}',
+              'stockfish_commit':'5062aee519a1ba262d472d8ab139851ced56573e',
+              'protocol':'5 paired matches / 10 games; reversed colors; 100 ms/move; 1 thread; 64 MB hash',
+              'configuration':'Fundamentals v2 authority 2 defaults; all learned/other Leviathan organs disabled',
+              'wins':s['wins_a'],
+              'draws':s['draws'],
+              'losses':s['losses_a'],
+              'score':s['score_a'],
+              'paired_matches':pairs
+          }
+          Path('five-match/report.json').write_text(json.dumps(report,indent=2)+'\n')
+          print(json.dumps(report,indent=2))
+          PY
+
+      - name: Archive evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: fundamentals-v2-five-paired-matches
+          path: |
+            leviathan/five-match/match.json
+            leviathan/five-match/match.log
+            leviathan/five-match/report.json
+            leviathan/five-match/openings.fen
+            leviathan/five-match/leviathan-options.json
+            leviathan/five-match/stockfish-options.json
+            leviathan/five-match/uci.txt
+          if-no-files-found: error
