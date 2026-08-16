@@ -1,0 +1,61 @@
+name: Leviathan speed v3 search pawn hoist
+
+on:
+  push:
+    branches: [leviathan/speed-v3-profile]
+    paths: ['.github/workflows/speed-v3-search-pawn-hoist.yml']
+  workflow_dispatch:
+
+permissions: {contents: read}
+
+jobs:
+  exact-speed:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with: {ref: fbccfb6eb5cd335b1ce8fc5c5efad9e36be4e19d, path: candidate}
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with: {ref: fbccfb6eb5cd335b1ce8fc5c5efad9e36be4e19d, path: reference}
+      - name: Hoist search pawn-history row
+        working-directory: candidate
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path('src/search.cpp');s=p.read_text()
+          a='''    int moveCount = 0;\n\n    // Step 13.'''
+          b='''    int moveCount = 0;\n    // The board/pawn key is invariant throughout this move loop.\n    const auto* leviathanPawnEntry = &sharedHistory.pawn_entry(pos);\n\n    // Step 13.'''
+          if s.count(a)!=1:raise SystemExit('loop anchor')
+          s=s.replace(a,b,1)
+          a='''                            + sharedHistory.pawn_entry(pos)[movedPiece][move.to_sq()];'''
+          b='''                            + (*leviathanPawnEntry)[movedPiece][move.to_sq()];'''
+          if a not in s:raise SystemExit('history anchor')
+          p.write_text(s.replace(a,b,1))
+          PY
+      - name: Build
+        run: |
+          cd candidate/src && make net && make -j2 ARCH=x86-64-avx2 build && mv stockfish candidate
+          cd ../../reference/src && make net && make -j2 ARCH=x86-64-avx2 build && mv stockfish reference
+      - name: Exact 21-pair panel
+        run: |
+          python3 - <<'PY' | tee search-pawn-hoist.txt
+          import json,re,statistics,subprocess
+          cfg='setoption name Threads value 1\nsetoption name Hash value 64\nsetoption name Leviathan Fundamentals value true\nsetoption name Leviathan Fundamentals Authority value 2\nsetoption name Leviathan Policy value false\nsetoption name Leviathan MetaSearch value false\nsetoption name Leviathan Risk value false\nsetoption name Leviathan Specialist value false\nsetoption name Leviathan Atlas value false\nsetoption name Leviathan Search DSL value false\n'
+          def R(p):
+            z=subprocess.run([p],input=cfg+'bench\nquit\n',text=True,capture_output=True,check=True);o=z.stdout+z.stderr
+            return {'ms':int(re.findall(r'Total time \(ms\)\s*:\s*(\d+)',o)[-1]),'nodes':int(re.findall(r'Nodes searched\s*:\s*(\d+)',o)[-1])}
+          ref='./reference/src/reference';cand='./candidate/src/candidate';R(ref);R(cand);P=[]
+          for i in range(21):
+            if i%2:c=R(cand);r=R(ref)
+            else:r=R(ref);c=R(cand)
+            if r['nodes']!=c['nodes']:raise SystemExit(f'DIVERGENCE {r} {c}')
+            P.append((r,c));print(i+1,r,c,r['ms']/c['ms'])
+          q=[r['ms']/c['ms'] for r,c in P]
+          out={'nodes':P[0][0]['nodes'],'median_speedup':statistics.median(q),'mean_speedup':statistics.mean(q),'reference_median_ms':statistics.median(r['ms'] for r,c in P),'candidate_median_ms':statistics.median(c['ms'] for r,c in P)}
+          open('search-pawn-hoist.json','w').write(json.dumps(out,indent=2)+'\n');print(json.dumps(out,indent=2))
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: speed-v3-search-pawn-hoist
+          path: |
+            search-pawn-hoist.json
+            search-pawn-hoist.txt
