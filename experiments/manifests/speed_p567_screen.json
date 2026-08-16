@@ -1,0 +1,33 @@
+{
+  "schema": "LV_EXPERIMENT_MANIFEST_V1",
+  "id": "W031",
+  "family": "lossless-speed-independent-branches",
+  "hypothesis": "At least one of single-classification fact reuse, removal of the function-local static guard, or outlining dormant optional organs reduces P01 wall time while preserving its complete normalized search transcript.",
+  "reference_sha": "a38620d49cd28d0f1bddd776658dda4b47dd4c96",
+  "candidates": {
+    "p5_fact_reuse": {
+      "sha": "8af1e6f515eacaae8196f8f75a06d62a302dbf37",
+      "tree": "b4af0fe34b76b314dd8728e725f0f61c321a2059"
+    },
+    "p6_global_state": {
+      "sha": "8f28d37481243114b6789f584f853859b5f4713d",
+      "tree": "81b2d7ded5b8f2008900eaf39c54809a9c4b0c4b"
+    },
+    "p7_cold_outline": {
+      "sha": "e373f88f31b815f5c25b8ff3922f63b47a807ef9",
+      "tree": "3597fee33a114698ed3bf5a95daf583ed4ee89fb"
+    }
+  },
+  "network": "nn-ab28990d4ea3.nnue",
+  "rounds_per_candidate": 31,
+  "gates": [
+    "default transcript and nodes",
+    "depth-11 transcript and nodes",
+    "50k-per-position transcript and nodes",
+    "same-run A/A calibration",
+    "drift-corrected A/candidate/B sandwiches",
+    "bootstrap median interval"
+  ],
+  "promotion": "This is a first hosted component screen. No component is promoted without an independent hosted replication and a fresh game-position timing panel.",
+  "rollback": "Reject any functionally divergent candidate immediately. Reject a calibrated regression; retain an inconclusive candidate only when a concrete cheaper refinement follows from its profile or code-size evidence."
+}

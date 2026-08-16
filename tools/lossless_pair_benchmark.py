@@ -10,6 +10,7 @@ import math
 import os
 import random
 import re
+import resource
 import statistics
 import subprocess
 from pathlib import Path
@@ -38,22 +39,42 @@ def normalize_search_transcript(output: str) -> str:
     return "\n".join(normalized)
 
 
-def run_bench(binary: str, options: dict[str, Any], command: str = "bench") -> dict[str, Any]:
+def run_bench(
+    binary: str,
+    options: dict[str, Any],
+    command: str = "bench",
+    repeats: int = 1,
+) -> dict[str, Any]:
+    usage_before = resource.getrusage(resource.RUSAGE_CHILDREN)
     process = subprocess.run(
         [binary],
-        input=uci_commands(options) + command + "\nquit\n",
+        input=uci_commands(options) + (command + "\n") * repeats + "quit\n",
         text=True,
         capture_output=True,
         check=True,
+    )
+    usage_after = resource.getrusage(resource.RUSAGE_CHILDREN)
+    cpu_ms = 1000.0 * (
+        usage_after.ru_utime
+        + usage_after.ru_stime
+        - usage_before.ru_utime
+        - usage_before.ru_stime
     )
     output = process.stdout + process.stderr
     transcript = normalize_search_transcript(output)
     if not transcript:
         raise SystemExit(f"no normalized search transcript emitted by {binary}")
+    times = [int(value) for value in re.findall(r"Total time \(ms\)\s*:\s*(\d+)", output)]
+    nodes = [int(value) for value in re.findall(r"Nodes searched\s*:\s*(\d+)", output)]
+    if len(times) != repeats or len(nodes) != repeats:
+        raise SystemExit(
+            f"expected {repeats} bench summaries from {binary}, got {len(times)}/{len(nodes)}"
+        )
     return {
-        "ms": int(re.findall(r"Total time \(ms\)\s*:\s*(\d+)", output)[-1]),
-        "nodes": int(re.findall(r"Nodes searched\s*:\s*(\d+)", output)[-1]),
-        "nps": int(re.findall(r"Nodes/second\s*:\s*(\d+)", output)[-1]),
+        "ms": sum(times),
+        "cpu_ms": cpu_ms,
+        "nodes": sum(nodes),
+        "nps": sum(nodes) * 1000 // max(1, sum(times)),
         "behavior_sha256": hashlib.sha256(transcript.encode()).hexdigest(),
         "behavior_lines": len(transcript.splitlines()),
     }
@@ -77,6 +98,8 @@ def main() -> None:
     parser.add_argument("--candidate", required=True)
     parser.add_argument("--options", type=Path, required=True)
     parser.add_argument("--rounds", type=int, default=21)
+    parser.add_argument("--corpus-repeats", type=int, default=1)
+    parser.add_argument("--metric", choices=("wall", "cpu"), default="wall")
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     options = json.loads(args.options.read_text(encoding="utf-8"))
@@ -95,7 +118,7 @@ def main() -> None:
     exact_keys = ("nodes", "behavior_sha256", "behavior_lines")
     for name, binary in engines.items():
         for label, command in commands.items():
-            result = run_bench(binary, options, command)
+            result = run_bench(binary, options, command, args.corpus_repeats)
             signatures[name][label] = {key: result[key] for key in exact_keys}
     reference_signature = signatures["control_a"]
     divergent = {name: value for name, value in signatures.items() if value != reference_signature}
@@ -105,9 +128,10 @@ def main() -> None:
         )
 
     for binary in engines.values():
-        run_bench(binary, options)
+        run_bench(binary, options, repeats=args.corpus_repeats)
 
     observations = {"control_b": [], "candidate": []}
+    metric_key = "ms" if args.metric == "wall" else "cpu_ms"
     rng = random.Random(2026081604)
     for round_index in range(args.rounds):
         order = ["control_b", "candidate"]
@@ -117,22 +141,31 @@ def main() -> None:
         for name in order:
             first = "control_a" if round_index % 2 == 0 else "control_b"
             second = "control_b" if round_index % 2 == 0 else "control_a"
-            before = run_bench(engines[first], options)
-            middle = run_bench(engines[name], options)
-            after = run_bench(engines[second], options)
+            before = run_bench(
+                engines[first], options, repeats=args.corpus_repeats
+            )
+            middle = run_bench(
+                engines[name], options, repeats=args.corpus_repeats
+            )
+            after = run_bench(
+                engines[second], options, repeats=args.corpus_repeats
+            )
             if not all(before[key] == middle[key] == after[key] for key in exact_keys):
                 raise SystemExit(
                     f"FUNCTIONAL DIVERGENCE during timing: {name} {before} {middle} {after}"
                 )
-            ratio = math.sqrt(before["ms"] * after["ms"]) / middle["ms"]
+            ratio = math.sqrt(before[metric_key] * after[metric_key]) / middle[metric_key]
             observations[name].append(
                 {
                     "round": round_index,
                     "reference_first": first,
                     "reference_first_ms": before["ms"],
+                    "reference_first_cpu_ms": before["cpu_ms"],
                     "candidate_ms": middle["ms"],
+                    "candidate_cpu_ms": middle["cpu_ms"],
                     "reference_second": second,
                     "reference_second_ms": after["ms"],
+                    "reference_second_cpu_ms": after["cpu_ms"],
                     "sandwich_speedup": ratio,
                 }
             )
@@ -175,6 +208,8 @@ def main() -> None:
             "image": os.environ.get("ImageOS"),
             "image_version": os.environ.get("ImageVersion"),
             "arch": os.uname().machine,
+            "corpus_repeats": args.corpus_repeats,
+            "timing_metric": args.metric,
         },
         "signatures": signatures,
         "binary_sha256": {

@@ -105,6 +105,7 @@ jobs:
         with:
           name: lab-speed-factorial-v1
           retention-days: 90
+          if-no-files-found: error
           path: |
             environment.txt
             variant-source-sha256.txt

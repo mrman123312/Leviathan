@@ -1,0 +1,43 @@
+name: Leviathan laboratory evidence validation
+
+on:
+  push:
+    branches: [master, 'leviathan/lab-*']
+    paths:
+      - '.github/workflows/lab-*.yml'
+      - 'tools/validate_lab_evidence.py'
+      - 'experiments/manifests/*.json'
+      - 'experiments/WORK_LAB_LEDGER.md'
+  pull_request:
+    paths:
+      - '.github/workflows/lab-*.yml'
+      - 'tools/validate_lab_evidence.py'
+      - 'experiments/manifests/*.json'
+      - 'experiments/WORK_LAB_LEDGER.md'
+  workflow_dispatch:
+
+permissions: {contents: read}
+
+jobs:
+  validate-evidence:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ github.sha }}
+      - name: Validate laboratory provenance rules
+        run: |
+          set -euo pipefail
+          python3 tools/validate_lab_evidence.py --output lab-validation.json \
+            | tee lab-validation.log
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: lab-evidence-validation
+          retention-days: 90
+          if-no-files-found: error
+          path: |
+            lab-validation.json
+            lab-validation.log
+

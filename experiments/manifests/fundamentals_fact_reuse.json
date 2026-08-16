@@ -1,0 +1,13 @@
+{
+  "schema": "LV_EXPERIMENT_MANIFEST_V1",
+  "id": "W030",
+  "family": "lossless-fundamentals-fact-reuse",
+  "question": "Can promotion, recapture, advanced-pawn, check, capture, and protected-scope facts be classified once per move and reused across pruning, SEE rescue, and LMR?",
+  "reference_sha": "a38620d49cd28d0f1bddd776658dda4b47dd4c96",
+  "design": {
+    "exact_workloads": ["active default bench", "depth 11", "50k nodes per bench position"],
+    "timing": "A/A/candidate drift-corrected sandwiches",
+    "local_refinement": "Wall-clock, pinned triple-corpus, and RUSAGE CPU variants were all attempted; every local A/A calibration failed because identical searches received bimodal CPU charges"
+  },
+  "promotion_gate": "Exact signatures are mandatory. Local timing is non-evidence; the frozen candidate advances only to the hosted W031 screen, whose A/A calibration has veto authority."
+}
