@@ -1,0 +1,106 @@
+name: Leviathan v2.1.3 OD288 — 100 games
+
+on:
+  push:
+    branches: [leviathan/fundamentals-v2.1.3-imminent-pawn]
+    paths: ['.github/workflows/v213-od288-100game.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  shard:
+    runs-on: ubuntu-22.04
+    strategy:
+      fail-fast: false
+      matrix: {shard: [0,1,2,3,4]}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with: {ref: 8307ff677e0abcbad446343f00903c361f4ed26c, path: leviathan}
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with: {repository: official-stockfish/Stockfish, ref: 5062aee519a1ba262d472d8ab139851ced56573e, path: stockfish}
+      - run: python3 -m pip install --disable-pip-version-check 'python-chess>=1.999,<2'
+      - name: Build
+        run: |
+          cd leviathan/src && make net && make clean && make -j2 ARCH=x86-64-avx2 build && mv stockfish leviathan
+          cd ../../stockfish/src && make net && make clean && make -j2 ARCH=x86-64-avx2 build && mv stockfish parent
+      - name: Configure and openings
+        working-directory: leviathan
+        env: {SHARD: '${{ matrix.shard }}'}
+        run: |
+          mkdir -p h2h
+          cat > h2h/a.json <<'EOF'
+          {"Threads":1,"Hash":64,"Leviathan Fundamentals":true,"Leviathan Fundamentals Authority":2,"Leviathan Forcing Buyback":384,"Leviathan Recapture Buyback":256,"Leviathan Passer Buyback":320,"Leviathan Endgame Buyback":128,"Leviathan Quiet Overdrive":288,"Leviathan Rule50 Pawn Bonus":3072,"Leviathan Zugzwang Guard":true,"Leviathan Sacrifice Rescue":true,"Leviathan Rule50 Pressure":true,"Leviathan Policy":false,"Leviathan MetaSearch":false,"Leviathan Risk":false,"Leviathan Specialist":false,"Leviathan Atlas":false,"Leviathan Search DSL":false}
+          EOF
+          echo '{"Threads":1,"Hash":64}' > h2h/b.json
+          python3 - <<'PY'
+          import os,random,chess,chess.engine
+          from pathlib import Path
+          sh=int(os.environ['SHARD']); rng=random.Random(8910+sh*100003)
+          sf=chess.engine.SimpleEngine.popen_uci('../stockfish/src/parent'); sf.configure({'Threads':1,'Hash':64})
+          f=[]; seen=set()
+          try:
+            while len(f)<10:
+              b=chess.Board()
+              for _ in range(rng.randint(6,12)):
+                if b.is_game_over(): break
+                I=sf.analyse(b,chess.engine.Limit(nodes=1800),multipv=min(6,b.legal_moves.count())); I=I if isinstance(I,list) else [I]
+                R=[]
+                for z in I:
+                  pv=z.get('pv',[])
+                  if pv:
+                    cp=z['score'].pov(b.turn).score(mate_score=100000); R.append((pv[0],int(cp or 0)))
+                if not R: break
+                best=R[0][1]; V=[z for z in R if best-z[1]<=100] or R[:1]
+                b.push(rng.choices([m for m,_ in V],weights=list(range(len(V),0,-1)),k=1)[0])
+              if b.is_game_over(): continue
+              k=' '.join(b.fen().split()[:4])
+              if k in seen: continue
+              seen.add(k); f.append(b.fen())
+          finally: sf.quit()
+          Path('h2h/openings.fen').write_text('\n'.join(f)+'\n')
+          PY
+      - name: Verify baseline and run 20 games
+        working-directory: leviathan
+        run: |
+          ./src/leviathan bench 2>&1 | tee h2h/bench.txt
+          grep -q '2884956' h2h/bench.txt
+          python3 tools/run_match.py --engine-a "$GITHUB_WORKSPACE/leviathan/src/leviathan" --engine-b "$GITHUB_WORKSPACE/stockfish/src/parent" --options-a h2h/a.json --options-b h2h/b.json --openings h2h/openings.fen --games 20 --movetime-ms 100 --max-plies 220 --out h2h/shard-${{ matrix.shard }}.json | tee h2h/shard-${{ matrix.shard }}.log
+      - uses: actions/upload-artifact@v4
+        with:
+          name: v213-od288-shard-${{ matrix.shard }}
+          path: |
+            leviathan/h2h/shard-${{ matrix.shard }}.json
+            leviathan/h2h/shard-${{ matrix.shard }}.log
+            leviathan/h2h/openings.fen
+
+  aggregate:
+    needs: shard
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/download-artifact@v4
+        with: {pattern: 'v213-od288-shard-*', path: shards}
+      - name: Aggregate
+        run: |
+          python3 - <<'PY'
+          import json,math,statistics
+          from pathlib import Path
+          G=[];S=[]
+          for f in sorted(Path('shards').glob('v213-od288-shard-*/shard-*.json')):
+            d=json.loads(f.read_text()); G+=d['games']; S.append(d['summary'])
+          assert len(G)==100
+          w=sum(g['score_a']==1 for g in G); d=sum(g['score_a']==.5 for g in G); l=sum(g['score_a']==0 for g in G); s=sum(g['score_a'] for g in G)/100
+          elo=lambda x:400*math.log10(x/(1-x)) if 0<x<1 else None
+          P=[sum(G[i+j]['score_a'] for j in (0,1))/2 for i in range(0,100,2)]; se=statistics.stdev(P)/math.sqrt(50); lo=max(.001,s-1.96*se); hi=min(.999,s+1.96*se)
+          W=[g for g in G if g['a_white']]; B=[g for g in G if not g['a_white']]
+          r={'profile':'v2.1.3-imminent-pawn-OD288','commit':'8307ff677e0abcbad446343f00903c361f4ed26c','wins':w,'draws':d,'losses':l,'score':s,'naive_elo':elo(s),'pair_cluster_approx_95pct_elo_interval':[elo(lo),elo(hi)],'white_score':sum(g['score_a'] for g in W)/50,'black_score':sum(g['score_a'] for g in B)/50,'shards':S}
+          Path('report.json').write_text(json.dumps(r,indent=2)+'\n'); Path('all-games.json').write_text(json.dumps({'report':r,'games':G},indent=2)+'\n'); print(json.dumps(r,indent=2))
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: leviathan-v213-od288-100games
+          path: |
+            report.json
+            all-games.json
+            shards/
