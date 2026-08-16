@@ -769,9 +769,9 @@ Value Search::Worker::search(
     StateInfo st;
 
     Key   posKey;
-    Move  move, excludedMove, bestMove;
+    Move  move, excludedMove, bestMove, probCutNearMiss;
     Depth extension, newDepth;
-    Value bestValue, value, eval, maxValue, probCutBeta;
+    Value bestValue, value, eval, maxValue, probCutBeta, probCutNearValue;
     bool  givesCheck, improving, priorCapture, opponentWorsening;
     bool  capture, ttCapture;
     int   priorReduction;
@@ -823,8 +823,10 @@ Value Search::Worker::search(
     assert(0 <= ss->ply && ss->ply < MAX_PLY);
 
     Square prevSq  = ((ss - 1)->currentMove).is_ok() ? ((ss - 1)->currentMove).to_sq() : SQ_NONE;
-    bestMove       = Move::none();
-    priorReduction = (ss - 1)->reduction;
+    bestMove         = Move::none();
+    probCutNearMiss  = Move::none();
+    probCutNearValue = -VALUE_INFINITE;
+    priorReduction   = (ss - 1)->reduction;
     (ss - 1)->reduction = 0;
     ss->statScore       = 0;
     (ss + 2)->cutoffCnt = 0;
@@ -1119,6 +1121,15 @@ Value Search::Worker::search(
                 if (!is_decisive(value))
                     return value - (probCutBeta - beta);
             }
+            // Leviathan strength v5 - ProbCut Near-Miss Memory. A reduced
+            // tactical search that clears beta but not ProbCut's safety margin
+            // is useful evidence even though it has no pruning authority. Keep
+            // the strongest such move for the full search instead of forgetting it.
+            else if (value >= beta && !is_decisive(value) && value > probCutNearValue)
+            {
+                probCutNearValue = value;
+                probCutNearMiss  = move;
+            }
         }
     }
 
@@ -1135,8 +1146,11 @@ moves_loop:  // When in check, search starts here
       (ss - 4)->continuationHistory, (ss - 5)->continuationHistory, (ss - 6)->continuationHistory};
 
 
-    MovePicker mp(pos, ttData.move, depth, &mainHistory, &lowPlyHistory, &captureHistory, contHist,
-                  &sharedHistory, ss->ply);
+    // If the TT has no principal move, reuse the strongest tactical near-proof
+    // that ProbCut already paid to discover. It still receives a normal alpha-beta search.
+    const Move leviathanPreferredMove = ttData.move ? ttData.move : probCutNearMiss;
+    MovePicker mp(pos, leviathanPreferredMove, depth, &mainHistory, &lowPlyHistory, &captureHistory,
+                  contHist, &sharedHistory, ss->ply);
 
     value = bestValue;
 
@@ -1354,6 +1368,13 @@ moves_loop:  // When in check, search starts here
                + (ttData.depth >= depth) * (816 + cutNode * 940);
 
         r += 697;  // Base reduction offset to compensate for other tweaks
+
+        // ProbCut near-miss evidence means this move already survived a reduced
+        // tactical proof attempt above beta. Give that paid-for evidence a bounded
+        // depth buyback when the normal search reaches the same move.
+        if (move == probCutNearMiss)
+            r -= 768;
+
         r -= moveCount * 65;
         r -= std::abs(correctionValue) / 26310;
 
