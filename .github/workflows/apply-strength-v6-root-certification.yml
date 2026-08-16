@@ -1,0 +1,44 @@
+name: Apply strength v6 root certification
+
+on:
+  push:
+    branches:
+      - leviathan/strength-v6-proof-obligation
+    paths:
+      - '.github/workflows/apply-strength-v6-root-certification.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout strength v6
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: leviathan/strength-v6-proof-obligation
+
+      - name: Add root challenger certification time
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('src/search.cpp')
+          s = p.read_text()
+
+          old = "            totalTime *= Leviathan::Control::meta_time_factor(\n              rootDepth, rootDepth - lastBestMoveDepth, rootMoves[0].previousScore, bestValue,\n              totBestMoveChanges, int(nodesEffort), rootMoves.size(), is_decisive(bestValue));\n\n            if (rootMoves.size() == 1)"
+          new = "            totalTime *= Leviathan::Control::meta_time_factor(\n              rootDepth, rootDepth - lastBestMoveDepth, rootMoves[0].previousScore, bestValue,\n              totBestMoveChanges, int(nodesEffort), rootMoves.size(), is_decisive(bestValue));\n\n            // Leviathan strength v6.6 - Root Challenger Certification. A stable\n            // leader is not the same as a certified leader when another root move\n            // remains close. Use the rolling scores already maintained for every\n            // root move to spend more of the existing clock budget on ambiguous\n            // decisions. The normal maximum-time clamp below remains authoritative.\n            if (rootDepth >= 6 && rootMoves.size() > 1 && !is_decisive(bestValue)\n                && rootMoves[0].averageScore != -VALUE_INFINITE)\n            {\n                Value rivalAverage = -VALUE_INFINITE;\n                const usize rivalLimit = std::min(rootMoves.size(), usize(6));\n                for (usize i = 1; i < rivalLimit; ++i)\n                    if (rootMoves[i].averageScore != -VALUE_INFINITE)\n                        rivalAverage = std::max(rivalAverage, rootMoves[i].averageScore);\n\n                if (rivalAverage != -VALUE_INFINITE)\n                {\n                    const int rivalGap = std::max(0, int(rootMoves[0].averageScore - rivalAverage));\n                    const double certification = rivalGap <= 12 ? 1.22\n                                               : rivalGap <= 32 ? 1.14\n                                               : rivalGap <= 64 ? 1.07\n                                                                : 1.0;\n                    totalTime *= certification;\n                }\n            }\n\n            if (rootMoves.size() == 1)"
+          if s.count(old) != 1:
+              raise SystemExit(f'root certification anchor count {s.count(old)}')
+          p.write_text(s.replace(old, new, 1))
+          PY
+          git diff --check
+          git diff -- src/search.cpp
+
+      - name: Commit root certification
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add src/search.cpp
+          git commit -m 'Strength v6.6: certify close root challengers'
+          git push origin HEAD:leviathan/strength-v6-proof-obligation
