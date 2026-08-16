@@ -151,6 +151,31 @@ void update_all_stats(const Position& pos,
                       Move            ttMove,
                       bool            PvNode);
 
+// Leviathan strength v6.5 - Transposition Provenance Shadow.
+// A board key is sufficient for ordinary transpositions, but once a repeated
+// trajectory exists the draw truth can depend on the reversible path. Keep the
+// normal TT namespace untouched for ordinary positions and derive a compact
+// shadow identity only for history-sensitive states.
+inline Key leviathan_tt_key(const Position& pos) {
+    Key base = pos.key();
+    if (!pos.has_repeated())
+        return base;
+
+    const StateInfo* st      = pos.state();
+    const int horizon        = std::min({st->rule50, st->pliesFromNull, 32});
+    Key historySignature     = make_key(0x4C565450524F5601ULL ^ u64(horizon));
+    const StateInfo* current = st;
+
+    for (int i = 0; current && i <= horizon; ++i, current = current->previous)
+    {
+        const u64 repetitionCode = u64(current->repetition + MAX_PLY);
+        const u64 pathSalt = u64(i + 1) * 0x9E3779B97F4A7C15ULL;
+        historySignature ^= make_key(u64(current->key) ^ pathSalt ^ (repetitionCode << 48));
+    }
+
+    return base ^ historySignature;
+}
+
 // Detect shuffling moves in order to limit search explosions
 // Added in #6447 as non-regression, and so its parameters should not be tuned
 bool is_shuffling(Move move, Stack* const ss, const Position& pos) {
@@ -837,7 +862,7 @@ Value Search::Worker::search(
 
     // Step 4. Transposition table lookup
     excludedMove                   = ss->excludedMove;
-    posKey                         = pos.key();
+    posKey                         = leviathan_tt_key(pos);
     auto [ttHit, ttData, ttWriter] = tt.probe(posKey);
     // Need further processing of the saved data
     ss->ttHit    = ttHit;
@@ -941,7 +966,7 @@ Value Search::Worker::search(
                 && !is_decisive(ttData.value))
             {
                 pos.do_move(ttData.move, st);
-                Key nextPosKey                             = pos.key();
+                Key nextPosKey                             = leviathan_tt_key(pos);
                 auto [ttHitNext, ttDataNext, ttWriterNext] = tt.probe(nextPosKey);
                 pos.undo_move(ttData.move);
 
@@ -1903,7 +1928,7 @@ Value Search::Worker::qsearch(Position& pos, Stack* ss, Value alpha, Value beta)
     assert(0 <= ss->ply && ss->ply < MAX_PLY);
 
     // Step 3. Transposition table lookup
-    posKey                         = pos.key();
+    posKey                         = leviathan_tt_key(pos);
     auto [ttHit, ttData, ttWriter] = tt.probe(posKey);
     // Need further processing of the saved data
     ss->ttHit    = ttHit;
