@@ -1606,9 +1606,24 @@ moves_loop:  // When in check, search starts here
                     break;
                 }
 
-                // Reduce other moves if we have found at least one score improvement
+                // Leviathan strength v5 - Rival Preservation.
+                // A tiny alpha improvement is weak evidence that the remaining
+                // siblings deserve a blanket three-ply cut. Scale the reduction
+                // by how convincingly the new move cleared the old alpha.
                 if (depth > 3 && depth < 12 && !is_decisive(value))
-                    depth -= 3;
+                {
+                    const int improvementMargin = int(value - alpha);
+                    int siblingPenalty = improvementMargin >= 96 ? 3
+                                       : improvementMargin >= 32 ? 2
+                                                                 : 1;
+
+                    // PV/TT-PV nodes are exactly where rival ordering can change
+                    // the root decision, so demand one extra level of evidence.
+                    if (PvNode || ss->ttPv)
+                        siblingPenalty = std::max(0, siblingPenalty - 1);
+
+                    depth -= siblingPenalty;
+                }
 
                 assert(depth > 0);
                 alpha = value;  // Update alpha! Always alpha < beta
