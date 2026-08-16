@@ -1,4 +1,4 @@
-# Final V8.1 build trigger at 714feb079755ca8e812ca74ebccde5e29b5b4914
+# Final V8.1 source validation trigger at d640f1892fd2996e38926e564e1dd090bf266682
 name: Leviathan strength v8 build
 
 on:
@@ -20,6 +20,17 @@ jobs:
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
         with:
           ref: leviathan/strength-v8-evidence-lattice
+
+      - name: Source contract invariants
+        run: |
+          test ! $(grep -c 'leviathanNullFragile' src/search.cpp) -gt 0
+          grep -q 'Leviathan::Evidence::State leviathanEvidence' src/search.cpp
+          grep -q 'leviathanWitnessNeedsFullProof' src/search.cpp
+          grep -q 'Kind::EVAL_DISAGREEMENT' src/search.cpp
+          grep -q 'std::min(1.28, leviathanEvidenceFactor \* leviathanRivalFactor)' src/search.cpp
+          grep -q 'PROVENANCE_DOMAIN' src/leviathan_evidence.h
+          grep -q 'SEARCH_DOMAIN' src/leviathan_evidence.h
+          grep -q 'RIVAL_DOMAIN' src/leviathan_evidence.h
 
       - name: Evidence primitive invariants
         run: |
@@ -109,8 +120,9 @@ jobs:
             echo quit
           } | ./stockfish | tee ../strength-v8-nodes-smoke.txt
           grep -q '^bestmove ' ../strength-v8-nodes-smoke.txt
-          ./stockfish bench 16 1 10 default depth | tee ../strength-v8-bench.txt
+          ./stockfish bench 16 1 10 default depth 2>&1 | tee ../strength-v8-bench.txt
           grep -q 'Nodes searched' ../strength-v8-bench.txt
+          grep -q 'Nodes/second' ../strength-v8-bench.txt
 
       - name: Archive V8 evidence
         uses: actions/upload-artifact@v4
