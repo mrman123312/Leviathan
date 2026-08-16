@@ -29,26 +29,28 @@ jobs:
         run: |
           python3 - <<'PY' | tee speed-phase-a.txt
           import json,re,statistics,subprocess
-          cfg='''setoption name Threads value 1
-setoption name Hash value 64
-setoption name Leviathan Fundamentals value true
-setoption name Leviathan Fundamentals Authority value 2
-setoption name Leviathan Forcing Buyback value 384
-setoption name Leviathan Recapture Buyback value 256
-setoption name Leviathan Passer Buyback value 320
-setoption name Leviathan Endgame Buyback value 128
-setoption name Leviathan Quiet Overdrive value 160
-setoption name Leviathan Rule50 Pawn Bonus value 3072
-setoption name Leviathan Zugzwang Guard value true
-setoption name Leviathan Sacrifice Rescue value true
-setoption name Leviathan Rule50 Pressure value true
-setoption name Leviathan Policy value false
-setoption name Leviathan MetaSearch value false
-setoption name Leviathan Risk value false
-setoption name Leviathan Specialist value false
-setoption name Leviathan Atlas value false
-setoption name Leviathan Search DSL value false
-'''
+          lines = [
+              'setoption name Threads value 1',
+              'setoption name Hash value 64',
+              'setoption name Leviathan Fundamentals value true',
+              'setoption name Leviathan Fundamentals Authority value 2',
+              'setoption name Leviathan Forcing Buyback value 384',
+              'setoption name Leviathan Recapture Buyback value 256',
+              'setoption name Leviathan Passer Buyback value 320',
+              'setoption name Leviathan Endgame Buyback value 128',
+              'setoption name Leviathan Quiet Overdrive value 160',
+              'setoption name Leviathan Rule50 Pawn Bonus value 3072',
+              'setoption name Leviathan Zugzwang Guard value true',
+              'setoption name Leviathan Sacrifice Rescue value true',
+              'setoption name Leviathan Rule50 Pressure value true',
+              'setoption name Leviathan Policy value false',
+              'setoption name Leviathan MetaSearch value false',
+              'setoption name Leviathan Risk value false',
+              'setoption name Leviathan Specialist value false',
+              'setoption name Leviathan Atlas value false',
+              'setoption name Leviathan Search DSL value false',
+          ]
+          cfg='\n'.join(lines)+'\n'
           def run(path):
               p=subprocess.run([path],input=cfg+'bench\nquit\n',text=True,capture_output=True,check=True)
               o=p.stdout+p.stderr
@@ -66,7 +68,7 @@ setoption name Leviathan Search DSL value false
               if c['nodes']!=r['nodes']:
                   raise SystemExit(f'FUNCTIONAL DIVERGENCE: ref={r} candidate={c}')
               pairs.append({'reference':r,'candidate':c})
-              print(i+1,r,c, 'speedup',r['ms']/c['ms'])
+              print(i+1,r,c,'speedup',r['ms']/c['ms'])
           speed=[p['reference']['ms']/p['candidate']['ms'] for p in pairs]
           result={'pairs':pairs,
                   'reference_nodes':pairs[0]['reference']['nodes'],
