@@ -19,7 +19,7 @@ jobs:
         mode: [fixed4, historical, modern46, modern35]
     steps:
       - uses: actions/checkout@v4
-        with: {ref: leviathan/fundamentals-ultra-lab, path: lab}
+        with: {ref: '${{ github.sha }}', path: lab}
       - uses: actions/checkout@v4
         with: {ref: leviathan/fundamentals-ultra-v0, path: cand}
       - uses: actions/checkout@v4
