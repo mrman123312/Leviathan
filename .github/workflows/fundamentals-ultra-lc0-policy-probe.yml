@@ -15,9 +15,9 @@ jobs:
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
-        with: {ref: leviathan/fundamentals-ultra-lab, path: lab}
+        with: {ref: '${{ github.sha }}', path: lab}
       - uses: actions/checkout@v4
-        with: {ref: leviathan/fundamentals-ultra-phasefix-qfrontier, path: kernel}
+        with: {ref: leviathan/fundamentals-ultra-p01-qfrontier, path: kernel}
 
       - name: Build current kernel and current Stockfish
         run: |
@@ -40,10 +40,11 @@ jobs:
           sha256sum "$RUNNER_TEMP/lc0/build/release/t1-256x10.pb.gz" | tee lc0-network.sha256
           cat > "$RUNNER_TEMP/lc0-policy" <<EOF
           #!/bin/sh
-          exec "$RUNNER_TEMP/lc0/build/release/lc0-policyhead" --weights="$RUNNER_TEMP/lc0/build/release/t1-256x10.pb.gz" --backend=blas --threads=1
+          exec "$RUNNER_TEMP/lc0/build/release/lc0-policyhead" --weights="$RUNNER_TEMP/lc0/build/release/t1-256x10.pb.gz" --backend=blas
           EOF
           chmod +x "$RUNNER_TEMP/lc0-policy"
           printf 'uci\nquit\n' | "$RUNNER_TEMP/lc0-policy" | tee lc0-uci.txt
+          grep -q '^uciok$' lc0-uci.txt
 
       - name: Generate one balanced 40-position corpus
         run: |
@@ -53,14 +54,14 @@ jobs:
       - name: Compare policy-head proposals to 80k kernel under deep oracle
         run: |
           python3 - <<'PY' | tee policy-probe.log
-          import chess,chess.engine,json,time,statistics
+          import chess,chess.engine,json,time,statistics,os
           KOPT={'Threads':1,'Hash':64,'Leviathan Fundamentals':True,'Leviathan Fundamentals Authority':1,'Leviathan Quiet Overdrive':0}
           SOPT={'Threads':1,'Hash':64}
           K=chess.engine.SimpleEngine.popen_uci('kernel/src/stockfish');K.configure(KOPT)
-          L=chess.engine.SimpleEngine.popen_uci(__import__('os').environ['RUNNER_TEMP']+'/lc0-policy')
-          OB=chess.engine.SimpleEngine.popen_uci(__import__('os').environ['RUNNER_TEMP']+'/sf/src/stockfish');OB.configure(SOPT)
-          OK=chess.engine.SimpleEngine.popen_uci(__import__('os').environ['RUNNER_TEMP']+'/sf/src/stockfish');OK.configure(SOPT)
-          OL=chess.engine.SimpleEngine.popen_uci(__import__('os').environ['RUNNER_TEMP']+'/sf/src/stockfish');OL.configure(SOPT)
+          L=chess.engine.SimpleEngine.popen_uci(os.environ['RUNNER_TEMP']+'/lc0-policy')
+          OB=chess.engine.SimpleEngine.popen_uci(os.environ['RUNNER_TEMP']+'/sf/src/stockfish');OB.configure(SOPT)
+          OK=chess.engine.SimpleEngine.popen_uci(os.environ['RUNNER_TEMP']+'/sf/src/stockfish');OK.configure(SOPT)
+          OL=chess.engine.SimpleEngine.popen_uci(os.environ['RUNNER_TEMP']+'/sf/src/stockfish');OL.configure(SOPT)
           rows=[]
           try:
             for i,x in enumerate(json.load(open('positions.json')),1):
