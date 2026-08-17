@@ -29,24 +29,23 @@ jobs:
       - name: Apply bounded qsearch capture frontier exactly
         run: |
           python3 - <<'PY'
+          import re
           from pathlib import Path
           p=Path('src/search.cpp');s=p.read_text()
-          old='''                if (moveCount > 2)
-                    continue;
-
-                Value futilityValue = futilityBase + PieceValue[pos.piece_on(move.to_sq())];'''
-          new='''                const Value leviathanCaptureCeiling =
-                  futilityBase + PieceValue[pos.piece_on(move.to_sq())];
-
-                // Leviathan Q-frontier: keep Stockfish's two-capture fast path,
-                // but inspect at most two extra captures when their crude material
-                // ceiling is still close enough to alpha to change the decision.
-                if (moveCount > 4 || (moveCount > 2 && leviathanCaptureCeiling < alpha - 48))
-                    continue;
-
-                Value futilityValue = leviathanCaptureCeiling;'''
-          if s.count(old)!=1: raise SystemExit(f'qfrontier anchor count={s.count(old)}')
-          p.write_text(s.replace(old,new,1))
+          pattern=r'''(?m)^(?P<i>\s*)if \(moveCount > 2\)\n(?P=i)    continue;\n\n(?P=i)Value futilityValue = futilityBase \+ PieceValue\[pos\.piece_on\(move\.to_sq\(\)\)\];'''
+          def repl(m):
+              i=m.group('i')
+              return (f'''{i}const Value leviathanCaptureCeiling =\n'''
+                      f'''{i}  futilityBase + PieceValue[pos.piece_on(move.to_sq())];\n\n'''
+                      f'''{i}// Leviathan Q-frontier: keep Stockfish's two-capture fast path,\n'''
+                      f'''{i}// but inspect at most two extra captures when their crude material\n'''
+                      f'''{i}// ceiling is still close enough to alpha to change the decision.\n'''
+                      f'''{i}if (moveCount > 4 || (moveCount > 2 && leviathanCaptureCeiling < alpha - 48))\n'''
+                      f'''{i}    continue;\n\n'''
+                      f'''{i}Value futilityValue = leviathanCaptureCeiling;''')
+          s2,n=re.subn(pattern,repl,s,count=1)
+          if n!=1: raise SystemExit(f'qfrontier regex replacements={n}')
+          p.write_text(s2)
           PY
           git diff --check
           git diff -- src/search.cpp
@@ -62,4 +61,4 @@ jobs:
           git checkout -B '${{ matrix.target }}'
           git add src/search.cpp
           git commit -m 'Ultra: materialize ${{ matrix.label }}'
-          git push --force-with-lease origin HEAD:'${{ matrix.target }}'
+          git push --force origin HEAD:'${{ matrix.target }}'
