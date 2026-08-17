@@ -1,0 +1,96 @@
+name: Fundamentals Ultra Q Frontier Finalists
+
+on:
+  push:
+    branches: [leviathan/fundamentals-ultra-lab]
+    paths: ['.github/workflows/fundamentals-ultra-qfrontier-finalists.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  openings:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+        with: {ref: leviathan/fundamentals-ultra-lab, path: lab}
+      - name: Build current Stockfish and fresh 50-opening holdout
+        run: |
+          git clone -q https://github.com/official-stockfish/Stockfish.git "$RUNNER_TEMP/sf"
+          git -C "$RUNNER_TEMP/sf" checkout -q 5062aee519a1ba262d472d8ab139851ced56573e
+          make -C "$RUNNER_TEMP/sf/src" -j2 ARCH=x86-64-avx2 build
+          python3 -m pip install --disable-pip-version-check chess==1.11.2
+          python3 lab/tools/generate_balanced_openings.py --stockfish "$RUNNER_TEMP/sf/src/stockfish" --output openings.json --count 50 --plies 14 --seed 577215664 --max-abs-cp 100
+          sha256sum openings.json > openings.sha256
+      - uses: actions/upload-artifact@v4
+        with: {name: qf-finalist-openings, path: 'openings.*', retention-days: 30}
+
+  confirm:
+    needs: openings
+    runs-on: ubuntu-22.04
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {label: cap5, cap: 5, margin: 48}
+          - {label: cap5-wide72, cap: 5, margin: 72}
+    steps:
+      - uses: actions/checkout@v4
+        with: {ref: leviathan/fundamentals-ultra-lab, path: lab}
+      - uses: actions/checkout@v4
+        with: {ref: leviathan/fundamentals-ultra-v0, path: cand}
+      - uses: actions/checkout@v4
+        with: {ref: leviathan/fundamentals-ultra-v0, path: base}
+      - uses: actions/download-artifact@v4
+        with: {name: qf-finalist-openings, path: shared}
+      - name: Materialize finalist
+        env: {CAP: '${{ matrix.cap }}', MARGIN: '${{ matrix.margin }}'}
+        run: |
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+          p=Path('cand/src/search.cpp');s=p.read_text();cap=int(os.environ['CAP']);margin=int(os.environ['MARGIN'])
+          old='moveCount > 4 || (moveCount > 2 && leviathanCaptureCeiling < alpha - 48)'
+          new=f'moveCount > {cap} || (moveCount > 2 && leviathanCaptureCeiling < alpha - {margin})'
+          if s.count(old)!=1: raise SystemExit('frontier anchor')
+          p.write_text(s.replace(old,new,1))
+          PY
+          git -C cand diff --check
+          git -C cand diff -- src/search.cpp | tee mutation.patch
+      - name: Build finalist, Ultra-v0, current Stockfish
+        run: |
+          make -C cand/src net && make -C cand/src clean && make -C cand/src -j2 ARCH=x86-64-avx2 build
+          make -C base/src net && make -C base/src clean && make -C base/src -j2 ARCH=x86-64-avx2 build
+          git clone -q https://github.com/official-stockfish/Stockfish.git "$RUNNER_TEMP/sf"
+          git -C "$RUNNER_TEMP/sf" checkout -q 5062aee519a1ba262d472d8ab139851ced56573e
+          make -C "$RUNNER_TEMP/sf/src" -j2 ARCH=x86-64-avx2 build
+          python3 -m pip install --disable-pip-version-check chess==1.11.2
+      - name: 100-game equal-node vs Ultra-v0
+        run: |
+          mkdir nodes
+          python3 lab/tools/fundamentals_tournament.py --candidate "$PWD/cand/src/stockfish" --opponent "$PWD/base/src/stockfish" --candidate-label '${{ matrix.label }}' --opponent-label Ultra-v0 --candidate-fundamentals --opponent-fundamentals --nodes-per-move 100000 --openings-json "$PWD/shared/openings.json" --max-plies 200 --output-dir nodes | tee nodes/match.log
+      - name: 100-game fixed-time vs Ultra-v0
+        run: |
+          mkdir time
+          python3 lab/tools/fundamentals_tournament.py --candidate "$PWD/cand/src/stockfish" --opponent "$PWD/base/src/stockfish" --candidate-label '${{ matrix.label }}' --opponent-label Ultra-v0 --candidate-fundamentals --opponent-fundamentals --move-time-ms 150 --openings-json "$PWD/shared/openings.json" --max-plies 200 --output-dir time | tee time/match.log
+      - name: 100-game fixed-time vs current Stockfish
+        run: |
+          mkdir stockfish
+          python3 lab/tools/fundamentals_tournament.py --candidate "$PWD/cand/src/stockfish" --opponent "$RUNNER_TEMP/sf/src/stockfish" --candidate-label '${{ matrix.label }}' --opponent-label Stockfish-current --candidate-fundamentals --move-time-ms 150 --openings-json "$PWD/shared/openings.json" --max-plies 200 --output-dir stockfish | tee stockfish/match.log
+      - name: 50-position deeper oracle replication
+        run: |
+          python3 lab/tools/oracle_regret.py --candidate "$PWD/cand/src/stockfish" --baseline "$PWD/base/src/stockfish" --oracle "$RUNNER_TEMP/sf/src/stockfish" --openings-json "$PWD/shared/openings.json" --candidate-label '${{ matrix.label }}' --candidate-fundamentals --baseline-fundamentals --choice-nodes 120000 --oracle-nodes 1000000 --output regret.json | tee regret.log
+      - uses: actions/upload-artifact@v4
+        with:
+          name: 'qf-finalist-${{ matrix.label }}'
+          path: |
+            nodes
+            time
+            stockfish
+            regret.json
+            regret.log
+            mutation.patch
+            shared/openings.sha256
+          retention-days: 30
