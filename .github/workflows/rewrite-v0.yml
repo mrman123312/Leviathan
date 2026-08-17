@@ -35,6 +35,35 @@ jobs:
           grep -q 'nodes 197281' <<<"$output"
           grep -q '^bestmove ' <<<"$output"
 
+  deep-correctness-audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install independent chess oracle
+        run: python3 -m pip install --disable-pip-version-check chess==1.11.2
+      - name: Build release audit engine
+        run: |
+          cmake -S rewrite -B rewrite/build-audit -DCMAKE_BUILD_TYPE=Release
+          cmake --build rewrite/build-audit -j2
+      - name: Differential legal-move and perft audit
+        run: |
+          python3 rewrite/tools/differential_audit.py \
+            --engine "$PWD/rewrite/build-audit/leviathan" \
+            --seed 8910 --positions 160 --perft-positions 80 --perft-depth 2
+      - name: Build ASan and UBSan engine
+        shell: bash
+        run: |
+          cmake -S rewrite -B rewrite/build-sanitize \
+            -DCMAKE_BUILD_TYPE=Debug \
+            -DCMAKE_CXX_FLAGS='-fsanitize=address,undefined -fno-omit-frame-pointer' \
+            -DCMAKE_EXE_LINKER_FLAGS='-fsanitize=address,undefined'
+          cmake --build rewrite/build-sanitize -j2
+      - name: Sanitizer self-test
+        env:
+          ASAN_OPTIONS: detect_leaks=1:halt_on_error=1
+          UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
+        run: rewrite/build-sanitize/leviathan --selftest
+
   fathom-donor-smoke:
     runs-on: ubuntu-latest
     steps:
