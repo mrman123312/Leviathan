@@ -1,6 +1,5 @@
 #include "search.h"
 #include <algorithm>
-#include <array>
 #include <cmath>
 
 namespace leviathan {
@@ -35,7 +34,6 @@ bool SearchEngine::has_legal_move(Position& p) const {
 void SearchEngine::initialize_history_state(const Position& root){
     repetition_count_ = {};
     path_has_repeat_ = {};
-
     const size_t horizon=std::min<size_t>(history_.size(),static_cast<size_t>(std::max(0,root.halfmove_clock())+1));
     const size_t begin=history_.size()-horizon;
     int currentCount=0;
@@ -65,16 +63,13 @@ void SearchEngine::push_history_state(const Position& p,int ply){
     history_.push_back(p.key());
 }
 
-void SearchEngine::pop_history_state(){
-    history_.pop_back();
-}
+void SearchEngine::pop_history_state(){ history_.pop_back(); }
 
 uint64_t SearchEngine::context_key(const Position& p,int depth,int ply) const {
     const uint64_t base=p.key();
     const bool rule50Sensitive=p.halfmove_clock()+std::max(0,depth)>=100;
     const bool pathSensitive=ply>=0 && ply<MAX_PLY && path_has_repeat_[ply]!=0;
     if(!rule50Sensitive && !pathSensitive) return base;
-
     uint64_t h=base^0x9E3779B97F4A7C15ULL^(uint64_t(p.halfmove_clock())*0xD6E8FEB86659FD93ULL);
     const size_t horizon=std::min<size_t>(history_.size(),static_cast<size_t>(std::max(0,p.halfmove_clock())+1));
     const size_t begin=history_.size()-horizon;
@@ -93,7 +88,6 @@ int SearchEngine::score_to_tt(int score,int ply){
     if(score<-MATE+1000) return score-ply;
     return score;
 }
-
 int SearchEngine::score_from_tt(int score,int ply){
     if(score>MATE-1000) return score-ply;
     if(score<-MATE+1000) return score+ply;
@@ -105,19 +99,14 @@ void SearchEngine::reward_quiet(Move m,int depth,int ply){
     const int bonus=std::min(2048,32*depth*depth);
     h+=bonus-h*bonus/16384;
     h=std::clamp(h,-16384,16384);
-    if(ply<MAX_PLY){
-        if(!(killers_[ply][0]==m)){
-            killers_[ply][1]=killers_[ply][0];
-            killers_[ply][0]=m;
-        }
+    if(ply<MAX_PLY && !(killers_[ply][0]==m)){
+        killers_[ply][1]=killers_[ply][0];
+        killers_[ply][0]=m;
     }
 }
 
 MoveList SearchEngine::ordered_moves(const Position& p,Move tt_move,int ply,bool captures_only) const {
     MoveList moves=p.pseudo_legal_moves(captures_only);
-    struct ScoredMove { int score=0; Move move{}; };
-    std::array<ScoredMove,MoveList::kCapacity> scored{};
-
     auto move_score=[&](Move m){
         if(m==tt_move&&!tt_move.is_null()) return 1000000;
         int s=0;
@@ -135,18 +124,13 @@ MoveList SearchEngine::ordered_moves(const Position& p,Move tt_move,int ply,bool
         }
         return s;
     };
-
-    for(size_t i=0;i<moves.size();++i) scored[i]=ScoredMove{move_score(moves[i]),moves[i]};
-    std::sort(scored.begin(),scored.begin()+static_cast<std::ptrdiff_t>(moves.size()),
-              [](const ScoredMove& a,const ScoredMove& b){return a.score>b.score;});
-    for(size_t i=0;i<moves.size();++i) moves[i]=scored[i].move;
+    std::sort(moves.begin(),moves.end(),[&](Move a,Move b){return move_score(a)>move_score(b);});
     return moves;
 }
 
 int SearchEngine::quiescence(Position& p,int alpha,int beta,int ply){
     ++nodes_; if(time_up()) return alpha;
     if(ply>=MAX_PLY-1) return evaluator_->evaluate(p).mean_cp;
-
     const Color us=p.side_to_move();
     const bool checked=p.in_check(us);
     if(repetition_count_[ply]>=3) return 0;
@@ -154,27 +138,19 @@ int SearchEngine::quiescence(Position& p,int alpha,int beta,int ply){
         if(checked&&!has_legal_move(p)) return -MATE+ply;
         return 0;
     }
-
     int stand=checked?-INF:evaluator_->evaluate(p).mean_cp;
     if(!checked){
-        // Stand-pat is illegal in stalemate. This fast legal-existence probe is
-        // only paid on fail-high qnodes, where returning beta would otherwise
-        // turn a terminal draw into a fictitious advantage.
         if(stand>=beta){
             if(!has_legal_move(p)) return 0;
             return beta;
         }
         if(stand>alpha) alpha=stand;
     }
-
     int legalCount=0;
     for(Move m:ordered_moves(p,{},ply,!checked)){
         UndoState undo;
         if(!p.make_move(m,undo)) continue;
-        if(p.in_check(us)){
-            p.unmake_move(m,undo);
-            continue;
-        }
+        if(p.in_check(us)){ p.unmake_move(m,undo); continue; }
         ++legalCount;
         push_history_state(p,ply+1);
         int score=-quiescence(p,-beta,-alpha,ply+1);
@@ -192,7 +168,6 @@ int SearchEngine::quiescence(Position& p,int alpha,int beta,int ply){
 int SearchEngine::negamax(Position& p,int depth,int alpha,int beta,int ply){
     ++nodes_; if(time_up()) return alpha;
     if(ply>=MAX_PLY-1) return evaluator_->evaluate(p).mean_cp;
-
     const Color us=p.side_to_move();
     const bool inCheck=p.in_check(us);
     if(repetition_count_[ply]>=3) return 0;
@@ -201,7 +176,6 @@ int SearchEngine::negamax(Position& p,int depth,int alpha,int beta,int ply){
         return 0;
     }
     if(depth<=0) return quiescence(p,alpha,beta,ply);
-
     const uint64_t key=context_key(p,depth,ply);
     const int originalAlpha=alpha;
     Move ttMove{};
@@ -215,19 +189,12 @@ int SearchEngine::negamax(Position& p,int depth,int alpha,int beta,int ply){
             if(e->bound==Bound::Upper&&ttScore<=alpha) return ttScore;
         }
     }
-
     MoveList moves=ordered_moves(p,ttMove,ply,false);
-    int bestScore=-INF;
-    Move best{};
-    int legalCount=0;
-    size_t searchedIndex=0;
+    int bestScore=-INF; Move best{}; int legalCount=0; size_t searchedIndex=0;
     for(Move m:moves){
         UndoState undo;
         if(!p.make_move(m,undo)) continue;
-        if(p.in_check(us)){
-            p.unmake_move(m,undo);
-            continue;
-        }
+        if(p.in_check(us)){ p.unmake_move(m,undo); continue; }
         ++legalCount;
         const bool quiet=!(m.flags&Move::Capture)&&!m.promotion;
         int reduction=0;
@@ -235,45 +202,29 @@ int SearchEngine::negamax(Position& p,int depth,int alpha,int beta,int ply){
             reduction=1;
             if(searchedIndex>=8&&depth>=6) reduction=2;
         }
-
         push_history_state(p,ply+1);
         int score;
-        if(searchedIndex==0){
-            score=-negamax(p,depth-1,-beta,-alpha,ply+1);
-        } else {
+        if(searchedIndex==0) score=-negamax(p,depth-1,-beta,-alpha,ply+1);
+        else {
             const int reducedDepth=std::max(0,depth-1-reduction);
             score=-negamax(p,reducedDepth,-alpha-1,-alpha,ply+1);
-            if(!stopped_&&reduction&&score>alpha)
-                score=-negamax(p,depth-1,-alpha-1,-alpha,ply+1);
-            if(!stopped_&&score>alpha&&score<beta)
-                score=-negamax(p,depth-1,-beta,-alpha,ply+1);
+            if(!stopped_&&reduction&&score>alpha) score=-negamax(p,depth-1,-alpha-1,-alpha,ply+1);
+            if(!stopped_&&score>alpha&&score<beta) score=-negamax(p,depth-1,-beta,-alpha,ply+1);
         }
         pop_history_state();
         p.unmake_move(m,undo);
         if(stopped_) return alpha;
-
         if(score>bestScore){bestScore=score;best=m;}
         if(score>alpha) alpha=score;
         ++searchedIndex;
-        if(alpha>=beta){
-            if(quiet) reward_quiet(m,depth,ply);
-            break;
-        }
+        if(alpha>=beta){ if(quiet) reward_quiet(m,depth,ply); break; }
     }
-
     if(legalCount==0) return inCheck?-MATE+ply:0;
-
     Bound b=Bound::Exact;
     if(bestScore<=originalAlpha) b=Bound::Upper;
     else if(bestScore>=beta) b=Bound::Lower;
-    TTEntry out{};
-    out.key=key;
-    out.score=score_to_tt(bestScore,ply);
-    out.depth=static_cast<int16_t>(depth);
-    out.bound=b;
-    out.best=best;
-    tt_.store(out);
-    ++tt_stores_;
+    TTEntry out{}; out.key=key; out.score=score_to_tt(bestScore,ply); out.depth=static_cast<int16_t>(depth); out.bound=b; out.best=best;
+    tt_.store(out); ++tt_stores_;
     return bestScore;
 }
 
@@ -304,74 +255,41 @@ std::vector<Move> SearchEngine::extract_pv(Position p,int max_len,std::vector<ui
         bool legal=false;
         for(Move x:p.legal_moves()) if(x==m){legal=true;break;}
         if(!legal) break;
-        pv.push_back(m);
-        p.make_move(m);
-        history.push_back(p.key());
+        pv.push_back(m); p.make_move(m); history.push_back(p.key());
     }
     return pv;
 }
 
 SearchReport SearchEngine::search(const Position& root,const SearchLimits& limits,const std::vector<uint64_t>& game_history){
-    nodes_=0;
-    tt_hits_=0;
-    tt_stores_=0;
-    stopped_=false;
+    nodes_=0; tt_hits_=0; tt_stores_=0; stopped_=false;
     history_=game_history;
     if(history_.empty()||history_.back()!=root.key()) history_.push_back(root.key());
     initialize_history_state(root);
-
     use_deadline_=limits.movetime_ms>0;
     if(use_deadline_) deadline_=std::chrono::steady_clock::now()+std::chrono::milliseconds(limits.movetime_ms);
-    const int targetMaxDepth=limits.max_depth>0
-        ?std::min(limits.max_depth,MAX_PLY-1)
-        :(use_deadline_?MAX_PLY-1:5);
-
-    Position work=root;
-    SearchReport report{};
-    int previousScore=0;
+    const int targetMaxDepth=limits.max_depth>0?std::min(limits.max_depth,MAX_PLY-1):(use_deadline_?MAX_PLY-1:5);
+    Position work=root; SearchReport report{}; int previousScore=0;
     for(int depth=1;depth<=targetMaxDepth;++depth){
         int alpha=-INF,beta=INF,window=35;
-        if(depth>=3){
-            alpha=std::max(-INF,previousScore-window);
-            beta=std::min(INF,previousScore+window);
-        }
-
+        if(depth>=3){alpha=std::max(-INF,previousScore-window);beta=std::min(INF,previousScore+window);}
         int score=0;
         while(true){
             score=negamax(work,depth,alpha,beta,0);
             if(stopped_) break;
-            if(score<=alpha&&alpha>-INF){
-                window=std::min(4000,window*2);
-                alpha=std::max(-INF,score-window);
-                beta=std::min(INF,score+window);
-                continue;
-            }
-            if(score>=beta&&beta<INF){
-                window=std::min(4000,window*2);
-                alpha=std::max(-INF,score-window);
-                beta=std::min(INF,score+window);
-                continue;
-            }
+            if(score<=alpha&&alpha>-INF){window=std::min(4000,window*2);alpha=std::max(-INF,score-window);beta=std::min(INF,score+window);continue;}
+            if(score>=beta&&beta<INF){window=std::min(4000,window*2);alpha=std::max(-INF,score-window);beta=std::min(INF,score+window);continue;}
             break;
         }
         if(stopped_) break;
-
         previousScore=score;
         if(const TTEntry* e=tt_.probe(context_key(root,depth,0))) report.best=e->best;
-        report.score=score;
-        report.completed_depth=depth;
-        report.nodes=nodes_;
-        report.tt_hits=tt_hits_;
-        report.tt_stores=tt_stores_;
+        report.score=score; report.completed_depth=depth; report.nodes=nodes_; report.tt_hits=tt_hits_; report.tt_stores=tt_stores_;
         report.pv=extract_pv(root,depth,history_);
     }
     if(report.best.is_null()){
-        auto moves=root.legal_moves();
-        if(!moves.empty()) report.best=moves.front();
+        auto moves=root.legal_moves(); if(!moves.empty()) report.best=moves.front();
     }
-    report.nodes=nodes_;
-    report.tt_hits=tt_hits_;
-    report.tt_stores=tt_stores_;
+    report.nodes=nodes_; report.tt_hits=tt_hits_; report.tt_stores=tt_stores_;
     return report;
 }
 
