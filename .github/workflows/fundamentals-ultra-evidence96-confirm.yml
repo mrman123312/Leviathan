@@ -14,7 +14,7 @@ jobs:
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
-        with: {ref: leviathan/fundamentals-ultra-lab, path: lab}
+        with: {ref: '${{ github.sha }}', path: lab}
       - name: Build current Stockfish and fresh mixed-horizon corpus
         run: |
           git clone -q https://github.com/official-stockfish/Stockfish.git "$RUNNER_TEMP/sf"
@@ -42,7 +42,7 @@ jobs:
         gate: [equal-node, fixed-time, stockfish, oracle]
     steps:
       - uses: actions/checkout@v4
-        with: {ref: leviathan/fundamentals-ultra-lab, path: lab}
+        with: {ref: '${{ github.sha }}', path: lab}
       - uses: actions/checkout@v4
         with: {ref: leviathan/fundamentals-ultra-v0, path: cand}
       - uses: actions/checkout@v4
@@ -54,16 +54,17 @@ jobs:
           python3 - <<'PY'
           from pathlib import Path
           p=Path('cand/src/search.cpp');s=p.read_text()
-          old='''                if (moveCount > 4 || (moveCount > 2 && leviathanCaptureCeiling < alpha - 48))
-                    continue;'''
-          new='''                // No universal upper capture-count cap. After the first four
-                // candidates, demand substantially stronger cheap evidence before
-                // paying SEE/search cost. The candidate is then judged by the same
-                // futility and SEE machinery as earlier captures.
-                if ((moveCount > 2 && leviathanCaptureCeiling < alpha - 48)
-                    || (moveCount > 4 && leviathanCaptureCeiling < alpha + 96))
-                    continue;'''
-          if s.count(old)!=1:raise SystemExit('frontier anchor')
+          old="                if (moveCount > 4 || (moveCount > 2 && leviathanCaptureCeiling < alpha - 48))\n                    continue;"
+          new=(
+              "                // No universal upper capture-count cap. After the first four\n"
+              "                // candidates, demand substantially stronger cheap evidence before\n"
+              "                // paying SEE/search cost. The candidate is then judged by the same\n"
+              "                // futility and SEE machinery as earlier captures.\n"
+              "                if ((moveCount > 2 && leviathanCaptureCeiling < alpha - 48)\n"
+              "                    || (moveCount > 4 && leviathanCaptureCeiling < alpha + 96))\n"
+              "                    continue;"
+          )
+          if s.count(old)!=1:raise SystemExit(f'frontier anchor count={s.count(old)}')
           p.write_text(s.replace(old,new,1))
           PY
           git -C cand diff --check
