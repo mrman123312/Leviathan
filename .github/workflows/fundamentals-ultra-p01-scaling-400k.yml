@@ -1,0 +1,78 @@
+name: Fundamentals Ultra P01 Scaling 400k
+
+on:
+  push:
+    branches: [leviathan/fundamentals-ultra-lab]
+    paths: ['.github/workflows/fundamentals-ultra-p01-scaling-400k.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  shard:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      matrix: {shard: [0,1]}
+    steps:
+      - uses: actions/checkout@v4
+        with: {ref: '${{ github.sha }}', path: lab}
+      - uses: actions/checkout@v4
+        with: {ref: leviathan/fundamentals-ultra-p01-qfrontier, path: p01}
+      - name: Build P01 and current Stockfish
+        run: |
+          make -C p01/src net && make -C p01/src clean && make -C p01/src -j2 ARCH=x86-64-avx2 build
+          git clone -q https://github.com/official-stockfish/Stockfish.git "$RUNNER_TEMP/sf"
+          git -C "$RUNNER_TEMP/sf" checkout -q 5062aee519a1ba262d472d8ab139851ced56573e
+          make -C "$RUNNER_TEMP/sf/src" -j2 ARCH=x86-64-avx2 build
+          python3 -m pip install --disable-pip-version-check chess==1.11.2
+      - name: Generate 25 fresh balanced opening pairs
+        run: |
+          seed=$((707106781 + ${{ matrix.shard }} * 100019))
+          python3 lab/tools/generate_balanced_openings.py --stockfish "$RUNNER_TEMP/sf/src/stockfish" --output openings.json --count 25 --plies 20 --seed "$seed" --max-abs-cp 100
+      - name: 50-game equal-node 400k shard
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir match
+          python3 lab/tools/fundamentals_tournament.py --candidate "$PWD/p01/src/stockfish" --opponent "$RUNNER_TEMP/sf/src/stockfish" --candidate-label Ultra-P01 --opponent-label Stockfish-5062aee5 --candidate-fundamentals --nodes-per-move 400000 --openings-json "$PWD/openings.json" --max-plies 200 --output-dir match | tee match/match.log
+          test -s match/summary.json && test -s match/games.jsonl
+      - uses: actions/upload-artifact@v4
+        with:
+          name: 'p01-scaling400k-${{ matrix.shard }}'
+          path: |
+            match
+            openings.json
+          retention-days: 30
+
+  aggregate:
+    needs: shard
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/download-artifact@v4
+        with: {pattern: 'p01-scaling400k-*', path: shards}
+      - name: Aggregate
+        run: |
+          python3 - <<'PY'
+          import glob,json,math,random,statistics
+          G=[];pairs=[]
+          for d in glob.glob('shards/p01-scaling400k-*'):
+              rows=[json.loads(x) for x in open(d+'/match/games.jsonl') if x.strip()];G+=rows
+              by={}
+              for g in rows:by.setdefault(g['opening'],[]).append(g['candidate_score'])
+              assert len(by)==25 and all(len(v)==2 for v in by.values());pairs += [sum(v)/2 for v in by.values()]
+          assert len(G)==100 and len(pairs)==50
+          score=sum(g['candidate_score'] for g in G)/100;w=sum(g['candidate_score']==1 for g in G);d=sum(g['candidate_score']==.5 for g in G);l=100-w-d
+          rng=random.Random(8910);b=[]
+          for _ in range(50000):b.append(statistics.fmean(rng.choice(pairs) for __ in pairs))
+          b.sort();ci=[b[1250],b[48750]];elo=400*math.log10(score/(1-score)) if 0<score<1 else None
+          out={'schema':'LV_P01_SCALING_400K_V1','games':100,'pairs':50,'wins':w,'draws':d,'losses':l,'score':score,'naive_elo':elo,'pair_bootstrap_95':ci,'rule':'fresh 400k-node equal-budget scaling probe, unchanged P01 and current Stockfish'}
+          json.dump(out,open('aggregate.json','w'),indent=2);print(json.dumps(out,indent=2))
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ultra-p01-scaling400k-aggregate
+          path: aggregate.json
+          retention-days: 30
