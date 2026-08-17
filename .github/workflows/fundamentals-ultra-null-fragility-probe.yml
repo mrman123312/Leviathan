@@ -1,0 +1,91 @@
+name: Fundamentals Ultra Null Fragility Probe
+
+on:
+  push:
+    branches: [leviathan/fundamentals-ultra-lab]
+    paths: ['.github/workflows/fundamentals-ultra-null-fragility-probe.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  openings:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+        with: {ref: '${{ github.sha }}', path: lab}
+      - name: Fresh holdout
+        run: |
+          git clone -q https://github.com/official-stockfish/Stockfish.git "$RUNNER_TEMP/sf"
+          git -C "$RUNNER_TEMP/sf" checkout -q 5062aee519a1ba262d472d8ab139851ced56573e
+          make -C "$RUNNER_TEMP/sf/src" -j2 ARCH=x86-64-avx2 build
+          python3 -m pip install --disable-pip-version-check chess==1.11.2
+          python3 lab/tools/generate_balanced_openings.py --stockfish "$RUNNER_TEMP/sf/src/stockfish" --output openings.json --count 50 --plies 18 --seed 173205080 --max-abs-cp 115
+          sha256sum openings.json > openings.sha256
+      - uses: actions/upload-artifact@v4
+        with: {name: null-fragility-openings, path: 'openings.*', retention-days: 30}
+
+  oracle:
+    needs: openings
+    runs-on: ubuntu-22.04
+    timeout-minutes: 100
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {label: control, threshold: 99999}
+          - {label: null-fragile-160, threshold: 160}
+          - {label: null-fragile-224, threshold: 224}
+    steps:
+      - uses: actions/checkout@v4
+        with: {ref: '${{ github.sha }}', path: lab}
+      - uses: actions/checkout@v4
+        with: {ref: leviathan/fundamentals-ultra-v0, path: cand}
+      - uses: actions/checkout@v4
+        with: {ref: leviathan/fundamentals-ultra-v0, path: base}
+      - uses: actions/download-artifact@v4
+        with: {name: null-fragility-openings, path: shared}
+      - name: Materialize failed-null evidence gate
+        env: {THRESHOLD: '${{ matrix.threshold }}'}
+        run: |
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+          th=int(os.environ['THRESHOLD']); p=Path('cand/src/search.cpp'); s=p.read_text()
+          if th < 90000:
+            reps=[
+              ('bool  capture, ttCapture;', 'bool  capture, ttCapture, leviathanNullFragile;'),
+              ('maxValue      = VALUE_INFINITE;', 'maxValue      = VALUE_INFINITE;\n    leviathanNullFragile = false;'),
+              ('undo_null_move(pos);\n\n        // Do not return unproven mate or TB scores',
+               f'''undo_null_move(pos);\n\n        // A badly failed null search is evidence that losing one tempo changed\n        // the node far more than the static cutoff hypothesis expected. It does\n        // not validate a move; it only marks this node as tempo-fragile.\n        if (depth >= 6 && nullValue < beta && ss->staticEval - nullValue >= {th}\n            && !is_decisive(nullValue))\n            leviathanNullFragile = true;\n\n        // Do not return unproven mate or TB scores'''),
+              ('if (moveCount >= (3 + depth * depth) / (2 - improving))\n                mp.skip_quiet_moves();',
+               'if (!leviathanNullFragile\n                && moveCount >= (3 + depth * depth) / (2 - improving))\n                mp.skip_quiet_moves();')]
+            for a,b in reps:
+              if s.count(a)!=1: raise SystemExit(f'anchor count={s.count(a)} for {a[:60]!r}')
+              s=s.replace(a,b,1)
+            p.write_text(s)
+          PY
+          git -C cand diff --check
+          git -C cand diff -- src/search.cpp | tee mutation.patch
+      - name: Build candidate, baseline and pinned Stockfish
+        run: |
+          make -C cand/src net && make -C cand/src clean && make -C cand/src -j2 ARCH=x86-64-avx2 build
+          make -C base/src net && make -C base/src clean && make -C base/src -j2 ARCH=x86-64-avx2 build
+          git clone -q https://github.com/official-stockfish/Stockfish.git "$RUNNER_TEMP/sf"
+          git -C "$RUNNER_TEMP/sf" checkout -q 5062aee519a1ba262d472d8ab139851ced56573e
+          make -C "$RUNNER_TEMP/sf/src" -j2 ARCH=x86-64-avx2 build
+          python3 -m pip install --disable-pip-version-check chess==1.11.2
+      - name: Hardened oracle-only causal probe
+        run: |
+          python3 lab/tools/oracle_regret.py --candidate "$PWD/cand/src/stockfish" --baseline "$PWD/base/src/stockfish" --oracle "$RUNNER_TEMP/sf/src/stockfish" --openings-json "$PWD/shared/openings.json" --candidate-label '${{ matrix.label }}' --candidate-fundamentals --baseline-fundamentals --choice-nodes 120000 --oracle-nodes 800000 --output regret.json | tee regret.log
+          grep -q 'LV_ISOLATED_ROOT_REGRET_V2' regret.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: 'null-fragility-${{ matrix.label }}'
+          path: |
+            regret.json
+            regret.log
+            mutation.patch
+            shared/openings.sha256
+          retention-days: 30
