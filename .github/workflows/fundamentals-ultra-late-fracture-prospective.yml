@@ -1,0 +1,128 @@
+name: Fundamentals Ultra Late-Fracture Prospective
+
+on:
+  push:
+    branches: [leviathan/fundamentals-ultra-lab]
+    paths: ['.github/workflows/fundamentals-ultra-late-fracture-prospective.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  corpus:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with: {ref: '${{ github.sha }}', path: lab}
+      - name: Generate 150-position later-game prospective corpus
+        run: |
+          git clone -q https://github.com/official-stockfish/Stockfish.git "$RUNNER_TEMP/sf"
+          git -C "$RUNNER_TEMP/sf" checkout -q 5062aee519a1ba262d472d8ab139851ced56573e
+          make -C "$RUNNER_TEMP/sf/src" -j2 ARCH=x86-64-avx2 build
+          python3 -m pip install --disable-pip-version-check chess==1.11.2
+          python3 lab/tools/generate_balanced_openings.py --stockfish "$RUNNER_TEMP/sf/src/stockfish" --output h18.json --count 50 --plies 18 --seed 244948974 --max-abs-cp 120
+          python3 lab/tools/generate_balanced_openings.py --stockfish "$RUNNER_TEMP/sf/src/stockfish" --output h26.json --count 50 --plies 26 --seed 244949021 --max-abs-cp 120
+          python3 lab/tools/generate_balanced_openings.py --stockfish "$RUNNER_TEMP/sf/src/stockfish" --output h34.json --count 50 --plies 34 --seed 244949077 --max-abs-cp 120
+          python3 - <<'PY'
+          import json
+          hs=[json.load(open(p)) for p in ('h18.json','h26.json','h34.json')]
+          for shard in range(5):
+              out=[]
+              for h in hs: out.extend(h[shard*10:(shard+1)*10])
+              open(f'shard{shard}.json','w').write(json.dumps(out,indent=2)+'\n')
+          PY
+          sha256sum shard*.json > corpus.sha256
+      - uses: actions/upload-artifact@v4
+        with:
+          name: late-fracture-corpus
+          path: |
+            shard*.json
+            corpus.sha256
+          retention-days: 30
+
+  collect:
+    needs: corpus
+    runs-on: ubuntu-22.04
+    timeout-minutes: 100
+    strategy:
+      fail-fast: false
+      matrix: {shard: [0, 1, 2, 3, 4]}
+    steps:
+      - uses: actions/checkout@v4
+        with: {ref: '${{ github.sha }}', path: lab}
+      - uses: actions/checkout@v4
+        with: {ref: leviathan/fundamentals-ultra-p01-qfrontier, path: candidate}
+      - uses: actions/download-artifact@v4
+        with: {name: late-fracture-corpus, path: corpus}
+      - name: Build Ultra-P01 and current Stockfish oracle
+        run: |
+          make -C candidate/src net && make -C candidate/src clean && make -C candidate/src -j2 ARCH=x86-64-avx2 build
+          git clone -q https://github.com/official-stockfish/Stockfish.git "$RUNNER_TEMP/sf"
+          git -C "$RUNNER_TEMP/sf" checkout -q 5062aee519a1ba262d472d8ab139851ced56573e
+          make -C "$RUNNER_TEMP/sf/src" -j2 ARCH=x86-64-avx2 build
+          python3 -m pip install --disable-pip-version-check chess==1.11.2
+      - name: Prospective trajectory and independent oracle labels
+        run: |
+          python3 lab/tools/search_error_atlas.py collect \
+            --candidate "$PWD/candidate/src/stockfish" \
+            --oracle "$RUNNER_TEMP/sf/src/stockfish" \
+            --openings-json "$PWD/corpus/shard${{ matrix.shard }}.json" \
+            --candidate-fundamentals \
+            --nodes1 12000 --nodes2 40000 --nodes3 100000 \
+            --oracle-nodes 700000 \
+            --shard-label 'prospective-${{ matrix.shard }}' \
+            --output "rows-${{ matrix.shard }}.json" | tee "collect-${{ matrix.shard }}.log"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: 'late-fracture-rows-${{ matrix.shard }}'
+          path: |
+            rows-${{ matrix.shard }}.json
+            collect-${{ matrix.shard }}.log
+          retention-days: 30
+
+  aggregate:
+    needs: collect
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/download-artifact@v4
+        with: {pattern: 'late-fracture-rows-*', path: rows}
+      - name: Test predeclared late-fracture hypothesis
+        run: |
+          python3 - <<'PY' | tee prospective.log
+          import glob,json,statistics,math
+          R=[]
+          for p in sorted(glob.glob('rows/**/rows-*.json',recursive=True)):
+              R += json.load(open(p))['rows']
+          assert len(R)==150, len(R)
+          def group(r):
+              f=r['features']; s12=bool(f['stable_12']); s23=bool(f['stable_23'])
+              if s12 and s23: return 'stable'
+              if not s12 and s23: return 'early_flip_stabilized'
+              if s12 and not s23: return 'late_fracture'
+              return 'churn'
+          G={k:[] for k in ('stable','early_flip_stabilized','late_fracture','churn')}
+          for r in R:G[group(r)].append(r)
+          stats={}
+          for k,z in G.items():
+              vals=[r['regret_cp'] for r in z]
+              stats[k]={'n':len(z),'mean_regret_cp':statistics.fmean(vals) if vals else None,'median_regret_cp':statistics.median(vals) if vals else None,'max_regret_cp':max(vals) if vals else None,'ge15':sum(v>=15 for v in vals),'ge30':sum(v>=30 for v in vals)}
+          late=G['late_fracture']; other=[r for r in R if group(r)!='late_fracture']
+          lm=statistics.fmean(r['regret_cp'] for r in late) if late else None
+          om=statistics.fmean(r['regret_cp'] for r in other) if other else None
+          total15=sum(r['regret_cp']>=15 for r in R); late15=sum(r['regret_cp']>=15 for r in late)
+          share=len(late)/len(R); capture=late15/total15 if total15 else None
+          # Prospective success requires enough observations to prevent a two-outlier victory.
+          validity=len(late)>=8 and total15>=5
+          effect=bool(validity and lm is not None and om is not None and lm>=3*max(0.25,om) and share<=0.20 and capture>=0.40)
+          out={'schema':'LV_LATE_FRACTURE_PROSPECTIVE_V1','positions':len(R),'group_stats':stats,'late_fraction':share,'total_ge15':total15,'late_ge15_capture_rate':capture,'late_vs_other_mean_ratio':None if lm is None or om is None else lm/max(0.001,om),'validity_min_late8_and_errors5':validity,'prospective_pass':effect,'rule':'late fracture = same move at 12k and 40k, different move at 100k; thresholds fixed before this corpus was generated'}
+          json.dump(out,open('prospective.json','w'),indent=2,sort_keys=True);print(json.dumps(out,indent=2,sort_keys=True))
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: late-fracture-prospective-result
+          path: |
+            prospective.json
+            prospective.log
+          retention-days: 30
