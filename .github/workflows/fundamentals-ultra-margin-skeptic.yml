@@ -1,0 +1,107 @@
+name: Fundamentals Ultra Margin Skeptic
+
+on:
+  push:
+    branches: [leviathan/fundamentals-ultra-lab]
+    paths: ['.github/workflows/fundamentals-ultra-margin-skeptic.yml']
+
+permissions:
+  contents: write
+
+jobs:
+  materialize-and-test:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+        with: {ref: leviathan/fundamentals-v2.1, path: cand, fetch-depth: 0}
+      - uses: actions/checkout@v4
+        with: {ref: leviathan/fundamentals-v2.1, path: base}
+      - uses: actions/checkout@v4
+        with: {ref: leviathan/fundamentals-ultra-lab, path: lab}
+      - name: Apply isolated Margin Skeptic
+        working-directory: cand
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path('src/search.cpp');s=p.read_text()
+          anchor='''                // Post LMR continuation history updates
+                update_continuation_histories(ss, movedPiece, move.to_sq(), 1334);
+            }
+        }
+
+        // Step 18. Full-depth search when LMR is skipped
+'''
+          replacement='''                // Post LMR continuation history updates
+                update_continuation_histories(ss, movedPiece, move.to_sq(), 1334);
+            }
+            // Leviathan Margin Skeptic: if a genuinely reduced quiet branch
+            // misses alpha only narrowly, reduction uncertainty may be larger
+            // than the apparent fail-low margin. Re-open only the bounded
+            // near-boundary cases instead of globally reducing LMR.
+            else if (d < newDepth && depth >= 6 && moveCount <= 10 && !capture && !givesCheck
+                     && value >= alpha - (18 + 3 * std::min(int(depth), 12))
+                     && (PvNode || ss->ttPv
+                         || Leviathan::Fundamentals::quiet_tactical_tension(
+                           pos, move, capture, givesCheck)))
+            {
+                leviathanResearched = true;
+                value = -search<NonPV>(pos, ss + 1, -(alpha + 1), -alpha, newDepth, !cutNode);
+
+                if (value > alpha)
+                    update_continuation_histories(ss, movedPiece, move.to_sq(), 1334);
+            }
+        }
+
+        // Step 18. Full-depth search when LMR is skipped
+'''
+          if s.count(anchor)!=1:raise SystemExit(f'anchor={s.count(anchor)}')
+          p.write_text(s.replace(anchor,replacement,1))
+          PY
+          git diff --check
+      - name: Build engines and pinned Stockfish
+        run: |
+          make -C cand/src net && make -C cand/src clean && make -C cand/src -j2 ARCH=x86-64-avx2 build
+          make -C base/src net && make -C base/src clean && make -C base/src -j2 ARCH=x86-64-avx2 build
+          git clone https://github.com/official-stockfish/Stockfish.git "$RUNNER_TEMP/sf"
+          git -C "$RUNNER_TEMP/sf" checkout 5062aee519a1ba262d472d8ab139851ced56573e
+          make -C "$RUNNER_TEMP/sf/src" -j2 ARCH=x86-64-avx2 build
+          python3 -m pip install --disable-pip-version-check chess==1.11.2
+      - name: Recreate exact balanced corpus
+        run: |
+          python3 lab/tools/generate_balanced_openings.py --stockfish "$RUNNER_TEMP/sf/src/stockfish" --output openings.json --count 50 --plies 8 --seed 8910 --max-abs-cp 80
+          test "$(sha256sum openings.json | cut -d' ' -f1)" = '444b13d062e5aa38e72f6ffc5a2f3aa8daf92d4b6712a2d40646c857b51795da'
+      - name: Equal-time A/B
+        run: |
+          mkdir -p time
+          python3 lab/tools/fundamentals_tournament.py --candidate "$PWD/cand/src/stockfish" --opponent "$PWD/base/src/stockfish" --candidate-label margin-skeptic --opponent-label fundamentals-v2.1 --candidate-fundamentals --opponent-fundamentals --move-time-ms 100 --openings-json openings.json --max-plies 180 --output-dir time | tee time/match.log
+      - name: Equal-node A/B
+        run: |
+          mkdir -p nodes
+          python3 lab/tools/fundamentals_tournament.py --candidate "$PWD/cand/src/stockfish" --opponent "$PWD/base/src/stockfish" --candidate-label margin-skeptic --opponent-label fundamentals-v2.1 --candidate-fundamentals --opponent-fundamentals --nodes-per-move 80000 --openings-json openings.json --max-plies 180 --output-dir nodes | tee nodes/match.log
+      - name: Stockfish confirmation
+        run: |
+          mkdir -p stockfish
+          python3 lab/tools/fundamentals_tournament.py --candidate "$PWD/cand/src/stockfish" --opponent "$RUNNER_TEMP/sf/src/stockfish" --candidate-label margin-skeptic --opponent-label Stockfish-5062aee5 --candidate-fundamentals --move-time-ms 100 --openings-json openings.json --max-plies 180 --output-dir stockfish | tee stockfish/match.log
+      - name: Deep-oracle regret
+        run: |
+          python3 lab/tools/oracle_regret.py --candidate "$PWD/cand/src/stockfish" --baseline "$PWD/base/src/stockfish" --oracle "$RUNNER_TEMP/sf/src/stockfish" --openings-json openings.json --candidate-label margin-skeptic --candidate-fundamentals --baseline-fundamentals --choice-nodes 80000 --oracle-nodes 500000 --output regret.json | tee regret.log
+      - name: Publish candidate only if build/test completed
+        working-directory: cand
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git checkout -B leviathan/fundamentals-ultra-margin-skeptic
+          git add src/search.cpp
+          git commit -m 'Ultra: isolate Margin Skeptic on Fundamentals v2.1'
+          git push --force origin HEAD:leviathan/fundamentals-ultra-margin-skeptic
+      - uses: actions/upload-artifact@v4
+        with:
+          name: fundamentals-ultra-margin-skeptic
+          path: |
+            time
+            nodes
+            stockfish
+            regret.json
+            regret.log
+            openings.json
+          retention-days: 30
