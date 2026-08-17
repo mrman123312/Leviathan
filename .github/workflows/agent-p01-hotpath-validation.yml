@@ -1,0 +1,105 @@
+name: P01 lossless hot-path validation
+
+on:
+  push:
+    branches:
+      - agent/p01-lossless-hotpath-v2
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout candidate
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          path: candidate
+          fetch-depth: 1
+
+      - name: Checkout exact P01 baseline
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: 3404fa2ea9b4fe75236e2584be9da3416e646ec2
+          path: base
+          fetch-depth: 1
+
+      - name: Build AVX2 binaries
+        run: |
+          cd base/src
+          make net
+          make -j2 ARCH=x86-64-avx2 build
+          mv stockfish p01-base
+          cd ../../candidate/src
+          make net
+          make -j2 ARCH=x86-64-avx2 build
+          mv stockfish p01-candidate
+
+      - name: Verify exact node-equivalence with Fundamentals active
+        run: |
+          LEVIATHAN_FUNDAMENTALS=1 LEVIATHAN_FUNDAMENTALS_AUTHORITY=1 ./base/src/p01-base bench 2>&1 | tee base-active.txt
+          LEVIATHAN_FUNDAMENTALS=1 LEVIATHAN_FUNDAMENTALS_AUTHORITY=1 ./candidate/src/p01-candidate bench 2>&1 | tee candidate-active.txt
+          grep 'Nodes searched' base-active.txt | tail -1 > base-nodes.txt
+          grep 'Nodes searched' candidate-active.txt | tail -1 > candidate-nodes.txt
+          echo 'BASE:'; cat base-nodes.txt
+          echo 'CANDIDATE:'; cat candidate-nodes.txt
+          diff -u base-nodes.txt candidate-nodes.txt
+
+      - name: Interleaved active-throughput panel
+        run: |
+          python3 - <<'PY'
+          import json, os, re, statistics, subprocess
+          from pathlib import Path
+
+          base = './base/src/p01-base'
+          cand = './candidate/src/p01-candidate'
+          env = os.environ.copy()
+          env['LEVIATHAN_FUNDAMENTALS'] = '1'
+          env['LEVIATHAN_FUNDAMENTALS_AUTHORITY'] = '1'
+
+          def one(path):
+              p = subprocess.run([path, 'bench'], text=True, stdout=subprocess.PIPE,
+                                 stderr=subprocess.STDOUT, env=env, check=True)
+              t = int(re.findall(r'Total time \(ms\)\s*:\s*(\d+)', p.stdout)[-1])
+              n = int(re.findall(r'Nodes searched\s*:\s*(\d+)', p.stdout)[-1])
+              return t, n
+
+          samples = {'base': [], 'candidate': []}
+          for i in range(20):
+              order = [('base', base), ('candidate', cand)] if i % 2 == 0 else [('candidate', cand), ('base', base)]
+              for name, path in order:
+                  samples[name].append(one(path))
+
+          bn = {n for _, n in samples['base']}
+          cn = {n for _, n in samples['candidate']}
+          if len(bn) != 1 or len(cn) != 1 or bn != cn:
+              raise SystemExit(f'node mismatch in panel: base={bn} candidate={cn}')
+
+          bt = [t for t, _ in samples['base']]
+          ct = [t for t, _ in samples['candidate']]
+          report = {
+              'runs_per_binary': 20,
+              'nodes': next(iter(bn)),
+              'base_median_ms': statistics.median(bt),
+              'candidate_median_ms': statistics.median(ct),
+              'base_mean_ms': statistics.mean(bt),
+              'candidate_mean_ms': statistics.mean(ct),
+              'median_speedup_ratio_base_over_candidate': statistics.median(bt) / statistics.median(ct),
+              'mean_speedup_ratio_base_over_candidate': statistics.mean(bt) / statistics.mean(ct),
+              'base_times_ms': bt,
+              'candidate_times_ms': ct,
+          }
+          Path('hotpath-report.json').write_text(json.dumps(report, indent=2) + '\n')
+          print(json.dumps(report, indent=2))
+          PY
+
+      - name: Archive report
+        uses: actions/upload-artifact@v4
+        with:
+          name: p01-lossless-hotpath-${{ github.sha }}
+          path: |
+            hotpath-report.json
+            base-active.txt
+            candidate-active.txt
