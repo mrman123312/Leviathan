@@ -1,0 +1,85 @@
+name: Fundamentals Ultra Stars Margin Skeptic
+
+on:
+  push:
+    branches: [leviathan/fundamentals-ultra-lab]
+    paths: ['.github/workflows/fundamentals-ultra-stars-margin-skeptic.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  screen:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 70
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {label: skeptic-qf48, cap: 4, margin: 48}
+          - {label: skeptic-tight32, cap: 4, margin: 32}
+          - {label: skeptic-cap5-64, cap: 5, margin: 64}
+    steps:
+      - uses: actions/checkout@v4
+        with: {ref: leviathan/fundamentals-ultra-lab, path: lab}
+      - uses: actions/checkout@v4
+        with: {ref: leviathan/fundamentals-ultra-phasefix-qfrontier, path: cand}
+      - uses: actions/checkout@v4
+        with: {ref: leviathan/fundamentals-ultra-phasefix-qfrontier, path: base}
+
+      - name: Materialize Margin Skeptic with its minimal dependency
+        env:
+          CAP: '${{ matrix.cap }}'
+          MARGIN: '${{ matrix.margin }}'
+        run: |
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+          cap=int(os.environ['CAP']); margin=int(os.environ['MARGIN'])
+          p=Path('cand/src/search.cpp');s=p.read_text()
+          old='moveCount > 4 || (moveCount > 2 && leviathanCaptureCeiling < alpha - 48)'
+          new=f'moveCount > {cap} || (moveCount > 2 && leviathanCaptureCeiling < alpha - {margin})'
+          if s.count(old)!=1: raise SystemExit('QF anchor')
+          s=s.replace(old,new,1)
+          anchor='''                // Post LMR continuation history updates\n                update_continuation_histories(ss, movedPiece, move.to_sq(), 1334);\n            }\n        }\n\n        // Step 18. Full-depth search when LMR is skipped\n'''
+          repl='''                // Post LMR continuation history updates\n                update_continuation_histories(ss, movedPiece, move.to_sq(), 1334);\n            }\n            // Margin Skeptic: near-alpha reduced quiet fail-lows carry search debt.\n            else if (d < newDepth && depth >= 6 && moveCount <= 10 && !capture && !givesCheck\n                     && value >= alpha - (18 + 3 * std::min(int(depth), 12))\n                     && (PvNode || ss->ttPv\n                         || Leviathan::Fundamentals::quiet_tactical_tension(\n                           pos, move, capture, givesCheck)))\n            {\n                leviathanResearched = true;\n                value = -search<NonPV>(pos, ss + 1, -(alpha + 1), -alpha, newDepth, !cutNode);\n                if (value > alpha)\n                    update_continuation_histories(ss, movedPiece, move.to_sq(), 1334);\n            }\n        }\n\n        // Step 18. Full-depth search when LMR is skipped\n'''
+          if s.count(anchor)!=1: raise SystemExit('skeptic anchor')
+          p.write_text(s.replace(anchor,repl,1))
+
+          h=Path('cand/src/leviathan_fundamentals.h');t=h.read_text()
+          marker='''inline bool precision_king_move(const Position& pos, Move move, bool capture, bool givesCheck) {'''
+          helper='''// Post-move quiet tactical tension: the moved non-pawn remains attacked.\n// This is a candidate-preservation fact, not an evaluation bonus.\ninline bool quiet_tactical_tension(const Position& pos,\n                                   Move move,\n                                   bool capture,\n                                   bool givesCheck) {\n    if (capture || givesCheck)\n        return false;\n    Piece pc = moving_piece(pos, move);\n    if (pc == NO_PIECE || type_of(pc) == PAWN || type_of(pc) == KING)\n        return false;\n    Color us = color_of(pc);\n    return pos.attackers_to_exist(move.to_sq(), pos.pieces(), ~us);\n}\n\n'''
+          if 'quiet_tactical_tension(' not in t:
+              if t.count(marker)!=1: raise SystemExit('helper marker')
+              t=t.replace(marker,helper+marker,1)
+          h.write_text(t)
+          PY
+          git -C cand diff --check
+          git -C cand diff -- src/search.cpp src/leviathan_fundamentals.h | tee mutation.patch
+
+      - name: Build candidate, kernel, and current Stockfish
+        run: |
+          make -C cand/src net && make -C cand/src clean && make -C cand/src -j2 ARCH=x86-64-avx2 build
+          make -C base/src net && make -C base/src clean && make -C base/src -j2 ARCH=x86-64-avx2 build
+          git clone -q https://github.com/official-stockfish/Stockfish.git "$RUNNER_TEMP/sf"
+          git -C "$RUNNER_TEMP/sf" checkout -q 5062aee519a1ba262d472d8ab139851ced56573e
+          make -C "$RUNNER_TEMP/sf/src" -j2 ARCH=x86-64-avx2 build
+          python3 -m pip install --disable-pip-version-check chess==1.11.2
+      - name: Fresh balanced corpus
+        run: python3 lab/tools/generate_balanced_openings.py --stockfish "$RUNNER_TEMP/sf/src/stockfish" --output openings.json --count 30 --plies 10 --seed 17082028 --max-abs-cp 90
+      - name: Equal-node screen
+        run: |
+          mkdir nodes
+          python3 lab/tools/fundamentals_tournament.py --candidate "$PWD/cand/src/stockfish" --opponent "$PWD/base/src/stockfish" --candidate-label '${{ matrix.label }}' --opponent-label ultra-kernel --candidate-fundamentals --opponent-fundamentals --nodes-per-move 60000 --openings-json openings.json --max-plies 180 --output-dir nodes | tee nodes/match.log
+      - name: Fixed-time screen
+        run: |
+          mkdir time
+          python3 lab/tools/fundamentals_tournament.py --candidate "$PWD/cand/src/stockfish" --opponent "$PWD/base/src/stockfish" --candidate-label '${{ matrix.label }}' --opponent-label ultra-kernel --candidate-fundamentals --opponent-fundamentals --move-time-ms 100 --openings-json openings.json --max-plies 180 --output-dir time | tee time/match.log
+      - name: Deep-oracle regret
+        run: python3 lab/tools/oracle_regret.py --candidate "$PWD/cand/src/stockfish" --baseline "$PWD/base/src/stockfish" --oracle "$RUNNER_TEMP/sf/src/stockfish" --openings-json openings.json --candidate-label '${{ matrix.label }}' --candidate-fundamentals --baseline-fundamentals --choice-nodes 80000 --oracle-nodes 500000 --output regret.json | tee regret.log
+      - uses: actions/upload-artifact@v4
+        with:
+          name: 'ultra-margin-${{ matrix.label }}'
+          path: [nodes, time, regret.json, regret.log, openings.json, mutation.patch]
+          retention-days: 30
