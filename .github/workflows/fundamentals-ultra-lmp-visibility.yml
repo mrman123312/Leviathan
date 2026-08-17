@@ -1,0 +1,83 @@
+name: Fundamentals Ultra LMP Visibility
+
+on:
+  push:
+    branches: [leviathan/fundamentals-ultra-lab]
+    paths: ['.github/workflows/fundamentals-ultra-lmp-visibility.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  screen:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 85
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {label: control, mode: control, divisor: 8192}
+          - {label: scope-visible, mode: scope, divisor: 8192}
+          - {label: history4k, mode: history, divisor: 4096}
+          - {label: history8k, mode: history, divisor: 8192}
+          - {label: history16k, mode: history, divisor: 16384}
+    steps:
+      - uses: actions/checkout@v4
+        with: {ref: leviathan/fundamentals-ultra-lab, path: lab}
+      - uses: actions/checkout@v4
+        with: {ref: leviathan/fundamentals-ultra-v0, path: cand}
+      - uses: actions/checkout@v4
+        with: {ref: leviathan/fundamentals-ultra-v0, path: base}
+      - name: Materialize visibility/history LMP candidate
+        if: matrix.mode != 'control'
+        env: {MODE: '${{ matrix.mode }}', DIVISOR: '${{ matrix.divisor }}'}
+        run: |
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+          p=Path('cand/src/search.cpp');s=p.read_text();mode=os.environ['MODE'];div=int(os.environ['DIVISOR'])
+          early='''            // Skip quiet moves if movecount exceeds our threshold\n            if (moveCount >= (3 + depth * depth) / (2 - improving))\n                mp.skip_quiet_moves();\n\n            // Reduced depth of the next LMR search'''
+          if s.count(early)!=1: raise SystemExit('early LMP anchor')
+          s=s.replace(early,'''            // Leviathan visibility experiment: do not globally hide the remaining\n            // quiet stage before move-local evidence and protected scope can be evaluated.\n\n            // Reduced depth of the next LMR search''',1)
+          anchor='''                int history = (*contHist[0])[movedPiece][move.to_sq()]\n                            + (*contHist[1])[movedPiece][move.to_sq()]\n                            + sharedHistory.pawn_entry(pos)[movedPiece][move.to_sq()];\n\n                // Continuation history based pruning'''
+          if mode=='scope':
+              insert='''                int history = (*contHist[0])[movedPiece][move.to_sq()]\n                            + (*contHist[1])[movedPiece][move.to_sq()]\n                            + sharedHistory.pawn_entry(pos)[movedPiece][move.to_sq()];\n\n                const int leviathanLmpLimit = (3 + depth * depth) / (2 - improving);\n                if (!leviathanScopeProtected && moveCount >= leviathanLmpLimit)\n                    continue;\n\n                // Continuation history based pruning'''
+          else:
+              insert=f'''                int history = (*contHist[0])[movedPiece][move.to_sq()]\n                            + (*contHist[1])[movedPiece][move.to_sq()]\n                            + sharedHistory.pawn_entry(pos)[movedPiece][move.to_sq()];\n\n                // PlentyChess-inspired evidence frontier: good local history can buy\n                // a tiny amount of LMP scope; bad history can close it earlier.\n                const int leviathanBaseLmp = (3 + depth * depth) / (2 - improving);\n                const int leviathanHistoryScope = std::clamp(history / {div}, -2, 3);\n                const int leviathanLmpLimit = std::max(1, leviathanBaseLmp + leviathanHistoryScope);\n                if (!leviathanScopeProtected && moveCount >= leviathanLmpLimit)\n                    continue;\n\n                // Continuation history based pruning'''
+          if s.count(anchor)!=1: raise SystemExit('history anchor')
+          p.write_text(s.replace(anchor,insert,1))
+          PY
+          git -C cand diff --check
+          git -C cand diff -- src/search.cpp | tee mutation.patch
+      - name: Build engines and current Stockfish
+        run: |
+          make -C cand/src net && make -C cand/src clean && make -C cand/src -j2 ARCH=x86-64-avx2 build
+          make -C base/src net && make -C base/src clean && make -C base/src -j2 ARCH=x86-64-avx2 build
+          git clone -q https://github.com/official-stockfish/Stockfish.git "$RUNNER_TEMP/sf"
+          git -C "$RUNNER_TEMP/sf" checkout -q 5062aee519a1ba262d472d8ab139851ced56573e
+          make -C "$RUNNER_TEMP/sf/src" -j2 ARCH=x86-64-avx2 build
+          python3 -m pip install --disable-pip-version-check chess==1.11.2
+      - name: Fresh holdout
+        run: python3 lab/tools/generate_balanced_openings.py --stockfish "$RUNNER_TEMP/sf/src/stockfish" --output openings.json --count 30 --plies 14 --seed 271828182 --max-abs-cp 110
+      - name: 60 equal-node games
+        run: |
+          mkdir nodes
+          python3 lab/tools/fundamentals_tournament.py --candidate "$PWD/cand/src/stockfish" --opponent "$PWD/base/src/stockfish" --candidate-label '${{ matrix.label }}' --opponent-label ultra-v0 --candidate-fundamentals --opponent-fundamentals --nodes-per-move 80000 --openings-json openings.json --max-plies 180 --output-dir nodes | tee nodes/match.log
+      - name: 60 fixed-time games
+        run: |
+          mkdir time
+          python3 lab/tools/fundamentals_tournament.py --candidate "$PWD/cand/src/stockfish" --opponent "$PWD/base/src/stockfish" --candidate-label '${{ matrix.label }}' --opponent-label ultra-v0 --candidate-fundamentals --opponent-fundamentals --move-time-ms 100 --openings-json openings.json --max-plies 180 --output-dir time | tee time/match.log
+      - name: Deep-oracle regret
+        run: python3 lab/tools/oracle_regret.py --candidate "$PWD/cand/src/stockfish" --baseline "$PWD/base/src/stockfish" --oracle "$RUNNER_TEMP/sf/src/stockfish" --openings-json openings.json --candidate-label '${{ matrix.label }}' --candidate-fundamentals --baseline-fundamentals --choice-nodes 100000 --oracle-nodes 600000 --output regret.json | tee regret.log
+      - uses: actions/upload-artifact@v4
+        with:
+          name: 'ultra-lmp-${{ matrix.label }}'
+          path: |
+            nodes
+            time
+            regret.json
+            regret.log
+            openings.json
+            mutation.patch
+          retention-days: 30
