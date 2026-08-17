@@ -31,6 +31,19 @@ static const char* wdl_name(Wdl wdl){
     return "unknown";
 }
 
+static bool undo_roundtrip(Position p){
+    const std::string originalFen=p.fen();
+    const uint64_t originalKey=p.key();
+    const auto moves=p.legal_moves();
+    for(Move m:moves){
+        UndoState undo;
+        if(!p.make_move(m,undo)) return false;
+        p.unmake_move(m,undo);
+        if(p.fen()!=originalFen || p.key()!=originalKey) return false;
+    }
+    return true;
+}
+
 static bool selftest(){
     Position start=Position::startpos();
     const uint64_t expected[]={1,20,400,8902,197281};
@@ -55,12 +68,18 @@ static bool selftest(){
         std::cerr<<"selftest promotion failed\n"; return false;
     }
 
+    if(!undo_roundtrip(start) || !undo_roundtrip(*castle) || !undo_roundtrip(ep) || !undo_roundtrip(*promo)){
+        std::cerr<<"selftest make/unmake roundtrip failed\n"; return false;
+    }
+
     Position p=Position::startpos();
     for(const char* mtxt: {"e2e4","e7e5","g1f3","b8c6","f1b5"}){
         auto m=p.parse_uci_move(mtxt); if(!m){std::cerr<<"selftest move parse failed "<<mtxt<<"\n";return false;} p.make_move(*m);
     }
     auto round=Position::from_fen(p.fen());
-    if(!round || round->fen()!=p.fen()){std::cerr<<"selftest FEN roundtrip failed\n";return false;}
+    if(!round || round->fen()!=p.fen() || round->key()!=p.key()){
+        std::cerr<<"selftest FEN/key roundtrip failed\n";return false;
+    }
 
     struct EvalCase { const char* fen; int expected; };
     const EvalCase evalCases[] = {
@@ -84,7 +103,6 @@ static bool selftest(){
         std::cerr<<"selftest search failed depth="<<report.completed_depth<<" nodes="<<report.nodes<<"\n"; return false;
     }
 
-    // A pure movetime search must not inherit the old implicit depth-five ceiling.
     auto sparse=Position::from_fen("8/8/8/8/8/2k5/8/2K5 w - - 0 1");
     if(!sparse){std::cerr<<"selftest timed-search FEN parse failed\n";return false;}
     SearchEngine timed;
@@ -157,7 +175,8 @@ int main(int argc,char** argv){
             }
             if(!sawDepth && !sawMovetime) lim.max_depth=5;
             auto r=search.search(pos,lim,game_history);
-            std::cout<<"info depth "<<r.completed_depth<<" score cp "<<r.score<<" nodes "<<r.nodes<<" pv";
+            std::cout<<"info depth "<<r.completed_depth<<" score cp "<<r.score<<" nodes "<<r.nodes
+                     <<" tthits "<<r.tt_hits<<" ttstores "<<r.tt_stores<<" pv";
             for(auto m:r.pv) std::cout<<' '<<move_to_uci(m);
             std::cout<<"\nbestmove "<<(r.best.is_null()?"0000":move_to_uci(r.best))<<"\n"<<std::flush;
         } else if(cmd=="eval"){

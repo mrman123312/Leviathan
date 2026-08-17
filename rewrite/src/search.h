@@ -51,8 +51,8 @@ private:
     bool use_deadline_ = false;
     std::vector<uint64_t> history_;
 
-    int negamax(const Position& p, int depth, int alpha, int beta, int ply);
-    int quiescence(const Position& p, int alpha, int beta, int ply);
+    int negamax(Position& p, int depth, int alpha, int beta, int ply);
+    int quiescence(Position& p, int alpha, int beta, int ply);
     bool repeated(uint64_t key) const;
     bool history_sensitive(const Position& p) const;
     uint64_t context_key(const Position& p) const;

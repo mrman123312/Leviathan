@@ -1,10 +1,52 @@
 #include "chess.h"
 #include <algorithm>
 #include <cctype>
-#include <charconv>
+#include <cmath>
 #include <sstream>
 
 namespace leviathan {
+namespace {
+
+constexpr uint64_t mix64(uint64_t x) {
+    x += 0x9E3779B97F4A7C15ULL;
+    x = (x ^ (x >> 30)) * 0xBF58476D1CE4E5B9ULL;
+    x = (x ^ (x >> 27)) * 0x94D049BB133111EBULL;
+    return x ^ (x >> 31);
+}
+
+constexpr uint64_t piece_key(Piece p, int sq) {
+    return p == Piece::Empty ? 0ULL
+        : mix64(0x4C56504B45590000ULL ^ (uint64_t(static_cast<uint8_t>(p)) << 8) ^ uint64_t(sq));
+}
+constexpr uint64_t side_key() { return mix64(0x4C56534944454B45ULL); }
+constexpr uint64_t castling_key(uint8_t rights) {
+    return mix64(0x4C56434153544C45ULL ^ uint64_t(rights));
+}
+constexpr uint64_t ep_key(int sq) {
+    return mix64(0x4C56455053515541ULL ^ uint64_t(sq + 1));
+}
+
+static Piece fen_piece(char c) {
+    switch (c) {
+        case 'P': return Piece::WP; case 'N': return Piece::WN; case 'B': return Piece::WB;
+        case 'R': return Piece::WR; case 'Q': return Piece::WQ; case 'K': return Piece::WK;
+        case 'p': return Piece::BP; case 'n': return Piece::BN; case 'b': return Piece::BB;
+        case 'r': return Piece::BR; case 'q': return Piece::BQ; case 'k': return Piece::BK;
+        default: return Piece::Empty;
+    }
+}
+
+static char piece_fen(Piece p) {
+    static constexpr char chars[] = ".PNBRQKpnbrqk";
+    return chars[static_cast<int>(p)];
+}
+
+static void add_promotions(std::vector<Move>& out,int from,int to,uint8_t flags){
+    for(PieceType pt: {PieceType::Queen,PieceType::Rook,PieceType::Bishop,PieceType::Knight})
+        out.push_back(Move{static_cast<uint8_t>(from),static_cast<uint8_t>(to),static_cast<uint8_t>(pt),flags});
+}
+
+} // namespace
 
 Color color_of(Piece p) {
     return static_cast<int>(p) <= 6 ? Color::White : Color::Black;
@@ -52,26 +94,30 @@ std::string move_to_uci(Move m) {
     return out;
 }
 
-Position::Position() { board_.fill(Piece::Empty); }
+Position::Position() {
+    board_.fill(Piece::Empty);
+    king_sq_.fill(-1);
+    recompute_key();
+}
+
+void Position::recompute_key() {
+    uint64_t h = castling_key(castling_) ^ ep_key(ep_square_);
+    if(side_ == Color::Black) h ^= side_key();
+    for(int sq=0;sq<64;++sq) h ^= piece_key(board_[sq],sq);
+    key_ = h;
+}
+
+void Position::set_piece(int sq, Piece p) {
+    const Piece old = board_[sq];
+    if(old == p) return;
+    key_ ^= piece_key(old,sq);
+    board_[sq] = p;
+    key_ ^= piece_key(p,sq);
+}
 
 Position Position::startpos() {
     auto p = from_fen("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1");
     return *p;
-}
-
-static Piece fen_piece(char c) {
-    switch (c) {
-        case 'P': return Piece::WP; case 'N': return Piece::WN; case 'B': return Piece::WB;
-        case 'R': return Piece::WR; case 'Q': return Piece::WQ; case 'K': return Piece::WK;
-        case 'p': return Piece::BP; case 'n': return Piece::BN; case 'b': return Piece::BB;
-        case 'r': return Piece::BR; case 'q': return Piece::BQ; case 'k': return Piece::BK;
-        default: return Piece::Empty;
-    }
-}
-
-static char piece_fen(Piece p) {
-    static constexpr char chars[] = ".PNBRQKpnbrqk";
-    return chars[static_cast<int>(p)];
 }
 
 std::optional<Position> Position::from_fen(std::string_view fen) {
@@ -82,6 +128,9 @@ std::optional<Position> Position::from_fen(std::string_view fen) {
     ss >> half >> full;
 
     Position p;
+    p.board_.fill(Piece::Empty);
+    p.king_sq_.fill(-1);
+    int whiteKings=0, blackKings=0;
     int rank=7, file=0;
     for (char c : placement) {
         if (c == '/') { if (file != 8 || rank == 0) return std::nullopt; --rank; file=0; continue; }
@@ -90,9 +139,13 @@ std::optional<Position> Position::from_fen(std::string_view fen) {
         }
         Piece pc = fen_piece(c);
         if (pc == Piece::Empty || file >= 8 || rank < 0) return std::nullopt;
-        p.board_[rank*8+file] = pc; ++file;
+        const int sq=rank*8+file;
+        p.board_[sq] = pc;
+        if(pc==Piece::WK){p.king_sq_[0]=static_cast<int8_t>(sq);++whiteKings;}
+        if(pc==Piece::BK){p.king_sq_[1]=static_cast<int8_t>(sq);++blackKings;}
+        ++file;
     }
-    if (rank != 0 || file != 8) return std::nullopt;
+    if (rank != 0 || file != 8 || whiteKings!=1 || blackKings!=1) return std::nullopt;
     if (stm == "w") p.side_ = Color::White; else if (stm == "b") p.side_ = Color::Black; else return std::nullopt;
     p.castling_ = 0;
     if (castle != "-") for (char c : castle) {
@@ -101,8 +154,9 @@ std::optional<Position> Position::from_fen(std::string_view fen) {
     }
     p.ep_square_ = ep == "-" ? -1 : parse_square(ep);
     if (ep != "-" && p.ep_square_ < 0) return std::nullopt;
-    p.halfmove_ = std::max(0, half); p.fullmove_ = std::max(1, full);
-    if (p.king_square(Color::White) < 0 || p.king_square(Color::Black) < 0) return std::nullopt;
+    p.halfmove_ = std::max(0, half);
+    p.fullmove_ = std::max(1, full);
+    p.recompute_key();
     return p;
 }
 
@@ -127,12 +181,6 @@ std::string Position::fen() const {
     }
     out << ' ' << (ep_square_>=0 ? square_name(ep_square_) : "-") << ' ' << halfmove_ << ' ' << fullmove_;
     return out.str();
-}
-
-int Position::king_square(Color c) const {
-    Piece k = make_piece(c, PieceType::King);
-    for (int i=0;i<64;++i) if (board_[i]==k) return i;
-    return -1;
 }
 
 bool Position::attacked(int sq, Color by) const {
@@ -171,12 +219,8 @@ bool Position::attacked(int sq, Color by) const {
 }
 
 bool Position::in_check(Color c) const {
-    int k=king_square(c); return k>=0 && attacked(k,opposite(c));
-}
-
-static void add_promotions(std::vector<Move>& out,int from,int to,uint8_t flags){
-    for(PieceType pt: {PieceType::Queen,PieceType::Rook,PieceType::Bishop,PieceType::Knight})
-        out.push_back(Move{static_cast<uint8_t>(from),static_cast<uint8_t>(to),static_cast<uint8_t>(pt),flags});
+    const int k=king_square(c);
+    return k>=0 && attacked(k,opposite(c));
 }
 
 std::vector<Move> Position::pseudo_legal_moves(bool captures_only) const {
@@ -229,18 +273,44 @@ std::vector<Move> Position::pseudo_legal_moves(bool captures_only) const {
 
 std::vector<Move> Position::legal_moves(bool captures_only) const {
     std::vector<Move> out;
+    Position work=*this;
+    const Color us=side_;
     for(Move m:pseudo_legal_moves(captures_only)){
-        Position q=*this; Color us=side_; if(q.make_move(m)&&!q.in_check(us)) out.push_back(m);
+        UndoState undo;
+        if(!work.make_move(m,undo)) continue;
+        const bool legal=!work.in_check(us);
+        work.unmake_move(m,undo);
+        if(legal) out.push_back(m);
     }
     return out;
 }
 
 bool Position::make_move(Move m) {
+    UndoState ignored;
+    return make_move(m,ignored);
+}
+
+bool Position::make_move(Move m, UndoState& undo) {
     if(m.from>=64||m.to>=64) return false;
     Piece pc=board_[m.from]; if(pc==Piece::Empty||color_of(pc)!=side_) return false;
-    Color us=side_; Piece captured=board_[m.to];
-    bool pawn=type_of(pc)==PieceType::Pawn;
-    halfmove_ = (pawn || captured!=Piece::Empty || (m.flags&Move::EnPassant)) ? 0 : halfmove_+1;
+    const Color us=side_;
+
+    undo = UndoState{};
+    undo.moved=pc;
+    undo.captured_on_to=board_[m.to];
+    undo.castling=castling_;
+    undo.ep_square=ep_square_;
+    undo.halfmove=halfmove_;
+    undo.fullmove=fullmove_;
+    undo.side=side_;
+    undo.white_king=king_sq_[0];
+    undo.black_king=king_sq_[1];
+    undo.key=key_;
+
+    key_ ^= castling_key(castling_) ^ ep_key(ep_square_);
+
+    const bool pawn=type_of(pc)==PieceType::Pawn;
+    halfmove_ = (pawn || undo.captured_on_to!=Piece::Empty || (m.flags&Move::EnPassant)) ? 0 : halfmove_+1;
     ep_square_=-1;
 
     if(pc==Piece::WK) castling_ &= ~uint8_t(3);
@@ -254,32 +324,59 @@ bool Position::make_move(Move m) {
     if(m.to==56) castling_ &= ~uint8_t(8);
     if(m.to==63) castling_ &= ~uint8_t(4);
 
-    board_[m.to]=pc; board_[m.from]=Piece::Empty;
-    if(m.flags&Move::EnPassant){ int capSq=m.to+(us==Color::White?-8:8); board_[capSq]=Piece::Empty; }
-    if(m.flags&Move::Castle){
-        if(m.to==6){board_[5]=board_[7];board_[7]=Piece::Empty;}
-        else if(m.to==2){board_[3]=board_[0];board_[0]=Piece::Empty;}
-        else if(m.to==62){board_[61]=board_[63];board_[63]=Piece::Empty;}
-        else if(m.to==58){board_[59]=board_[56];board_[56]=Piece::Empty;}
+    set_piece(m.to,pc);
+    set_piece(m.from,Piece::Empty);
+
+    if(type_of(pc)==PieceType::King)
+        king_sq_[static_cast<int>(us)]=static_cast<int8_t>(m.to);
+
+    if(m.flags&Move::EnPassant){
+        const int capSq=m.to+(us==Color::White?-8:8);
+        undo.ep_capture_square=capSq;
+        undo.ep_captured=board_[capSq];
+        set_piece(capSq,Piece::Empty);
     }
-    if(m.promotion) board_[m.to]=make_piece(us,static_cast<PieceType>(m.promotion));
+    if(m.flags&Move::Castle){
+        if(m.to==6){Piece rook=board_[7];set_piece(5,rook);set_piece(7,Piece::Empty);}
+        else if(m.to==2){Piece rook=board_[0];set_piece(3,rook);set_piece(0,Piece::Empty);}
+        else if(m.to==62){Piece rook=board_[63];set_piece(61,rook);set_piece(63,Piece::Empty);}
+        else if(m.to==58){Piece rook=board_[56];set_piece(59,rook);set_piece(56,Piece::Empty);}
+    }
+    if(m.promotion) set_piece(m.to,make_piece(us,static_cast<PieceType>(m.promotion)));
     if(m.flags&Move::DoublePush) ep_square_=m.from+(us==Color::White?8:-8);
     if(us==Color::Black) ++fullmove_;
     side_=opposite(side_);
+    key_ ^= side_key();
+    key_ ^= castling_key(castling_) ^ ep_key(ep_square_);
     return true;
+}
+
+void Position::unmake_move(Move m, const UndoState& undo) {
+    side_=undo.side;
+    castling_=undo.castling;
+    ep_square_=undo.ep_square;
+    halfmove_=undo.halfmove;
+    fullmove_=undo.fullmove;
+    king_sq_[0]=static_cast<int8_t>(undo.white_king);
+    king_sq_[1]=static_cast<int8_t>(undo.black_king);
+
+    board_[m.from]=undo.moved;
+    board_[m.to]=undo.captured_on_to;
+    if(m.flags&Move::EnPassant && undo.ep_capture_square>=0)
+        board_[undo.ep_capture_square]=undo.ep_captured;
+    if(m.flags&Move::Castle){
+        const Piece rook=make_piece(undo.side,PieceType::Rook);
+        if(m.to==6){board_[7]=rook;board_[5]=Piece::Empty;}
+        else if(m.to==2){board_[0]=rook;board_[3]=Piece::Empty;}
+        else if(m.to==62){board_[63]=rook;board_[61]=Piece::Empty;}
+        else if(m.to==58){board_[56]=rook;board_[59]=Piece::Empty;}
+    }
+    key_=undo.key;
 }
 
 std::optional<Move> Position::parse_uci_move(std::string_view text) const {
     for(Move m:legal_moves()) if(move_to_uci(m)==text) return m;
     return std::nullopt;
-}
-
-uint64_t Position::key() const {
-    uint64_t h=1469598103934665603ULL;
-    auto mix=[&](uint64_t v){h^=v;h*=1099511628211ULL;};
-    for(int i=0;i<64;++i) mix((uint64_t(static_cast<int>(board_[i]))<<6)|uint64_t(i));
-    mix(static_cast<int>(side_)); mix(castling_); mix(uint64_t(ep_square_+1));
-    return h;
 }
 
 int piece_value(PieceType pt) {

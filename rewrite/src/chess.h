@@ -40,6 +40,21 @@ struct Move {
     constexpr bool operator==(const Move&) const = default;
 };
 
+struct UndoState {
+    Piece moved = Piece::Empty;
+    Piece captured_on_to = Piece::Empty;
+    Piece ep_captured = Piece::Empty;
+    int ep_capture_square = -1;
+    uint8_t castling = 0;
+    int ep_square = -1;
+    int halfmove = 0;
+    int fullmove = 1;
+    Color side = Color::White;
+    int white_king = -1;
+    int black_king = -1;
+    uint64_t key = 0;
+};
+
 std::string square_name(int sq);
 int parse_square(std::string_view s);
 std::string move_to_uci(Move m);
@@ -62,21 +77,27 @@ public:
     std::vector<Move> pseudo_legal_moves(bool captures_only=false) const;
     std::vector<Move> legal_moves(bool captures_only=false) const;
     bool make_move(Move m);
+    bool make_move(Move m, UndoState& undo);
+    void unmake_move(Move m, const UndoState& undo);
     bool in_check(Color c) const;
     bool attacked(int sq, Color by) const;
-    uint64_t key() const;
+    uint64_t key() const { return key_; }
 
     std::optional<Move> parse_uci_move(std::string_view text) const;
 
 private:
     std::array<Piece,64> board_{};
+    std::array<int8_t,2> king_sq_{{-1,-1}};
     Color side_ = Color::White;
     uint8_t castling_ = 0;
     int ep_square_ = -1;
     int halfmove_ = 0;
     int fullmove_ = 1;
+    uint64_t key_ = 0;
 
-    int king_square(Color c) const;
+    int king_square(Color c) const { return king_sq_[static_cast<int>(c)]; }
+    void recompute_key();
+    void set_piece(int sq, Piece p);
 };
 
 int piece_value(PieceType pt);

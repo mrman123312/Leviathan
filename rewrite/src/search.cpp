@@ -24,9 +24,6 @@ bool SearchEngine::repeated(uint64_t key) const {
 }
 
 bool SearchEngine::history_sensitive(const Position& p) const {
-    // Ordinary positions should share TT work by board identity. We only pay for
-    // a trajectory shadow when the current board already occurred in the
-    // reversible window, or when the 50-move boundary is close enough to matter.
     if(p.halfmove_clock() >= 80) return true;
     const size_t horizon = std::min<size_t>(history_.size(), static_cast<size_t>(std::max(0, p.halfmove_clock()) + 1));
     const size_t begin = history_.size() - horizon;
@@ -80,7 +77,9 @@ void SearchEngine::reward_quiet(Move m,int depth,int ply){
 }
 
 std::vector<Move> SearchEngine::ordered_moves(const Position& p,Move tt_move,int ply,bool captures_only) const {
-    auto moves=p.legal_moves(captures_only);
+    // Search consumes pseudo-legal actions and validates them in-place through
+    // make/unmake. This avoids Position copies inside legal_moves at every node.
+    auto moves=p.pseudo_legal_moves(captures_only);
     auto move_score=[&](Move m){
         if(m==tt_move && !tt_move.is_null()) return 1000000;
         int s=0;
@@ -98,42 +97,43 @@ std::vector<Move> SearchEngine::ordered_moves(const Position& p,Move tt_move,int
         }
         return s;
     };
-    std::stable_sort(moves.begin(),moves.end(),[&](Move a,Move b){return move_score(a)>move_score(b);});
+    std::sort(moves.begin(),moves.end(),[&](Move a,Move b){return move_score(a)>move_score(b);});
     return moves;
 }
 
-int SearchEngine::quiescence(const Position& p,int alpha,int beta,int ply){
+int SearchEngine::quiescence(Position& p,int alpha,int beta,int ply){
     ++nodes_; if(time_up()) return alpha;
     if(p.halfmove_clock()>=100 || repeated(p.key())) return 0;
-    bool checked=p.in_check(p.side_to_move());
+    const Color us=p.side_to_move();
+    const bool checked=p.in_check(us);
     int stand=checked ? -INF : evaluator_->evaluate(p).mean_cp;
-    if(checked){
-        auto evasions=ordered_moves(p,{},ply,false);
-        if(evasions.empty()) return -MATE+ply;
-        for(Move m:evasions){
-            Position q=p; q.make_move(m); history_.push_back(q.key());
-            int score=-quiescence(q,-beta,-alpha,ply+1);
-            history_.pop_back();
-            if(stopped_) return alpha;
-            if(score>=beta) return beta;
-            if(score>alpha) alpha=score;
-        }
-        return alpha;
+    if(!checked){
+        if(stand>=beta) return beta;
+        if(stand>alpha) alpha=stand;
     }
-    if(stand>=beta) return beta;
-    if(stand>alpha) alpha=stand;
-    for(Move m:ordered_moves(p,{},ply,true)){
-        Position q=p; q.make_move(m); history_.push_back(q.key());
-        int score=-quiescence(q,-beta,-alpha,ply+1);
+
+    int legalCount=0;
+    for(Move m:ordered_moves(p,{},ply,!checked)){
+        UndoState undo;
+        if(!p.make_move(m,undo)) continue;
+        if(p.in_check(us)){
+            p.unmake_move(m,undo);
+            continue;
+        }
+        ++legalCount;
+        history_.push_back(p.key());
+        int score=-quiescence(p,-beta,-alpha,ply+1);
         history_.pop_back();
+        p.unmake_move(m,undo);
         if(stopped_) return alpha;
         if(score>=beta) return beta;
         if(score>alpha) alpha=score;
     }
+    if(checked && legalCount==0) return -MATE+ply;
     return alpha;
 }
 
-int SearchEngine::negamax(const Position& p,int depth,int alpha,int beta,int ply){
+int SearchEngine::negamax(Position& p,int depth,int alpha,int beta,int ply){
     ++nodes_; if(time_up()) return alpha;
     const uint64_t boardKey=p.key();
     if(p.halfmove_clock()>=100 || repeated(boardKey)) return 0;
@@ -154,45 +154,55 @@ int SearchEngine::negamax(const Position& p,int depth,int alpha,int beta,int ply
         }
     }
 
-    const bool inCheck=p.in_check(p.side_to_move());
+    const Color us=p.side_to_move();
+    const bool inCheck=p.in_check(us);
     auto moves=ordered_moves(p,ttMove,ply,false);
-    if(moves.empty()) return inCheck ? -MATE+ply : 0;
 
     int bestScore=-INF;
     Move best{};
-    for(size_t index=0;index<moves.size();++index){
-        Move m=moves[index];
+    int legalCount=0;
+    size_t searchedIndex=0;
+    for(Move m:moves){
+        UndoState undo;
+        if(!p.make_move(m,undo)) continue;
+        if(p.in_check(us)){
+            p.unmake_move(m,undo);
+            continue;
+        }
+        ++legalCount;
         const bool quiet=!(m.flags&Move::Capture) && !m.promotion;
         int reduction=0;
-        if(index>=4 && depth>=3 && quiet && !inCheck){
+        if(searchedIndex>=4 && depth>=3 && quiet && !inCheck){
             reduction=1;
-            if(index>=8 && depth>=6) reduction=2;
+            if(searchedIndex>=8 && depth>=6) reduction=2;
         }
 
-        Position q=p;
-        q.make_move(m);
-        history_.push_back(q.key());
+        history_.push_back(p.key());
         int score;
-        if(index==0){
-            score=-negamax(q,depth-1,-beta,-alpha,ply+1);
+        if(searchedIndex==0){
+            score=-negamax(p,depth-1,-beta,-alpha,ply+1);
         } else {
             const int reducedDepth=std::max(0,depth-1-reduction);
-            score=-negamax(q,reducedDepth,-alpha-1,-alpha,ply+1);
+            score=-negamax(p,reducedDepth,-alpha-1,-alpha,ply+1);
             if(!stopped_ && reduction && score>alpha)
-                score=-negamax(q,depth-1,-alpha-1,-alpha,ply+1);
+                score=-negamax(p,depth-1,-alpha-1,-alpha,ply+1);
             if(!stopped_ && score>alpha && score<beta)
-                score=-negamax(q,depth-1,-beta,-alpha,ply+1);
+                score=-negamax(p,depth-1,-beta,-alpha,ply+1);
         }
         history_.pop_back();
+        p.unmake_move(m,undo);
         if(stopped_) return alpha;
 
         if(score>bestScore){ bestScore=score; best=m; }
         if(score>alpha) alpha=score;
+        ++searchedIndex;
         if(alpha>=beta){
             if(quiet) reward_quiet(m,depth,ply);
             break;
         }
     }
+
+    if(legalCount==0) return inCheck ? -MATE+ply : 0;
 
     Bound b=Bound::Exact;
     if(bestScore<=originalAlpha) b=Bound::Upper;
@@ -254,6 +264,7 @@ SearchReport SearchEngine::search(const Position& root,const SearchLimits& limit
         ? std::min(limits.max_depth, MAX_PLY - 1)
         : (use_deadline_ ? MAX_PLY - 1 : 5);
 
+    Position work=root;
     SearchReport report{};
     int previousScore=0;
     for(int depth=1;depth<=targetMaxDepth;++depth){
@@ -265,7 +276,7 @@ SearchReport SearchEngine::search(const Position& root,const SearchLimits& limit
 
         int score=0;
         while(true){
-            score=negamax(root,depth,alpha,beta,0);
+            score=negamax(work,depth,alpha,beta,0);
             if(stopped_) break;
             if(score<=alpha && alpha>-INF){
                 window=std::min(4000,window*2);
