@@ -74,6 +74,7 @@ public:
     int fullmove_number() const { return fullmove_; }
     uint8_t castling_rights() const { return castling_; }
 
+    // captures_only is intentionally tactical-only: captures plus promotions.
     std::vector<Move> pseudo_legal_moves(bool captures_only=false) const;
     std::vector<Move> legal_moves(bool captures_only=false) const;
     bool make_move(Move m);
@@ -96,6 +97,7 @@ private:
     uint64_t key_ = 0;
 
     int king_square(Color c) const { return king_sq_[static_cast<int>(c)]; }
+    int canonical_ep_square() const;
     void recompute_key();
     void set_piece(int sq, Piece p);
 };
