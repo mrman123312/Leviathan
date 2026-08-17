@@ -10,8 +10,6 @@
 namespace leviathan {
 
 struct SearchLimits {
-    // max_depth == 0 means no artificial depth ceiling; search is then bounded
-    // by movetime (or the engine's hard MAX_PLY safety limit).
     int max_depth = 0;
     int movetime_ms = 0;
 };
@@ -60,8 +58,8 @@ private:
     static int score_to_tt(int score, int ply);
     static int score_from_tt(int score, int ply);
     void reward_quiet(Move m, int depth, int ply);
-    std::vector<Move> ordered_moves(const Position& p, Move tt_move, int ply,
-                                    bool captures_only=false) const;
+    MoveList ordered_moves(const Position& p, Move tt_move, int ply,
+                           bool captures_only=false) const;
     std::vector<Move> extract_pv(Position p, int max_len, std::vector<uint64_t> history) const;
 };
 
