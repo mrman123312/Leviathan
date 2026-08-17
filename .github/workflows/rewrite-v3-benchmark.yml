@@ -1,4 +1,4 @@
-# Final post-audit rerun marker: 2026-08-16
+# Final post-audit rerun marker: 2026-08-16-perft-inplace
 name: Rewrite v3 Architecture Benchmark
 
 on:
