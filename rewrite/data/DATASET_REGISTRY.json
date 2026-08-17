@@ -1,0 +1,160 @@
+{
+  "schema_version": 1,
+  "verified_on": "2026-08-17",
+  "policy": {
+    "bulk_data_in_git": false,
+    "rule": "Large training corpora are referenced by immutable manifests, hashes, licenses, and reproducible fetch recipes; they are not vendored into the repository. A trained model is never evidence that the exact corpus which produced it is available.",
+    "status_values": [
+      "AVAILABLE",
+      "MIRRORED",
+      "HASH_PINNED",
+      "RECONSTRUCTIBLE",
+      "PARTIAL",
+      "LOST",
+      "PRIVATE",
+      "UNKNOWN"
+    ],
+    "promotion_rule": "A dataset may be called HASH_PINNED only when every referenced shard has an immutable locator and cryptographic hash. A model may be called exactly reproducible only when architecture, complete raw/derived data lineage, generation and filtering recipe, trainer revision, hyperparameters, and checkpoint selection are all pinned."
+  },
+  "datasets": [
+    {
+      "id": "lc0-public-training-data",
+      "donor_id": "lc0_training_data",
+      "kind": "selfplay_training_games",
+      "license": "ODbL",
+      "status": "AVAILABLE",
+      "source": {
+        "authority": "Leela Chess Zero",
+        "locator": "https://storage.lczero.org/files/training_data/",
+        "immutable_manifest": null
+      },
+      "generation": {
+        "family": "distributed_lc0_selfplay",
+        "exact_client_revision": null,
+        "exact_network_schedule": null,
+        "filtering_recipe": null
+      },
+      "model_links": [],
+      "exact_historical_reproduction": false,
+      "notes": "Public bulk training data exists, but this registry does not yet claim a complete immutable shard manifest or that any specific current Leviathan model was trained from exactly this corpus."
+    },
+    {
+      "id": "stockfish18-big-exact-training-corpus",
+      "donor_id": "stockfish_networks",
+      "kind": "nnue_training_positions",
+      "license": "UNKNOWN",
+      "status": "UNKNOWN",
+      "source": null,
+      "generation": null,
+      "model_links": ["stockfish18-big"],
+      "exact_historical_reproduction": false,
+      "notes": "The frozen network is available, but the exact historical raw/derived corpus and full checkpoint-selection lineage that produced this weight file have not been proven available."
+    },
+    {
+      "id": "stockfish18-small-exact-training-corpus",
+      "donor_id": "stockfish_networks",
+      "kind": "nnue_training_positions",
+      "license": "UNKNOWN",
+      "status": "UNKNOWN",
+      "source": null,
+      "generation": null,
+      "model_links": ["stockfish18-small"],
+      "exact_historical_reproduction": false,
+      "notes": "The frozen network is available; exact training-corpus provenance remains to be reconstructed or located."
+    },
+    {
+      "id": "stockfish-master-2026-07-main-exact-training-corpus",
+      "donor_id": "stockfish_networks",
+      "kind": "nnue_training_positions",
+      "license": "UNKNOWN",
+      "status": "UNKNOWN",
+      "source": null,
+      "generation": null,
+      "model_links": ["stockfish-master-2026-07-main"],
+      "exact_historical_reproduction": false,
+      "notes": "The current research-control network is fetchable and hash-addressed; the exact corpus that produced it is not yet established here."
+    },
+    {
+      "id": "viridithas-selfplay-training-corpus",
+      "donor_id": "viridithas_current",
+      "kind": "selfplay_training_positions",
+      "license": "UNKNOWN",
+      "status": "UNKNOWN",
+      "source": null,
+      "generation": null,
+      "model_links": [],
+      "exact_historical_reproduction": false,
+      "notes": "Network licensing and raw-data licensing are separate. Raw corpus availability must be verified independently before direct use."
+    },
+    {
+      "id": "caissa-selfplay-training-corpus",
+      "donor_id": "caissa",
+      "kind": "selfplay_training_positions",
+      "license": "UNKNOWN",
+      "status": "UNKNOWN",
+      "source": null,
+      "generation": null,
+      "model_links": [],
+      "exact_historical_reproduction": false,
+      "notes": "The engine/trainer code license does not automatically establish the license or availability of every network or raw self-play corpus."
+    },
+    {
+      "id": "plentychess-selfplay-distillation-corpus",
+      "donor_id": "plentychess",
+      "kind": "selfplay_or_distillation_positions",
+      "license": "UNKNOWN",
+      "status": "UNKNOWN",
+      "source": null,
+      "generation": null,
+      "model_links": [],
+      "exact_historical_reproduction": false,
+      "notes": "Public availability, exact generation recipe, and data license remain explicit audit items."
+    },
+    {
+      "id": "alexandria-bullet-training-corpus",
+      "donor_id": "alexandria",
+      "kind": "nnue_training_positions",
+      "license": "UNKNOWN",
+      "status": "UNKNOWN",
+      "source": null,
+      "generation": null,
+      "model_links": [],
+      "exact_historical_reproduction": false,
+      "notes": "Trainer lineage is known conceptually; exact downloadable corpus and its license must be verified before use."
+    },
+    {
+      "id": "patricia-style-training-corpus",
+      "donor_id": "patricia",
+      "kind": "filtered_or_objective_shaped_training_positions",
+      "license": "UNKNOWN",
+      "status": "UNKNOWN",
+      "source": null,
+      "generation": null,
+      "model_links": [],
+      "exact_historical_reproduction": false,
+      "notes": "Style-filter recipe and raw data are treated as separate provenance objects; neither is assumed from engine-code licensing."
+    },
+    {
+      "id": "stormphrax-training-corpus",
+      "donor_id": "stormphrax",
+      "kind": "nnue_training_positions",
+      "license": "UNKNOWN",
+      "status": "UNKNOWN",
+      "source": null,
+      "generation": null,
+      "model_links": [],
+      "exact_historical_reproduction": false,
+      "notes": "Raw-data lineage remains an audit target."
+    }
+  ],
+  "audit_queue": [
+    "Build an immutable shard manifest for the public Lc0 archive instead of mirroring bulk data into Git.",
+    "Locate and license-audit public Stockfish NNUE training datasets separately from nnue-pytorch trainer code and frozen network weights.",
+    "Verify Viridithas raw self-play availability and data license separately from CC0 network files.",
+    "Verify Caissa network assets, raw self-play corpus, trainer revision, and per-asset licensing.",
+    "Verify PlentyChess self-play/distillation corpus availability and recipe.",
+    "Verify Alexandria/Bullet corpus lineage and licensing.",
+    "Verify Patricia style-filter data recipe and any distributable corpus.",
+    "Verify Stormphrax network/data provenance."
+  ]
+}
