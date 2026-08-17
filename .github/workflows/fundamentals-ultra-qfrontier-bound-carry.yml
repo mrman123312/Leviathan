@@ -35,26 +35,26 @@ jobs:
           import os
           from pathlib import Path
           p=Path('cand/src/search.cpp');s=p.read_text();cap=int(os.environ['CAP']);carry=os.environ['CARRY']=='1'
-          old='''                if (moveCount > 4 || (moveCount > 2 && leviathanCaptureCeiling < alpha - 48))
-                    continue;'''
+          needle='if (moveCount > 4 || (moveCount > 2 && leviathanCaptureCeiling < alpha - 48))\n                    continue;'
+          if s.count(needle)!=1:
+              raise SystemExit(f'frontier anchor count={s.count(needle)}')
           if carry:
-              new=f'''                const bool leviathanFrontierSkipped =
+              repl=f'''const bool leviathanFrontierSkipped =
                   moveCount > {cap} || (moveCount > 2 && leviathanCaptureCeiling < alpha - 48);
                 if (leviathanFrontierSkipped)
                 {{
                     // Preserve cheap fail-low evidence from a discarded capture.
                     // This does not search the move and cannot raise alpha; it only
-                    // carries the same futility-floor information Stockfish already
-                    // uses for candidates that survive the earlier frontier gate.
+                    // carries the same futility-floor information already used for
+                    // candidates that survive the earlier frontier gate.
                     if (leviathanCaptureCeiling <= alpha)
                         bestValue = std::max(bestValue, leviathanCaptureCeiling);
                     continue;
                 }}'''
           else:
-              new=f'''                if (moveCount > {cap} || (moveCount > 2 && leviathanCaptureCeiling < alpha - 48))
+              repl=f'''if (moveCount > {cap} || (moveCount > 2 && leviathanCaptureCeiling < alpha - 48))
                     continue;'''
-          if s.count(old)!=1: raise SystemExit('frontier anchor')
-          p.write_text(s.replace(old,new,1))
+          p.write_text(s.replace(needle,repl,1))
           PY
           git -C cand diff --check
           git -C cand diff -- src/search.cpp | tee mutation.patch
