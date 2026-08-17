@@ -1,0 +1,46 @@
+name: Fundamentals Ultra Margin Skeptic Parallel
+on:
+  push:
+    branches: [leviathan/fundamentals-ultra-lab]
+    paths: ['.github/workflows/fundamentals-ultra-margin-parallel.yml']
+permissions: {contents: read}
+jobs:
+  gate:
+    runs-on: ubuntu-22.04
+    strategy:
+      fail-fast: false
+      matrix: {mode: [time, nodes, stockfish, regret]}
+    steps:
+      - uses: actions/checkout@v4
+        with: {ref: leviathan/fundamentals-v2.1.1-phasefix, path: cand}
+      - uses: actions/checkout@v4
+        with: {ref: leviathan/fundamentals-v2.1.1-phasefix, path: base}
+      - uses: actions/checkout@v4
+        with: {ref: leviathan/fundamentals-ultra-lab, path: lab}
+      - name: Apply isolated Margin Skeptic and build
+        run: |
+          cp lab/tools/apply_margin_skeptic.py cand/tools/apply_margin_skeptic.py
+          (cd cand && python3 tools/apply_margin_skeptic.py && git diff --check)
+          make -C cand/src net; cp cand/src/nn-ab28990d4ea3.nnue base/src/
+          make -C cand/src clean && make -C cand/src -j2 ARCH=x86-64-avx2 build
+          make -C base/src clean && make -C base/src -j2 ARCH=x86-64-avx2 build
+          git clone https://github.com/official-stockfish/Stockfish.git "$RUNNER_TEMP/sf"
+          git -C "$RUNNER_TEMP/sf" checkout 5062aee519a1ba262d472d8ab139851ced56573e
+          make -C "$RUNNER_TEMP/sf/src" -j2 ARCH=x86-64-avx2 build
+          python3 -m pip install --disable-pip-version-check chess==1.11.2
+      - name: Corpus
+        run: |
+          python3 lab/tools/generate_balanced_openings.py --stockfish "$RUNNER_TEMP/sf/src/stockfish" --output openings.json --count 50 --plies 8 --seed 8910 --max-abs-cp 80
+          test "$(sha256sum openings.json | cut -d' ' -f1)" = 444b13d062e5aa38e72f6ffc5a2f3aa8daf92d4b6712a2d40646c857b51795da
+      - name: Run gate
+        shell: bash
+        run: |
+          mkdir out
+          case '${{ matrix.mode }}' in
+            time) python3 lab/tools/fundamentals_tournament.py --candidate "$PWD/cand/src/stockfish" --opponent "$PWD/base/src/stockfish" --candidate-label margin-skeptic --opponent-label phasefix --candidate-fundamentals --opponent-fundamentals --move-time-ms 100 --openings-json openings.json --max-plies 180 --output-dir out ;;
+            nodes) python3 lab/tools/fundamentals_tournament.py --candidate "$PWD/cand/src/stockfish" --opponent "$PWD/base/src/stockfish" --candidate-label margin-skeptic --opponent-label phasefix --candidate-fundamentals --opponent-fundamentals --nodes-per-move 80000 --openings-json openings.json --max-plies 180 --output-dir out ;;
+            stockfish) python3 lab/tools/fundamentals_tournament.py --candidate "$PWD/cand/src/stockfish" --opponent "$RUNNER_TEMP/sf/src/stockfish" --candidate-label margin-skeptic --opponent-label Stockfish-5062aee5 --candidate-fundamentals --move-time-ms 100 --openings-json openings.json --max-plies 180 --output-dir out ;;
+            regret) python3 lab/tools/oracle_regret.py --candidate "$PWD/cand/src/stockfish" --baseline "$PWD/base/src/stockfish" --oracle "$RUNNER_TEMP/sf/src/stockfish" --openings-json openings.json --candidate-label margin-skeptic --candidate-fundamentals --baseline-fundamentals --choice-nodes 80000 --oracle-nodes 500000 --output out/regret.json ;;
+          esac
+      - uses: actions/upload-artifact@v4
+        with: {name: 'margin-${{ matrix.mode }}', path: out, retention-days: 30}
