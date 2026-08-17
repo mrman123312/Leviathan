@@ -8,6 +8,7 @@ import json
 import os
 import sys
 import urllib.error
+import urllib.parse
 import urllib.request
 from pathlib import Path
 
@@ -41,8 +42,6 @@ def head_metadata(url: str) -> dict:
                 "content_type": r.headers.get("Content-Type"),
             }
     except urllib.error.HTTPError as exc:
-        # Some object stores reject HEAD while serving GET correctly. Preserve the failure
-        # as metadata instead of silently assuming anything about object size.
         return {"head_error": f"HTTP {exc.code}"}
     except Exception as exc:  # pragma: no cover - network/environment dependent
         return {"head_error": str(exc)}
@@ -68,7 +67,7 @@ def sha256_file(path: Path) -> str:
 
 def fetch(source: dict, output_dir: Path, max_bytes: int, force: bool) -> Path:
     url = source["fetch_url"]
-    name = Path(urllib.request.urlparse(url).path).name or source["id"]
+    name = Path(urllib.parse.urlparse(url).path).name or source["id"]
     target = output_dir / source["id"] / name
     target.parent.mkdir(parents=True, exist_ok=True)
     if target.exists() and not force:
