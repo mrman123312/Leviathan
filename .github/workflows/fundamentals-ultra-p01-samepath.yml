@@ -1,0 +1,39 @@
+name: Fundamentals Ultra P01 Same-Path Calibration
+on:
+  push:
+    branches: [leviathan/fundamentals-ultra-lab]
+    paths: ['.github/workflows/fundamentals-ultra-p01-samepath.yml']
+permissions: {contents: read}
+jobs:
+  speed:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+        with: {ref: leviathan/fundamentals-v2.1.1-phasefix, path: base}
+      - uses: actions/checkout@v4
+        with: {ref: leviathan/fundamentals-ultra-lab, path: lab}
+      - name: Materialize and build
+        run: |
+          cp -a base cand
+          cp lab/tools/apply_p01.py cand/tools/apply_p01.py
+          (cd cand && python3 tools/apply_p01.py && git diff --check)
+          make -C base/src net; cp base/src/nn-ab28990d4ea3.nnue cand/src/
+          make -C base/src clean && make -C base/src -j2 ARCH=x86-64-avx2 build
+          make -C cand/src clean && make -C cand/src -j2 ARCH=x86-64-avx2 build
+          cat > options.json <<'EOF'
+          {"Threads":1,"Hash":64,"Leviathan Fundamentals":true,"Leviathan Fundamentals Authority":1,"Leviathan Quiet Overdrive":0,"Leviathan Search DSL":false,"Leviathan Risk":false,"Leviathan Atlas":false,"Leviathan Policy":false}
+          EOF
+      - name: Same-path A/A + candidate exact-behavior timing
+        run: |
+          python3 lab/tools/lossless_pair_benchmark_v2.py \
+            --reference base/src/stockfish \
+            --aa base/src/stockfish \
+            --candidate cand/src/stockfish \
+            --options options.json --rounds 15 --output speed.json | tee speed.log
+      - uses: actions/upload-artifact@v4
+        with:
+          name: fundamentals-ultra-p01-samepath
+          path: |
+            speed.json
+            speed.log
+          retention-days: 30
