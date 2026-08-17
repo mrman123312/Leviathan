@@ -1,25 +1,13 @@
 #pragma once
 #include "chess.h"
 #include "evaluator.h"
+#include "transposition.h"
 #include <array>
 #include <chrono>
 #include <cstdint>
-#include <unordered_map>
 #include <vector>
 
 namespace leviathan {
-
-enum class Bound : uint8_t { Exact, Lower, Upper };
-
-struct TTEntry {
-    uint64_t key = 0;
-    int depth = -1;
-    int score = 0;
-    Bound bound = Bound::Exact;
-    Move best{};
-    uint16_t evidence = 0;
-    uint8_t debt = 0;
-};
 
 struct SearchLimits {
     // max_depth == 0 means no artificial depth ceiling; search is then bounded
@@ -33,6 +21,8 @@ struct SearchReport {
     int score = 0;
     int completed_depth = 0;
     uint64_t nodes = 0;
+    uint64_t tt_hits = 0;
+    uint64_t tt_stores = 0;
     std::vector<Move> pv;
 };
 
@@ -50,10 +40,12 @@ private:
     static constexpr int MATE = 30000;
     static constexpr int MAX_PLY = 128;
     const Evaluator* evaluator_;
-    std::unordered_map<uint64_t, TTEntry> tt_;
+    TranspositionTable tt_;
     std::array<std::array<int,64>,64> quiet_history_{};
     std::array<std::array<Move,2>,MAX_PLY> killers_{};
     uint64_t nodes_ = 0;
+    uint64_t tt_hits_ = 0;
+    uint64_t tt_stores_ = 0;
     bool stopped_ = false;
     std::chrono::steady_clock::time_point deadline_{};
     bool use_deadline_ = false;
@@ -62,6 +54,7 @@ private:
     int negamax(const Position& p, int depth, int alpha, int beta, int ply);
     int quiescence(const Position& p, int alpha, int beta, int ply);
     bool repeated(uint64_t key) const;
+    bool history_sensitive(const Position& p) const;
     uint64_t context_key(const Position& p) const;
     bool time_up();
     static int score_to_tt(int score, int ply);
