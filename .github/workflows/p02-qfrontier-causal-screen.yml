@@ -1,0 +1,230 @@
+name: P02 Q-frontier causal screen
+
+on:
+  push:
+    branches: [agent/p02-qfrontier-causal-screen]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  screen:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout exact P01
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: 3404fa2ea9b4fe75236e2584be9da3416e646ec2
+          path: p01
+          fetch-depth: 1
+
+      - name: Checkout frozen Stockfish oracle
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          repository: official-stockfish/Stockfish
+          ref: 5062aee519a1ba262d472d8ab139851ced56573e
+          path: oracle
+          fetch-depth: 1
+
+      - name: Create independent Q-frontier variants
+        run: |
+          cp -a p01 qsearch
+          cp -a p01 qbound
+          cp -a p01 qdecay6
+          python3 - <<'PY'
+          from pathlib import Path
+
+          old = '''                const Value leviathanCaptureCeiling =
+                  futilityBase + PieceValue[pos.piece_on(move.to_sq())];
+
+                // Leviathan Q-frontier: keep Stockfish's two-capture fast path,
+                // but inspect at most two extra captures when their crude material
+                // ceiling is still close enough to alpha to change the decision.
+                if (moveCount > 4 || (moveCount > 2 && leviathanCaptureCeiling < alpha - 48))
+                    continue;
+
+                Value futilityValue = leviathanCaptureCeiling;'''
+
+          variants = {
+            'qsearch': '''                const Value leviathanCaptureCeiling =
+                  futilityBase + PieceValue[pos.piece_on(move.to_sq())];
+
+                // P02-A: isolate Q-frontier's real-search effect. Moves 3-4 may
+                // continue only when their material ceiling can actually beat
+                // alpha; no near-alpha synthetic bestValue is admitted.
+                if (moveCount > 4 || (moveCount > 2 && leviathanCaptureCeiling <= alpha))
+                    continue;
+
+                Value futilityValue = leviathanCaptureCeiling;''',
+            'qbound': '''                const Value leviathanCaptureCeiling =
+                  futilityBase + PieceValue[pos.piece_on(move.to_sq())];
+
+                // P02-B: isolate Q-frontier's near-alpha bound effect while
+                // retaining Stockfish's original two-capture search frontier.
+                if (moveCount > 2)
+                {
+                    if (moveCount <= 4 && leviathanCaptureCeiling >= alpha - 48
+                        && leviathanCaptureCeiling <= alpha)
+                        bestValue = std::max(bestValue, leviathanCaptureCeiling);
+                    continue;
+                }
+
+                Value futilityValue = leviathanCaptureCeiling;''',
+            'qdecay6': '''                const Value leviathanCaptureCeiling =
+                  futilityBase + PieceValue[pos.piece_on(move.to_sq())];
+
+                // P02-C: confidence-decaying frontier. Keep P01 behavior for
+                // moves 3-4, but allow moves 5-6 only when their crude ceiling
+                // clears alpha by a full pawn-ish margin before the normal SEE
+                // gates are allowed to spend search nodes on them.
+                if (moveCount > 6
+                    || (moveCount > 4 && leviathanCaptureCeiling < alpha + 96)
+                    || (moveCount > 2 && moveCount <= 4
+                        && leviathanCaptureCeiling < alpha - 48))
+                    continue;
+
+                Value futilityValue = leviathanCaptureCeiling;'''
+          }
+
+          for name, new in variants.items():
+              p = Path(name, 'src/search.cpp')
+              s = p.read_text()
+              if s.count(old) != 1:
+                  raise SystemExit(f'{name}: Q-frontier anchor count={s.count(old)}')
+              p.write_text(s.replace(old, new, 1))
+          PY
+          git -C qsearch diff --check
+          git -C qbound diff --check
+          git -C qdecay6 diff --check
+
+      - name: Build P01, three variants, and oracle
+        run: |
+          for d in p01 qsearch qbound qdecay6; do
+            (cd "$d/src" && make net && make -j2 ARCH=x86-64-avx2 build && mv stockfish "${d}.bin")
+          done
+          (cd oracle/src && make net && make -j2 ARCH=x86-64-avx2 build && mv stockfish oracle.bin)
+
+      - name: Install python-chess
+        run: python3 -m pip install --disable-pip-version-check 'python-chess>=1.999,<2'
+
+      - name: Fresh equal-node regret screen
+        run: |
+          mkdir results
+          cat > results/screen.py <<'PY'
+          import json, random, statistics, time
+          from pathlib import Path
+          import chess, chess.engine
+
+          SEED=891020260817
+          POSITIONS=32
+          MOVE_NODES=100000
+          ORACLE_NODES=900000
+          GRADE_NODES=300000
+
+          paths={
+            'p01':'p01/src/p01.bin',
+            'qsearch':'qsearch/src/qsearch.bin',
+            'qbound':'qbound/src/qbound.bin',
+            'qdecay6':'qdecay6/src/qdecay6.bin',
+          }
+
+          def cfg(e):
+              o={}
+              if 'Threads' in e.options:o['Threads']=1
+              if 'Hash' in e.options:o['Hash']=64
+              if 'Leviathan Fundamentals' in e.options:o['Leviathan Fundamentals']=True
+              if 'Leviathan Fundamentals Authority' in e.options:o['Leviathan Fundamentals Authority']=1
+              if 'Leviathan Quiet Overdrive' in e.options:o['Leviathan Quiet Overdrive']=0
+              for n in ['Leviathan Risk','Leviathan Policy','Leviathan MetaSearch','Leviathan Specialist','Leviathan Atlas','Leviathan Search DSL']:
+                  if n in e.options:o[n]=False
+              if o:e.configure(o)
+
+          def cp(info,color):
+              s=info.get('score')
+              return None if s is None else s.pov(color).score(mate_score=100000)
+
+          def boot(vals,rng,B=4000):
+              if not vals:return [None,None]
+              n=len(vals); a=[]
+              for _ in range(B):a.append(sum(vals[rng.randrange(n)] for _ in range(n))/n)
+              a.sort();return [a[int(.025*B)],a[int(.975*B)-1]]
+
+          rng=random.Random(SEED)
+          engines={k:chess.engine.SimpleEngine.popen_uci(v) for k,v in paths.items()}
+          oracle=chess.engine.SimpleEngine.popen_uci('oracle/src/oracle.bin')
+          for e in engines.values():cfg(e)
+          oracle.configure({'Threads':1,'Hash':128})
+          positions=[];seen=set();attempts=0
+          rows=[]
+          try:
+              for i,e in enumerate([*engines.values(),oracle]):
+                  e.analyse(chess.Board(),chess.engine.Limit(nodes=10000),game=('warm',i))
+
+              while len(positions)<POSITIONS and attempts<800:
+                  attempts+=1;b=chess.Board();target=rng.choice([12,16,20,24,28])
+                  ok=True
+                  for ply in range(target):
+                      if b.is_game_over():ok=False;break
+                      infos=oracle.analyse(b,chess.engine.Limit(nodes=1400),multipv=min(5,b.legal_moves.count()),game=('gen',attempts,ply))
+                      if not isinstance(infos,list):infos=[infos]
+                      choices=[x['pv'][0] for x in infos if x.get('pv')]
+                      if not choices:ok=False;break
+                      b.push(rng.choice(choices))
+                  if not ok or b.is_game_over() or b.legal_moves.count()<8:continue
+                  key=' '.join(b.fen().split()[:4])
+                  if key in seen:continue
+                  fi=oracle.analyse(b,chess.engine.Limit(nodes=12000),game=('filter',attempts));s=cp(fi,b.turn)
+                  if s is None or abs(s)>180:continue
+                  seen.add(key);positions.append(b.fen());print('generated',len(positions),s,flush=True)
+
+              if len(positions)<POSITIONS:raise RuntimeError(f'only generated {len(positions)} positions')
+              Path('results/fens.txt').write_text('\n'.join(positions)+'\n')
+
+              for i,fen in enumerate(positions):
+                  b=chess.Board(fen);color=b.turn
+                  oi=oracle.analyse(b,chess.engine.Limit(nodes=ORACLE_NODES),game=('oracle',i));os=cp(oi,color)
+                  row={'fen':fen,'oracle_score':os}
+                  order=list(engines)
+                  if i%2:order.reverse()
+                  chosen={}
+                  for name in order:
+                      t=time.perf_counter()
+                      r=engines[name].play(b,chess.engine.Limit(nodes=MOVE_NODES),info=chess.engine.INFO_ALL,game=(name,i))
+                      chosen[name]=(r.move,(time.perf_counter()-t)*1000,r.info.get('nodes'))
+                  for name in engines:
+                      m,ms,nodes=chosen[name]
+                      gi=oracle.analyse(b,chess.engine.Limit(nodes=GRADE_NODES),root_moves=[m],game=('grade',name,i));g=cp(gi,color)
+                      reg=max(0,os-g) if os is not None and g is not None else None
+                      row[name]={'move':str(m),'grade':g,'regret':reg,'ms':ms,'nodes':nodes}
+                  rows.append(row);print('tested',i+1,'/',POSITIONS,flush=True)
+
+              base=[r['p01']['regret'] for r in rows]
+              out={'seed':SEED,'positions':POSITIONS,'p01_mean_regret_cp':statistics.mean(base),'candidates':{}}
+              br=random.Random(SEED^0x5A17)
+              for name in ['qsearch','qbound','qdecay6']:
+                  vals=[r['p01']['regret']-r[name]['regret'] for r in rows]
+                  out['candidates'][name]={
+                    'mean_regret_cp':statistics.mean(r[name]['regret'] for r in rows),
+                    'mean_improvement_vs_p01_cp':statistics.mean(vals),
+                    'median_improvement_cp':statistics.median(vals),
+                    'trimmed_mean_improvement_cp':statistics.mean(sorted(vals)[2:-2]),
+                    'bootstrap95_mean_improvement_cp':boot(vals,br),
+                    'better':sum(x>0 for x in vals),'tie':sum(x==0 for x in vals),'worse':sum(x<0 for x in vals),
+                    'largest_rescue_cp':max(vals),'largest_harm_cp':min(vals),
+                    'median_time_ratio_vs_p01':statistics.median(r[name]['ms']/r['p01']['ms'] for r in rows if r['p01']['ms']>0)
+                  }
+              Path('results/rows.json').write_text(json.dumps(rows,indent=2)+'\n')
+              Path('results/summary.json').write_text(json.dumps(out,indent=2)+'\n')
+              print(json.dumps(out,indent=2))
+          finally:
+              for e in engines.values():e.quit()
+              oracle.quit()
+          PY
+          python3 results/screen.py
+
+      - name: Archive causal screen
+        uses: actions/upload-artifact@v4
+        with:
+          name: p02-qfrontier-causal-${{ github.sha }}
+          path: results/
