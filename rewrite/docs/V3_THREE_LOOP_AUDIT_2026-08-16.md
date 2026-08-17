@@ -12,7 +12,8 @@ This pass uses a stricter definition of **better**:
 - correctness must survive independent differential testing;
 - a hot-path rewrite must demonstrate fixed-depth/fixed-time benefit;
 - inherited mechanisms remain controls until replacements earn parity or superiority;
-- regressions are preserved as evidence instead of rationalized away.
+- regressions are preserved as evidence instead of rationalized away;
+- an attempted fix that materially harms the relevant benchmark is automatically rolled back unless correctness requires it immediately.
 
 ## Loop 1 — repair the search-budget contract
 
@@ -42,6 +43,7 @@ Normal and Fathom-linked CI passed.
 - history shadow is introduced only when repetition context exists or the current search horizon can cross rule 50.
 - TT hits/stores exposed as instrumentation.
 - replacement now protects deeper same-key/collision information unless the newcomer earns replacement.
+- repetition counts/path-repeat state are tracked per ply instead of rescanning the whole reversible path at every node.
 
 ### Gate
 Normal and Fathom-linked CI passed.
@@ -63,7 +65,7 @@ Normal and Fathom-linked CI passed.
 - incremental deterministic position key.
 - fixed-capacity `MoveList` with fail-loud capacity exhaustion.
 - search ordering no longer heap-allocates move vectors.
-- perft diagnostic also moved to make/unmake.
+- perft diagnostic moved to the same make/unmake substrate.
 
 ### Gate
 Perft, special-move undo, FEN/key roundtrips, normal CI and Fathom-linked CI passed.
@@ -90,11 +92,26 @@ History was rescanned repeatedly. Search now tracks per-ply repetition counts/pa
 ### Evaluator hot path
 The distilled evaluator repeatedly rescanned all 64 squares for individual features. It now builds one `FeatureSummary` and derives material, PSQT, pawn and king features from that pass.
 
-### Move ordering
-The comparator repeatedly recomputed move scores during `std::sort`. Current v3 computes each score once into a fixed scored buffer before sorting.
+### Move-list allocation
+Move generation in the hot search path used dynamic vectors. Current search uses fixed-capacity inline move storage and aborts on impossible capacity exhaustion rather than silently truncating the tree.
 
-### Qsearch stalemate semantics
-Stand-pat could turn stalemate into a fictitious fail-high. Qsearch now checks legal-move existence before stand-pat fail-high and when no tactical legal action exists.
+### Perft control path
+The diagnostic perft helper continued to use the copy-heavy public legal-move path after search had moved to make/unmake. It now uses the same in-place pseudo-legal → apply → own-check reject → undo sequence, restoring most of the rules-engine performance deficit while retaining exact counts.
+
+## Deep-audit experiments rejected / rolled back
+
+### Precomputed move-score sorting
+We tested computing each move-ordering score once into a scored buffer before sorting. In interaction with the concurrent qsearch experiment, fixed-depth throughput regressed. The optimization was not retained; it can be retested independently later with profiler evidence.
+
+### Exact qsearch stalemate stand-pat detection
+A semantic edge was identified: at a horizon stalemate, ordinary stand-pat can return a non-draw value because qsearch does not normally enumerate all quiet legal moves.
+
+A brute-force exact repair was implemented by probing full legal-move existence before relevant stand-pat exits. Same-runner ablation showed a major hot-path penalty:
+- strong pre-experiment v3 fixed-depth speedup over v2: about **2.58×**;
+- combined scored-order + strict-stalemate experiment: about **1.99×**;
+- scored-order rolled back while strict-stalemate remained: about **1.74×**.
+
+Per the automatic-rollback rule, the brute-force qsearch stalemate repair was rejected. The edge case remains explicitly open and should be solved with a staged/early-exit legal-existence mechanism rather than taxing every relevant qnode.
 
 ## Independent correctness audit
 
@@ -112,26 +129,29 @@ Current panel:
 
 The same CI job also builds with AddressSanitizer + UndefinedBehaviorSanitizer and runs the engine self-test.
 
-All of these gates passed on the post-loop branch before this report was frozen.
+The final rollback-surviving search head passed:
+- normal/core CI;
+- independent differential correctness audit;
+- ASan/UBSan self-test;
+- Fathom-linked donor CI.
 
-## Same-runner v2 → v3 evidence
+## Final same-runner v2 → v3 evidence
 
-The benchmark compiles frozen v2 and current v3 on the same GitHub runner and repeats each measurement three times.
+The benchmark compiles frozen v2 and current rollback-surviving v3 on the same GitHub runner and repeats each measurement three times.
 
-Post-audit measurement before the final scored-order/qsearch micro-fix:
+Final benchmark-of-record run: GitHub Actions `31987272772`, current ref `198fe433bc0e5b50d803c12eb43e66e6cd748bc5` (benchmark marker commit; search code contains the rollback-surviving architecture).
 
-| Test | Frozen v2 | v3 | Result |
+| Test | Frozen v2 | final v3 | Result |
 |---|---:|---:|---:|
-| startpos depth 5 wall time | 40.664 ms | 15.761 ms | **2.58× faster** |
-| startpos depth 5 nodes | 43,359 | 32,704 | fewer nodes for same reported result |
+| startpos depth 5 wall time | 40.936 ms | 15.698 ms | **2.608× faster** |
+| startpos depth 5 nodes | 43,359 | 32,704 | fewer nodes at the same completed depth/result |
+| startpos depth 5 best move | Nf3 | Nf3 | same move in all 3 runs |
 | `go movetime 150` completed depth | 5 (artificial ceiling) | 7 | **+2 completed plies** |
-| `go movetime 150` nodes | 43,359 | 366,080 | **8.44× more searched nodes** |
+| `go movetime 150` nodes | 43,359 | 365,312 | **8.425× more searched nodes** |
 | startpos perft 5 | 4,865,609 | 4,865,609 | exact correctness |
-| perft 5 wall time | 327.209 ms | 357.416 ms | v3 still ~8.5% slower on this diagnostic path |
+| perft 5 wall time | 332.049 ms | 360.525 ms | v3 ~8.6% slower on this rules-only diagnostic |
 
-The perft result is intentionally retained as a non-win: search is materially faster, but the mailbox rules engine is not yet universally faster than the v2 control.
-
-A final rerun after the scored-order/qsearch micro-fix should be treated as the current benchmark of record.
+The fixed-depth and timed-search gains are genuine architectural improvements over v2. The perft result is intentionally retained as a non-win: the mailbox/ray-scan rule representation is still not universally superior, even after removing the previous copy-heavy diagnostic path.
 
 ## Donor/evaluator deep search
 
@@ -155,7 +175,7 @@ These are **not silently declared fixed**.
 `leviathan-distilled-v1` is still a tiny linear residual teacher model, not a competitive NNUE. The next evaluator milestone is a frozen, license-clean strong network backend followed by controlled replacement experiments.
 
 ### P0 — revolutionary architecture is still mostly latent
-The current engine is still fundamentally iterative deepening + alpha-beta/PVS/LMR. `Evaluation.uncertainty`, `volatility`, TT `evidence/debt`, candidate-set search, proof-budget allocation, and the Evidence Lattice do not yet control enough computation to constitute the intended Leviathan search ontology.
+The current engine is still fundamentally iterative deepening + alpha-beta/PVS/simple LMR. `Evaluation.uncertainty`, `volatility`, TT `evidence/debt`, candidate-set search, proof-budget allocation, and the Evidence Lattice do not yet control enough computation to constitute the intended Leviathan search ontology.
 
 ### P1 — mature selectivity gap
 Not yet independently rebuilt/validated: null-move pruning, SEE pruning, futility/LMP, ProbCut, singular/check extensions, mature continuation/capture/correction histories, sophisticated LMR and interactions.
@@ -172,6 +192,9 @@ Fathom is linked behind a clean interface, but search does not yet exploit WDL/D
 ### P1 — time/SMP
 Only depth/movetime are supported. Real clock management, increments, move-to-go, pondering, hash sizing, threads/SMP/NUMA remain absent.
 
+### P2 — qsearch stalemate horizon semantics
+The exact brute-force repair was rejected because it materially harmed search throughput. This remains a known edge requiring a cheaper staged legal-existence mechanism.
+
 ### P2 — chess semantics/features
 - obvious insufficient-material/dead-position shortcuts are not yet a first-class search terminal;
 - FEN strictness remains a contract decision;
@@ -180,6 +203,6 @@ Only depth/movetime are supported. Real clock management, increments, move-to-go
 
 ## Current conclusion
 
-v3 has now earned the claim **“materially better rewrite substrate than v2”** on several measured dimensions: honest time budgeting, fixed-depth wall time, search depth reached under time, transposition reuse, state mutation cost, correctness coverage and auditability.
+v3 has earned the claim **“materially better rewrite substrate than v2”** on measured dimensions: honest time budgeting, fixed-depth wall time, search depth under time, transposition reuse, state mutation cost, correctness coverage and auditability.
 
-It has **not** earned the claim “stronger than Stockfish” or “every component is already superior.” The strongest remaining explanation for the Stockfish gap is no longer the accidental depth-5 cap; it is evaluator capacity plus missing search selectivity/representation and the fact that the genuinely novel proof/candidate architecture is still not the engine's dominant decision process.
+It has **not** earned the claim “stronger than Stockfish” or “every component is already superior.” The strongest remaining explanation for the Stockfish gap is no longer accidental infrastructure such as the depth-5 ceiling. It is evaluator capacity, missing mature selectivity, the still-mailbox representation, absent SMP/time-control machinery, unused tablebase search knowledge, and the fact that the genuinely novel Evidence-Lattice/candidate/proof-budget architecture is still not the dominant decision process.
