@@ -1,0 +1,101 @@
+name: Fundamentals Ultra P01 ProbCut Confirmation
+
+on:
+  push:
+    branches: [leviathan/fundamentals-ultra-lab]
+    paths: ['.github/workflows/fundamentals-ultra-p01-probcut-confirm.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  confirm:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@v4
+        with: {ref: '${{ github.sha }}', path: lab}
+      - uses: actions/checkout@v4
+        with: {ref: leviathan/fundamentals-ultra-p01-qfrontier, path: cand}
+      - uses: actions/checkout@v4
+        with: {ref: leviathan/fundamentals-ultra-p01-qfrontier, path: base}
+
+      - name: Materialize ProbCut paid near-proof on P01
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import re
+          from pathlib import Path
+          p=Path('cand/src/search.cpp'); s=p.read_text()
+          pairs=[
+            ('Move  move, excludedMove, bestMove;', 'Move  move, excludedMove, bestMove, probCutNearMiss;'),
+            ('Value bestValue, value, eval, maxValue, probCutBeta;', 'Value bestValue, value, eval, maxValue, probCutBeta, probCutNearValue;'),
+            ('bestMove       = Move::none();\n    priorReduction = (ss - 1)->reduction;', 'bestMove         = Move::none();\n    probCutNearMiss  = Move::none();\n    probCutNearValue = -VALUE_INFINITE;\n    priorReduction   = (ss - 1)->reduction;'),
+            ('MovePicker mp(pos, ttData.move, depth, &mainHistory, &lowPlyHistory, &captureHistory, contHist,\n                  &sharedHistory, ss->ply);', 'const Move leviathanPreferredMove = ttData.move ? ttData.move : probCutNearMiss;\n    MovePicker mp(pos, leviathanPreferredMove, depth, &mainHistory, &lowPlyHistory, &captureHistory,\n                  contHist, &sharedHistory, ss->ply);')]
+          for a,b in pairs:
+            if s.count(a)!=1: raise SystemExit(f'anchor count={s.count(a)} for {a[:60]!r}')
+            s=s.replace(a,b,1)
+          pattern=r'(?ms)^(\s*)if \(value >= probCutBeta\)\n\1\{\n.*?^\1\}'
+          m=re.search(pattern,s)
+          if not m: raise SystemExit('ProbCut success-block regex anchor')
+          I=m.group(1)
+          extra=(f"\n{I}else if (value >= beta && !is_decisive(value) && value > probCutNearValue)\n"
+                 f"{I}{{\n{I}    probCutNearValue = value;\n{I}    probCutNearMiss  = move;\n{I}}}")
+          s=s[:m.end()]+extra+s[m.end():]
+          a='r += 697;  // Base reduction offset to compensate for other tweaks\n        r -= moveCount * 65;'
+          b='r += 697;  // Base reduction offset to compensate for other tweaks\n        if (move == probCutNearMiss)\n            r -= 256;\n        r -= moveCount * 65;'
+          if s.count(a)!=1: raise SystemExit('LMR base anchor')
+          s=s.replace(a,b,1)
+          p.write_text(s)
+          PY
+          git -C cand diff --check
+          git -C cand diff -- src/search.cpp | tee mutation.patch
+
+      - name: Build P01+ProbCut, P01 and current Stockfish
+        run: |
+          make -C cand/src net && make -C cand/src clean && make -C cand/src -j2 ARCH=x86-64-avx2 build
+          make -C base/src net && make -C base/src clean && make -C base/src -j2 ARCH=x86-64-avx2 build
+          git clone -q https://github.com/official-stockfish/Stockfish.git "$RUNNER_TEMP/sf"
+          git -C "$RUNNER_TEMP/sf" checkout -q 5062aee519a1ba262d472d8ab139851ced56573e
+          make -C "$RUNNER_TEMP/sf/src" -j2 ARCH=x86-64-avx2 build
+          python3 -m pip install --disable-pip-version-check chess==1.11.2
+
+      - name: Generate fresh confirmation corpus
+        run: |
+          python3 lab/tools/generate_balanced_openings.py --stockfish "$RUNNER_TEMP/sf/src/stockfish" --output openings.json --count 50 --plies 18 --seed 173205080 --max-abs-cp 100
+          sha256sum openings.json | tee openings.sha256
+
+      - name: 100-game equal-node A/B vs P01
+        run: |
+          mkdir -p vs-p01
+          python3 lab/tools/fundamentals_tournament.py --candidate "$PWD/cand/src/stockfish" --opponent "$PWD/base/src/stockfish" --candidate-label P01-ProbCut --opponent-label P01 --candidate-fundamentals --opponent-fundamentals --nodes-per-move 100000 --openings-json "$PWD/openings.json" --max-plies 200 --output-dir vs-p01 | tee vs-p01/match.log
+
+      - name: 100-game equal-node vs current Stockfish
+        run: |
+          mkdir -p vs-stockfish
+          python3 lab/tools/fundamentals_tournament.py --candidate "$PWD/cand/src/stockfish" --opponent "$RUNNER_TEMP/sf/src/stockfish" --candidate-label P01-ProbCut --opponent-label Stockfish-5062aee5 --candidate-fundamentals --nodes-per-move 100000 --openings-json "$PWD/openings.json" --max-plies 200 --output-dir vs-stockfish | tee vs-stockfish/match.log
+
+      - name: Hardened isolated deep-oracle regret vs P01
+        run: |
+          python3 lab/tools/oracle_regret.py --candidate "$PWD/cand/src/stockfish" --baseline "$PWD/base/src/stockfish" --oracle "$RUNNER_TEMP/sf/src/stockfish" --openings-json "$PWD/openings.json" --candidate-label P01-ProbCut --candidate-fundamentals --baseline-fundamentals --choice-nodes 120000 --oracle-nodes 1000000 --output regret.json | tee regret.log
+          grep -q 'LV_ISOLATED_ROOT_REGRET_V2' regret.json
+
+      - name: Provenance
+        run: |
+          printf 'candidate_base=%s\nbaseline=%s\nstockfish=%s\n' "$(git -C cand rev-parse HEAD)" "$(git -C base rev-parse HEAD)" "$(git -C "$RUNNER_TEMP/sf" rev-parse HEAD)" > revisions.txt
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ultra-p01-probcut-confirm
+          path: |
+            mutation.patch
+            openings.json
+            openings.sha256
+            vs-p01
+            vs-stockfish
+            regret.json
+            regret.log
+            revisions.txt
+          retention-days: 30
