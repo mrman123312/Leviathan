@@ -1,0 +1,43 @@
+# Exact-hash rerun marker: 2026-08-16
+name: Rewrite v4 Data Acquisition Smoke
+
+on:
+  push:
+    branches:
+      - leviathan/rewrite-v4-dual-training-data
+    paths:
+      - '.github/workflows/rewrite-v4-data-acquisition.yml'
+
+jobs:
+  materialize-dual-data:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Audit manifests
+        run: python3 rewrite/tools/audit_training_data.py
+      - name: Fetch Stockfish-compatible binpack fixture
+        run: |
+          python3 rewrite/tools/fetch_training_data.py \
+            stockfish-nnue-pytorch-small-binpack \
+            --output-dir "$RUNNER_TEMP/leviathan-training"
+      - name: Fetch real Lc0 training shard
+        run: |
+          python3 rewrite/tools/fetch_training_data.py \
+            lc0-small-real-shard-2020-07-13-0822 \
+            --output-dir "$RUNNER_TEMP/leviathan-training"
+      - name: Validate and summarize materialized data
+        shell: bash
+        run: |
+          set -euo pipefail
+          find "$RUNNER_TEMP/leviathan-training" -type f -maxdepth 3 -printf '%p %s bytes\n'
+          echo '--- provenance ---'
+          find "$RUNNER_TEMP/leviathan-training" -name '*.provenance.json' -type f -print -exec cat {} \;
+          lc0_tar="$RUNNER_TEMP/leviathan-training/lc0-small-real-shard-2020-07-13-0822/training-run3--20200713-0822.tar"
+          echo '--- Lc0 tar sample ---'
+          tar -tf "$lc0_tar" | head -n 25 || true
+          tar -tf "$lc0_tar" | wc -l | tee "$RUNNER_TEMP/leviathan-training/lc0-entry-count.txt"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: leviathan-v4-dual-training-data-smoke
+          path: ${{ runner.temp }}/leviathan-training
+          retention-days: 30

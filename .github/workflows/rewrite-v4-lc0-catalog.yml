@@ -1,0 +1,25 @@
+name: Rewrite v4 Lc0 Archive Catalog
+
+on:
+  push:
+    branches:
+      - leviathan/rewrite-v4-dual-training-data
+    paths:
+      - '.github/workflows/rewrite-v4-lc0-catalog.yml'
+
+jobs:
+  snapshot-catalog:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Snapshot official archive index
+        run: |
+          mkdir -p "$RUNNER_TEMP/lc0-catalog"
+          python3 rewrite/tools/catalog_lc0_archive.py \
+            --output "$RUNNER_TEMP/lc0-catalog/lc0-training-archive.json"
+          head -n 30 "$RUNNER_TEMP/lc0-catalog/lc0-training-archive.json"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: leviathan-v4-lc0-training-catalog
+          path: ${{ runner.temp }}/lc0-catalog/lc0-training-archive.json
+          retention-days: 30

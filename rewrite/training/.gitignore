@@ -1,0 +1,9 @@
+materialized/
+cache/
+*.binpack
+*.tar
+*.tar.gz
+*.tgz
+*.zst
+*.bz2
+*.7z

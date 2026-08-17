@@ -6,6 +6,7 @@ on:
       - leviathan/rewrite-v0-greenfield
       - leviathan/rewrite-v1-donor-ecology
       - leviathan/rewrite-v3-three-loop-optimization
+      - leviathan/rewrite-v4-dual-training-data
     paths:
       - 'rewrite/**'
       - '.github/workflows/rewrite-v0.yml'
@@ -25,6 +26,11 @@ jobs:
         run: cmake --build rewrite/build -j2
       - name: Self-test and donor audit
         run: ctest --test-dir rewrite/build --output-on-failure
+      - name: Training-data provenance and fusion audit
+        run: |
+          python3 rewrite/tools/audit_training_data.py
+          python3 rewrite/tools/test_training_tools.py
+          python3 rewrite/tools/fetch_training_data.py --list
       - name: UCI smoke
         shell: bash
         run: |
