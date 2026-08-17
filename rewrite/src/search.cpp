@@ -1,5 +1,6 @@
 #include "search.h"
 #include <algorithm>
+#include <array>
 #include <cmath>
 
 namespace leviathan {
@@ -114,6 +115,9 @@ void SearchEngine::reward_quiet(Move m,int depth,int ply){
 
 MoveList SearchEngine::ordered_moves(const Position& p,Move tt_move,int ply,bool captures_only) const {
     MoveList moves=p.pseudo_legal_moves(captures_only);
+    struct ScoredMove { int score=0; Move move{}; };
+    std::array<ScoredMove,MoveList::kCapacity> scored{};
+
     auto move_score=[&](Move m){
         if(m==tt_move&&!tt_move.is_null()) return 1000000;
         int s=0;
@@ -131,7 +135,11 @@ MoveList SearchEngine::ordered_moves(const Position& p,Move tt_move,int ply,bool
         }
         return s;
     };
-    std::sort(moves.begin(),moves.end(),[&](Move a,Move b){return move_score(a)>move_score(b);});
+
+    for(size_t i=0;i<moves.size();++i) scored[i]=ScoredMove{move_score(moves[i]),moves[i]};
+    std::sort(scored.begin(),scored.begin()+static_cast<std::ptrdiff_t>(moves.size()),
+              [](const ScoredMove& a,const ScoredMove& b){return a.score>b.score;});
+    for(size_t i=0;i<moves.size();++i) moves[i]=scored[i].move;
     return moves;
 }
 
@@ -149,7 +157,13 @@ int SearchEngine::quiescence(Position& p,int alpha,int beta,int ply){
 
     int stand=checked?-INF:evaluator_->evaluate(p).mean_cp;
     if(!checked){
-        if(stand>=beta) return beta;
+        // Stand-pat is illegal in stalemate. This fast legal-existence probe is
+        // only paid on fail-high qnodes, where returning beta would otherwise
+        // turn a terminal draw into a fictitious advantage.
+        if(stand>=beta){
+            if(!has_legal_move(p)) return 0;
+            return beta;
+        }
         if(stand>alpha) alpha=stand;
     }
 
@@ -171,6 +185,7 @@ int SearchEngine::quiescence(Position& p,int alpha,int beta,int ply){
         if(score>alpha) alpha=score;
     }
     if(checked&&legalCount==0) return -MATE+ply;
+    if(!checked&&legalCount==0&&!has_legal_move(p)) return 0;
     return alpha;
 }
 
