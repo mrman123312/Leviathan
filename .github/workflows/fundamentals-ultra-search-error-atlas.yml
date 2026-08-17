@@ -1,0 +1,133 @@
+name: Fundamentals Ultra Search Error Atlas
+
+on:
+  push:
+    branches: [leviathan/fundamentals-ultra-lab]
+    paths:
+      - '.github/workflows/fundamentals-ultra-search-error-atlas.yml'
+      - 'tools/search_error_atlas.py'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  corpus:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with: {ref: '${{ github.sha }}', path: lab}
+      - name: Build pinned Stockfish and generate mixed-horizon corpus
+        run: |
+          git clone -q https://github.com/official-stockfish/Stockfish.git "$RUNNER_TEMP/sf"
+          git -C "$RUNNER_TEMP/sf" checkout -q 5062aee519a1ba262d472d8ab139851ced56573e
+          make -C "$RUNNER_TEMP/sf/src" -j2 ARCH=x86-64-avx2 build
+          python3 -m pip install --disable-pip-version-check chess==1.11.2
+          python3 lab/tools/generate_balanced_openings.py --stockfish "$RUNNER_TEMP/sf/src/stockfish" --output h10.json --count 30 --plies 10 --seed 577215664 --max-abs-cp 115
+          python3 lab/tools/generate_balanced_openings.py --stockfish "$RUNNER_TEMP/sf/src/stockfish" --output h18.json --count 30 --plies 18 --seed 577215671 --max-abs-cp 115
+          python3 lab/tools/generate_balanced_openings.py --stockfish "$RUNNER_TEMP/sf/src/stockfish" --output h26.json --count 30 --plies 26 --seed 577215679 --max-abs-cp 115
+          python3 - <<'PY'
+          import json
+          hs=[json.load(open(x)) for x in ('h10.json','h18.json','h26.json')]
+          for shard in range(3):
+              rows=[]
+              for h in hs:
+                  rows.extend(h[shard*10:(shard+1)*10])
+              open(f'shard{shard}.json','w').write(json.dumps(rows,indent=2)+'\n')
+          PY
+          sha256sum shard*.json > corpus.sha256
+      - uses: actions/upload-artifact@v4
+        with:
+          name: search-error-atlas-corpus
+          path: |
+            shard*.json
+            corpus.sha256
+          retention-days: 30
+
+  collect:
+    needs: corpus
+    runs-on: ubuntu-22.04
+    timeout-minutes: 100
+    strategy:
+      fail-fast: false
+      matrix: {shard: [0, 1, 2]}
+    steps:
+      - uses: actions/checkout@v4
+        with: {ref: '${{ github.sha }}', path: lab}
+      - uses: actions/checkout@v4
+        with: {ref: leviathan/fundamentals-ultra-p01-qfrontier, path: candidate}
+      - uses: actions/download-artifact@v4
+        with: {name: search-error-atlas-corpus, path: corpus}
+      - name: Build Ultra-P01 and isolated deep oracle
+        run: |
+          make -C candidate/src net && make -C candidate/src clean && make -C candidate/src -j2 ARCH=x86-64-avx2 build
+          git clone -q https://github.com/official-stockfish/Stockfish.git "$RUNNER_TEMP/sf"
+          git -C "$RUNNER_TEMP/sf" checkout -q 5062aee519a1ba262d472d8ab139851ced56573e
+          make -C "$RUNNER_TEMP/sf/src" -j2 ARCH=x86-64-avx2 build
+          python3 -m pip install --disable-pip-version-check chess==1.11.2
+      - name: Counterfactual error-atlas collection
+        run: |
+          python3 lab/tools/search_error_atlas.py collect \
+            --candidate "$PWD/candidate/src/stockfish" \
+            --oracle "$RUNNER_TEMP/sf/src/stockfish" \
+            --openings-json "$PWD/corpus/shard${{ matrix.shard }}.json" \
+            --candidate-fundamentals \
+            --nodes1 12000 --nodes2 40000 --nodes3 100000 \
+            --oracle-nodes 700000 \
+            --shard-label 'shard-${{ matrix.shard }}' \
+            --output "rows-${{ matrix.shard }}.json" | tee "collect-${{ matrix.shard }}.log"
+      - name: Provenance
+        run: |
+          printf 'lab=%s\ncandidate=%s\nstockfish=%s\n' "$(git -C lab rev-parse HEAD)" "$(git -C candidate rev-parse HEAD)" "$(git -C "$RUNNER_TEMP/sf" rev-parse HEAD)" > revisions.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: 'search-error-atlas-rows-${{ matrix.shard }}'
+          path: |
+            rows-${{ matrix.shard }}.json
+            collect-${{ matrix.shard }}.log
+            revisions.txt
+          retention-days: 30
+
+  fit:
+    needs: collect
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+        with: {ref: '${{ github.sha }}', path: lab}
+      - uses: actions/download-artifact@v4
+        with: {pattern: 'search-error-atlas-rows-*', path: rows}
+      - name: Fit out-of-fold risk models at two regret severities
+        run: |
+          mapfile -t inputs < <(find rows -name 'rows-*.json' | sort)
+          python3 lab/tools/search_error_atlas.py fit --inputs "${inputs[@]}" --regret-threshold 15 --folds 5 --output atlas15.json | tee atlas15.log
+          python3 lab/tools/search_error_atlas.py fit --inputs "${inputs[@]}" --regret-threshold 30 --folds 5 --output atlas30.json | tee atlas30.log
+          python3 - <<'PY'
+          import json
+          out={}
+          for k in (15,30):
+              x=json.load(open(f'atlas{k}.json'))
+              simple=max(v for v in [x['baseline_auc_move_instability'],x['baseline_auc_recent_score_drift'],x['baseline_auc_inverse_top2_gap']] if v is not None)
+              risk=x['risk_concentration']
+              out[str(k)]={
+                'auc':x['oof_auc_logistic'],
+                'best_simple_auc':simple,
+                'auc_lift':None if x['oof_auc_logistic'] is None else x['oof_auc_logistic']-simple,
+                'positive_capture_top_quartile':risk['positive_capture_rate'],
+                'top_mean_regret_cp':risk['top_mean_regret_cp'],
+                'rest_mean_regret_cp':risk['rest_mean_regret_cp'],
+              }
+              q=out[str(k)]
+              q['screen_pass']=bool(q['auc'] is not None and q['auc']>=0.70 and q['auc_lift']>=0.05 and q['positive_capture_top_quartile'] is not None and q['positive_capture_top_quartile']>=0.60 and q['top_mean_regret_cp'] >= 2*max(0.1,q['rest_mean_regret_cp']))
+          json.dump({'schema':'LV_SEARCH_ERROR_ATLAS_GATE_V1','rule':'screen only; pass earns a fully fresh prospective holdout, not production integration','thresholds':out},open('gate.json','w'),indent=2,sort_keys=True);print(json.dumps(out,indent=2,sort_keys=True))
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: search-error-atlas-model
+          path: |
+            atlas15.json
+            atlas15.log
+            atlas30.json
+            atlas30.log
+            gate.json
+          retention-days: 30
