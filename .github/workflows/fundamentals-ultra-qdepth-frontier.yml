@@ -30,7 +30,7 @@ jobs:
         env: {MODE: '${{ matrix.mode }}'}
         run: |
           python3 - <<'PY'
-          import os
+          import os,re
           from pathlib import Path
           mode=os.environ['MODE']
           h=Path('cand/src/search.h');s=h.read_text()
@@ -40,45 +40,37 @@ jobs:
           h.write_text(s.replace(old,new,1))
 
           p=Path('cand/src/search.cpp');s=p.read_text()
-          old='return qsearch<PvNode ? PV : NonPV>(pos, ss, alpha, beta);'
-          new='return qsearch<PvNode ? PV : NonPV>(pos, ss, alpha, beta, 0);'
-          if s.count(old)!=1: raise SystemExit('entry anchor')
-          s=s.replace(old,new,1)
-          old='Value Search::Worker::qsearch(Position& pos, Stack* ss, Value alpha, Value beta) {'
-          new='Value Search::Worker::qsearch(Position& pos, Stack* ss, Value alpha, Value beta, int qPly) {'
-          if s.count(old)!=1: raise SystemExit('definition anchor')
-          s=s.replace(old,new,1)
-          old='value = -qsearch<nodeType>(pos, ss + 1, -beta, -alpha);'
-          new='value = -qsearch<nodeType>(pos, ss + 1, -beta, -alpha, qPly + 1);'
-          if s.count(old)!=1: raise SystemExit('recursive anchor')
-          s=s.replace(old,new,1)
+          pairs=[
+            ('return qsearch<PvNode ? PV : NonPV>(pos, ss, alpha, beta);','return qsearch<PvNode ? PV : NonPV>(pos, ss, alpha, beta, 0);','entry'),
+            ('Value Search::Worker::qsearch(Position& pos, Stack* ss, Value alpha, Value beta) {','Value Search::Worker::qsearch(Position& pos, Stack* ss, Value alpha, Value beta, int qPly) {','definition'),
+            ('value = -qsearch<nodeType>(pos, ss + 1, -beta, -alpha);','value = -qsearch<nodeType>(pos, ss + 1, -beta, -alpha, qPly + 1);','recursive')]
+          for old,new,label in pairs:
+            if s.count(old)!=1: raise SystemExit(label+' anchor')
+            s=s.replace(old,new,1)
 
-          frontier='''                if (moveCount > 4 || (moveCount > 2 && leviathanCaptureCeiling < alpha - 48))
-                    continue;'''
+          pattern=r'(?m)^(\s*)if \(moveCount > 4 \|\| \(moveCount > 2 && leviathanCaptureCeiling < alpha - 48\)\)\n\s*continue;'
+          m=re.search(pattern,s)
+          if not m: raise SystemExit('frontier regex anchor')
+          I=m.group(1)
           if mode=='historical':
-              repl='''                // Restore the original 2020 information shape: tactical distance
-                // is part of the movecount frontier. Bound growth to avoid runaway qsearch.
-                const int leviathanQCap = 2 + std::min(qPly, 4);
-                if (moveCount > leviathanQCap
-                    || (moveCount > 2 && leviathanCaptureCeiling < alpha - 48))
-                    continue;'''
+            body=[
+              '// Restore the original information shape: tactical distance is',
+              '// a pruning variable again, with bounded growth for modern qsearch.',
+              'const int leviathanQCap = 2 + std::min(qPly, 4);']
           elif mode=='modern46':
-              repl='''                // Preserve Ultra-v0's cap4 at horizon, but allow one extra
-                // candidate per tactical ply up to cap6.
-                const int leviathanQCap = 4 + std::min(qPly, 2);
-                if (moveCount > leviathanQCap
-                    || (moveCount > 2 && leviathanCaptureCeiling < alpha - 48))
-                    continue;'''
+            body=[
+              '// Keep Ultra-v0 cap4 at the horizon, then widen only after an',
+              '// actual tactical continuation has already justified qsearch work.',
+              'const int leviathanQCap = 4 + std::min(qPly, 2);']
           elif mode=='modern35':
-              repl='''                // More selective modern reconstruction: cap3 at horizon,
-                // widening to cap5 only after tactical continuation proves itself.
-                const int leviathanQCap = 3 + std::min(qPly, 2);
-                if (moveCount > leviathanQCap
-                    || (moveCount > 2 && leviathanCaptureCeiling < alpha - 48))
-                    continue;'''
+            body=[
+              '// Selective reconstruction: cap3 at the horizon, widening only',
+              '// as tactical continuation depth proves the frontier is live.',
+              'const int leviathanQCap = 3 + std::min(qPly, 2);']
           else: raise SystemExit(mode)
-          if s.count(frontier)!=1: raise SystemExit('frontier anchor')
-          p.write_text(s.replace(frontier,repl,1))
+          repl='\n'.join(I+x for x in body)+f'''\n{I}if (moveCount > leviathanQCap\n{I}    || (moveCount > 2 && leviathanCaptureCeiling < alpha - 48))\n{I}    continue;'''
+          s=s[:m.start()]+repl+s[m.end():]
+          p.write_text(s)
           PY
           git -C cand diff --check
           git -C cand diff -- src/search.cpp src/search.h | tee mutation.patch
