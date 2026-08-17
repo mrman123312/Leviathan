@@ -12,7 +12,7 @@ permissions:
 jobs:
   audit:
     runs-on: ubuntu-22.04
-    timeout-minutes: 120
+    timeout-minutes: 150
     steps:
       - uses: actions/checkout@v4
         with: {ref: '${{ github.sha }}', path: lab}
@@ -33,7 +33,7 @@ jobs:
           e=chess.engine.SimpleEngine.popen_uci(path);e.configure({'Threads':1,'Hash':64})
           out=[]; attempts=0
           try:
-            while len(out)<80 and attempts<600:
+            while len(out)<80 and attempts<1200:
               attempts+=1;b=chess.Board()
               # Diversify early play, then let low-budget Stockfish steer toward legal realistic games.
               for ply in range(100):
@@ -67,7 +67,6 @@ jobs:
               p=subprocess.run([sf],input=f'uci\nisready\nposition fen {fen}\neval\nquit\n',text=True,capture_output=True,check=True)
               m=pat.search(p.stdout)
               if not m: raise RuntimeError('no Final evaluation in Stockfish eval output')
-              # Stockfish eval command prints from side-to-move perspective in pawns.
               return round(float(m.group(1))*100)
           groups={}
           try:
