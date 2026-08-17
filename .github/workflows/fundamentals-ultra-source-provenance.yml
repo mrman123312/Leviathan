@@ -1,0 +1,50 @@
+name: Fundamentals Ultra Source Provenance Audit
+
+on:
+  push:
+    branches: [leviathan/fundamentals-ultra-lab]
+    paths: ['.github/workflows/fundamentals-ultra-source-provenance.yml']
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Fetch all Leviathan refs
+        run: git fetch origin '+refs/heads/leviathan/*:refs/remotes/origin/leviathan/*'
+      - name: Classify source-bearing vs workflow-only descendants
+        run: |
+          python3 - <<'PY'
+          import json,subprocess
+          branches=[
+            'fundamentals-v2.1','fundamentals-v2.1.1-phasefix','fundamentals-v2.1.2-critical-pawn','fundamentals-v2.1.3-imminent-pawn','fundamentals-v2.2','fundamentals-v2.5-uncertainty','fundamentals-v2.6-threat-pressure','fundamentals-v2.7-qfrontier','fundamentals-v2.8-pressure-intersection','fundamentals-v2.9-history-context','strength-v3-rar-pv','strength-v5-margin-skeptic','strength-v6-proof-obligation','strength-v7-persistent-proof','strength-v8-evidence-lattice','strength-v8-4-causal-minimal','strength-v8-5-lmr-receipt','strength-v8-5a-witness-hygiene','strength-v8-5b-lmr-receipt-only',
+            'speed-v3-lossless-fastpaths','speed-v3-movepicker-fusion','speed-v3-nnue-shapes','speed-v4-nnue-routing','speed-v5-nnue-chain-fusion',
+            'plyless-v0-decision-depth','plyless-v1-proven-width','plyless-v1.5-fractional-credit'
+          ]
+          base='origin/leviathan/fundamentals-v2.1'
+          rows=[]
+          for b in branches:
+            ref='origin/leviathan/'+b
+            try:
+              sha=subprocess.check_output(['git','rev-parse',ref],text=True).strip()
+            except subprocess.CalledProcessError:
+              rows.append({'branch':b,'missing':True});continue
+            names=subprocess.check_output(['git','diff','--name-only',base+'...'+ref,'--','src'],text=True).splitlines()
+            stats=subprocess.check_output(['git','diff','--numstat',base+'...'+ref,'--','src'],text=True).splitlines()
+            add=dele=0
+            for line in stats:
+              a,d,*_=line.split('\t');add+=int(a) if a.isdigit() else 0;dele+=int(d) if d.isdigit() else 0
+            rows.append({'branch':b,'sha':sha,'source_changed':bool(names),'source_files':names,'source_additions':add,'source_deletions':dele})
+          print(json.dumps(rows,indent=2))
+          open('source-provenance.json','w').write(json.dumps(rows,indent=2,sort_keys=True)+'\n')
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: fundamentals-ultra-source-provenance
+          path: source-provenance.json
+          retention-days: 30
