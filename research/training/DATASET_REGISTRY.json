@@ -1,0 +1,137 @@
+{
+  "schema_version": 2,
+  "policy": {
+    "principle": "Reuse public chess knowledge without pretending correlated donor views are independent evidence.",
+    "required_fields_before_training": ["source", "license", "provenance", "format", "selection_rules", "lineage"],
+    "forbidden": [
+      "unlicensed corpus ingestion",
+      "mixing corpora without provenance",
+      "claiming exact reproduction from weights alone",
+      "counting a derived Stockfish view of an Lc0 position as an independent raw sample",
+      "random-position train/test splitting when source game or shard identity is available"
+    ],
+    "split_rule": "Split by original game/shard before teacher relabeling. Never let another view of the same source position cross train/validation/test boundaries."
+  },
+  "datasets": [
+    {
+      "id": "lc0-public-selfplay-archive",
+      "source": "Leela Chess Zero public training-data archive",
+      "source_home": "https://storage.lczero.org/files/training_data/",
+      "documentation": "LeelaChessZero/lczero-training README",
+      "tooling_revision": "7c5d756ea6bb3531fb14a9b4df231577b1aa1081",
+      "license": "ODbL-1.0; individual database contents under DbCL-1.0 per Lc0 open-data notice",
+      "availability": "public_sharded_archive",
+      "local_status": "fetch_manifest_ready",
+      "format": "Lc0 training chunks; modern lineage includes v6 records with policy/search/value metadata",
+      "lineage": {"origin": "Lc0 self-play", "independent_raw_source": true},
+      "role": ["foundation_positions", "native_policy", "native_wdl_value", "search_q", "moves_left", "distillation"],
+      "selection_rules": "Preserve source tar/chunk/game identity. Sample by shard/game and keep native policy/value targets untouched.",
+      "notes": "This is the primary public raw corpus. Stockfish also trains NNUE networks from Lc0 data, so Stockfish relabels of these positions are additional views, not independent samples."
+    },
+    {
+      "id": "stockfish18-lc0-derived-training-view",
+      "source": "Stockfish 18 NNUE training workflow",
+      "source_home": "https://stockfishchess.org/blog/2026/stockfish-18/",
+      "toolchain": "official-stockfish/nnue-pytorch",
+      "tooling_revision": "9f72946529c4187d3679014036cd22c3be419716",
+      "license": "Underlying Lc0 database remains ODbL-1.0; nnue-pytorch tooling is GPL-3.0",
+      "availability": "reproducible_method_and_teacher_view",
+      "local_status": "pipeline_ready_no_full_mirror",
+      "format": "Stockfish-compatible binpack / UCI teacher labels",
+      "lineage": {
+        "origin": "Lc0 evaluation data plus Stockfish training/teacher processing",
+        "parent_dataset": "lc0-public-selfplay-archive",
+        "independent_raw_source": false
+      },
+      "role": ["stockfish_cp_teacher", "bestmove_teacher", "multipv_teacher", "nnue_training", "cross_engine_disagreement"],
+      "selection_rules": "Relabel a high-information subset of Lc0 positions. Do not duplicate-weight the same source position as a second independent sample.",
+      "notes": "Stockfish 18 documents a reproducible workflow capable of using over 100B Lc0 evaluation positions. The exact historical 100B corpus is not treated as a separately published Stockfish archive."
+    },
+    {
+      "id": "stockfish-nnue-pytorch-small-binpack",
+      "source": "official-stockfish/nnue-pytorch/.pgo/small.binpack",
+      "source_home": "https://github.com/official-stockfish/nnue-pytorch",
+      "tooling_revision": "9f72946529c4187d3679014036cd22c3be419716",
+      "license": "distributed inside GPL-3.0 nnue-pytorch repository; no separate dataset license asserted",
+      "availability": "public_smoke_fixture",
+      "local_status": "fetch_manifest_ready",
+      "format": "binpack",
+      "lineage": {"origin": "nnue-pytorch repository fixture", "independent_raw_source": false},
+      "role": ["data_loader_smoke", "trainer_smoke", "format_validation"],
+      "selection_rules": "Smoke/testing only; never represent this ~1 MiB fixture as production training data.",
+      "notes": "Pinned by immutable commit, expected byte length, and Git blob SHA."
+    },
+    {
+      "id": "stockfish-production-networks",
+      "source": "official-stockfish/networks",
+      "license": "CC0-1.0",
+      "availability": "public_weights",
+      "local_status": "model_registry_pinned",
+      "format": ".nnue",
+      "lineage": {"origin": "Stockfish NNUE training", "independent_raw_source": false},
+      "role": ["teacher", "frozen_evaluation_control"],
+      "selection_rules": "Use compatible network with exact hash and engine/version provenance.",
+      "notes": "Weights are not the complete raw corpora that produced them."
+    },
+    {
+      "id": "stockfish-nnue-training-toolchain",
+      "source": "official-stockfish/nnue-pytorch",
+      "license": "GPL-3.0",
+      "availability": "public_tooling",
+      "local_status": "revision_pinned",
+      "format": "trainer/reader/writer/data-loader tooling",
+      "lineage": {"origin": "Stockfish project", "independent_raw_source": false},
+      "role": ["binpack_training", "checkpoint_conversion", "network_selection", "nnue_equivalence_oracle"],
+      "selection_rules": "Pin commit; treat code license separately from data/model licenses.",
+      "notes": "Trainer expects externally supplied compatible training data."
+    },
+    {
+      "id": "plentychess-selfplay-lineage",
+      "source": "Yoshie2000/PlentyChess",
+      "license": "GPL-3.0",
+      "availability": "methodology_and_engine",
+      "local_status": "donor_registered",
+      "format": "project-specific",
+      "lineage": {"origin": "PlentyChess self-play", "independent_raw_source": true},
+      "role": ["selfplay_methodology", "threat_input_distillation"],
+      "selection_rules": "Use only explicitly published/licensed artifacts with provenance.",
+      "notes": "Upstream reports 15B+ self-generated positions; do not assume the full historical raw corpus is published."
+    },
+    {
+      "id": "caissa-selfplay-lineage",
+      "source": "Witek902/Caissa",
+      "license": "MIT",
+      "availability": "generator_and_trainer",
+      "local_status": "donor_registered",
+      "format": "project-specific",
+      "lineage": {"origin": "Caissa self-play", "independent_raw_source": true},
+      "role": ["selfplay_generator", "cpu_training", "progressive_training"],
+      "selection_rules": "Use generator/trainer directly; do not infer availability of historical data.",
+      "notes": "Upstream reports 20B+ self-play positions and progressive purging of older games; generator/trainer are more reproducible than the complete historical corpus."
+    },
+    {
+      "id": "viridithas-public-networks",
+      "source": "cosmobobak/viridithas-networks",
+      "license": "CC0-1.0",
+      "availability": "public_weights",
+      "local_status": "donor_registered",
+      "format": "network weights",
+      "lineage": {"origin": "Viridithas training", "independent_raw_source": false},
+      "role": ["independent_teacher", "cross_evaluator_reference"],
+      "selection_rules": "Keep network license separate from current AGPL engine source.",
+      "notes": "Treat weights separately from current AGPL engine source."
+    },
+    {
+      "id": "leviathan-failure-frontier",
+      "source": "Leviathan experiments",
+      "license": "project_native",
+      "availability": "generated",
+      "local_status": "schema_ready",
+      "format": "normalized JSONL",
+      "lineage": {"origin": "Leviathan experiments", "independent_raw_source": true},
+      "role": ["engine_disagreement", "search_regret", "failures", "adversarial_positions", "selfplay", "uncertainty_frontier"],
+      "selection_rules": "Keep experiment, engine, commit, search budget and source-position ancestry on every record.",
+      "notes": "This grows over time and should increasingly dominate training as Leviathan matures."
+    }
+  ]
+}

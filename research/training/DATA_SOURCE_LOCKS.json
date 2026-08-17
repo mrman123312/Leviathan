@@ -1,0 +1,121 @@
+{
+  "schema_version": 1,
+  "sources": [
+    {
+      "id": "lc0-small-real-shard-2020-07-13-0822",
+      "dataset_id": "lc0-public-selfplay-archive",
+      "kind": "archive_shard",
+      "fetch_url": "https://storage.lczero.org/files/training_data/training-run3--20200713-0822.tar",
+      "source_base": "https://storage.lczero.org/files/training_data/",
+      "documented_by": {
+        "repository": "LeelaChessZero/lczero-training",
+        "revision": "7c5d756ea6bb3531fb14a9b4df231577b1aa1081",
+        "path": "README.md + official storage index"
+      },
+      "license": "ODbL-1.0; individual database contents DbCL-1.0",
+      "expected_bytes": 15452160,
+      "expected_sha256": "dfaf79680b92e317a05b343f3c11c52c8ca98957a48c3fcc86b992e3762b1c7a",
+      "default_max_bytes": 33554432,
+      "verification": "Verify official-index byte length and materialized SHA-256 before use.",
+      "purpose": "Small real Lc0 training-data shard for format, extraction and dual-view pipeline validation."
+    },
+    {
+      "id": "lc0-upstream-readme-shard-2020-07-11-2017",
+      "dataset_id": "lc0-public-selfplay-archive",
+      "kind": "archive_shard",
+      "fetch_url": "https://storage.lczero.org/files/training_data/training-run1--20200711-2017.tar",
+      "source_base": "https://storage.lczero.org/files/training_data/",
+      "documented_by": {
+        "repository": "LeelaChessZero/lczero-training",
+        "revision": "7c5d756ea6bb3531fb14a9b4df231577b1aa1081",
+        "path": "README.md"
+      },
+      "license": "ODbL-1.0; individual database contents DbCL-1.0",
+      "expected_bytes": 351375360,
+      "expected_sha256": null,
+      "default_max_bytes": 536870912,
+      "verification": "Official README names this shard and official index reports its byte length. Record SHA-256 before production use.",
+      "purpose": "Upstream-documented reference shard; not needed for the first smoke materialization."
+    },
+    {
+      "id": "stockfish-nnue-pytorch-small-binpack",
+      "dataset_id": "stockfish-nnue-pytorch-small-binpack",
+      "kind": "binpack_smoke_fixture",
+      "fetch_url": "https://raw.githubusercontent.com/official-stockfish/nnue-pytorch/9f72946529c4187d3679014036cd22c3be419716/.pgo/small.binpack",
+      "documented_by": {
+        "repository": "official-stockfish/nnue-pytorch",
+        "revision": "9f72946529c4187d3679014036cd22c3be419716",
+        "path": ".pgo/small.binpack"
+      },
+      "license": "Repository-distributed fixture; nnue-pytorch source repository is GPL-3.0. No separate dataset-license assertion is made here.",
+      "expected_bytes": 1048745,
+      "expected_git_blob_sha1": "42a834ca624b03b1decb02ea4c1a32a9222e62d3",
+      "expected_sha256": "61b894937b24e031147a6734f9f176507a9b4f62225eb202d6852dbb054faf71",
+      "default_max_bytes": 2097152,
+      "verification": "Verify exact byte length, SHA-256 and Git blob SHA-1 after download.",
+      "purpose": "Stockfish-compatible binpack loader/trainer smoke test; not production-scale training data."
+    }
+  ],
+  "toolchains": [
+    {
+      "id": "stockfish-nnue-pytorch",
+      "repository": "official-stockfish/nnue-pytorch",
+      "revision": "9f72946529c4187d3679014036cd22c3be419716",
+      "license": "GPL-3.0",
+      "role": ["binpack_loader", "trainer", "nnue_reader_writer", "cross_check_eval"]
+    },
+    {
+      "id": "lc0-training",
+      "repository": "LeelaChessZero/lczero-training",
+      "revision": "7c5d756ea6bb3531fb14a9b4df231577b1aa1081",
+      "role": ["training_chunk_loader", "native_policy_value_parser", "training_pipeline"],
+      "license_note": "Respect file/submodule licensing separately; data licensing is recorded independently as ODbL/DbCL."
+    },
+    {
+      "id": "lc0-official-rescorer",
+      "repository": "LeelaChessZero/lc0",
+      "revision": "d8ce48258c39d331c119f8c8729374ceb3df8409",
+      "license": "GPL-3.0-or-later",
+      "role": ["lc0_chunk_rescore", "nnue_plain_export", "bestmove_and_score_export"],
+      "build_contract": "meson setup build --buildtype release -Drescorer=true -Dlc0=false -Dgtest=false -Ddefault_library=static",
+      "notes": "Preferred active rescorer: modern official Lc0 now builds the rescorer directly from the main codebase."
+    },
+    {
+      "id": "lc0-rescore-tb-historical",
+      "repository": "Tilps/lc0",
+      "revision": "a69c7fb1f2aefce9a8f22e6fa867e466c1d3687e",
+      "license": "GPL-3.0",
+      "role": ["historical_lc0_chunk_rescore", "historical_nnue_plain_export"],
+      "notes": "Historical rescore_tb implementation used by the older public Lc0-to-Stockfish conversion workflow; retained for reproducibility, not preferred for new conversions."
+    },
+    {
+      "id": "stockfish-training-tools",
+      "repository": "official-stockfish/Stockfish",
+      "revision": "9a4c7cf4e311f8d9526b79295b80c4d0464c07cf",
+      "license": "GPL-3.0",
+      "role": ["plain_bin_binpack_conversion", "training_data_validation"],
+      "notes": "Pinned tools-branch revision; `convert` supports .plain/.bin/.binpack with optional validation."
+    }
+  ],
+  "methodology_references": [
+    {
+      "id": "linrock-lc0-data-converter",
+      "repository": "linrock/lc0-data-converter",
+      "reuse_mode": "reference_only",
+      "license_status": "no repository license metadata found",
+      "notes": "Do not copy source. Its README documents the known pipeline Lc0 tar -> rescorer -> .plain -> filter -> Stockfish convert -> .binpack; Leviathan pins the underlying GPL tools directly instead."
+    }
+  ],
+  "lineage_facts": [
+    {
+      "id": "stockfish-uses-lc0-data",
+      "statement": "Stockfish acknowledges that its neural networks are trained on data provided by Leela Chess Zero under ODbL.",
+      "source": "official-stockfish/Stockfish README"
+    },
+    {
+      "id": "stockfish18-100b-lc0",
+      "statement": "Stockfish 18 documents a reproducible workflow capable of training with over 100 billion positions of Lc0 evaluation data.",
+      "source": "Stockfish 18 release article"
+    }
+  ]
+}
