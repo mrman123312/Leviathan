@@ -1,4 +1,4 @@
-# Final post-audit rerun marker: 2026-08-16-qsearch-correct-order-ablation
+# Final post-audit rerun marker: 2026-08-16-final-rollback
 name: Rewrite v3 Architecture Benchmark
 
 on:
