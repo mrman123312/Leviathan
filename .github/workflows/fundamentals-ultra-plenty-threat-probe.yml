@@ -1,0 +1,109 @@
+name: Fundamentals Ultra Plenty Threat Probe
+
+on:
+  push:
+    branches: [leviathan/fundamentals-ultra-lab]
+    paths: ['.github/workflows/fundamentals-ultra-plenty-threat-probe.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 100
+    strategy:
+      fail-fast: false
+      matrix:
+        plenty_nodes: [5000, 15000]
+    steps:
+      - uses: actions/checkout@v4
+        with: {ref: leviathan/fundamentals-ultra-lab, path: lab}
+      - uses: actions/checkout@v4
+        with: {ref: leviathan/fundamentals-ultra-v0, path: ultra}
+      - uses: actions/checkout@v4
+        with:
+          repository: Yoshie2000/PlentyChess
+          ref: 04e07a98ee6ac104c30e7374450c94b96d94ef4d
+          path: plenty
+
+      - name: Build Ultra, Plenty threat-NNUE, and current Stockfish
+        run: |
+          make -C ultra/src net && make -C ultra/src clean && make -C ultra/src -j2 ARCH=x86-64-avx2 build
+          make -C plenty -j2 arch=bmi2
+          git clone -q https://github.com/official-stockfish/Stockfish.git "$RUNNER_TEMP/sf"
+          git -C "$RUNNER_TEMP/sf" checkout -q 5062aee519a1ba262d472d8ab139851ced56573e
+          make -C "$RUNNER_TEMP/sf/src" -j2 ARCH=x86-64-avx2 build
+          python3 -m pip install --disable-pip-version-check chess==1.11.2
+          printf 'uci\nquit\n' | plenty/engine | tee plenty-uci.txt
+
+      - name: Generate 60 fresh balanced positions across horizons
+        run: |
+          python3 lab/tools/generate_balanced_openings.py --stockfish "$RUNNER_TEMP/sf/src/stockfish" --output p10.json --count 30 --plies 10 --seed 7654321 --max-abs-cp 120
+          python3 lab/tools/generate_balanced_openings.py --stockfish "$RUNNER_TEMP/sf/src/stockfish" --output p20.json --count 30 --plies 20 --seed 7654399 --max-abs-cp 120
+          python3 - <<'PY'
+          import json
+          out=[]
+          for p in ('p10.json','p20.json'): out += json.load(open(p))
+          open('positions.json','w').write(json.dumps(out,indent=2)+'\n')
+          PY
+          sha256sum positions.json > positions.sha256
+
+      - name: Measure complementary move information only on disagreements
+        env:
+          PLENTY_NODES: '${{ matrix.plenty_nodes }}'
+        run: |
+          python3 - <<'PY' | tee threat-probe.log
+          import json,statistics,os,time
+          import chess,chess.engine
+          unodes=80000; pnodes=int(os.environ['PLENTY_NODES']); onodes=700000
+          UOPT={'Threads':1,'Hash':64,'Leviathan Fundamentals':True,'Leviathan Fundamentals Authority':1,'Leviathan Quiet Overdrive':0}
+          ONE={'Threads':1,'Hash':64}
+          def start(path,opts):
+            e=chess.engine.SimpleEngine.popen_uci(path,timeout=30)
+            e.configure({k:v for k,v in opts.items() if k in e.options})
+            return e
+          def move(e,b,n,token):
+            t=time.perf_counter(); r=e.play(b,chess.engine.Limit(nodes=n),game=token,info=chess.engine.INFO_BASIC|chess.engine.INFO_SCORE|chess.engine.INFO_PV)
+            return r.move,(time.perf_counter()-t)*1000
+          def grade(e,b,m,n,token):
+            z=e.analyse(b,chess.engine.Limit(nodes=n),root_moves=[m],game=token)
+            return int(z['score'].pov(b.turn).score(mate_score=100000) or 0)
+          U=start('ultra/src/stockfish',UOPT);P=start('plenty/engine',ONE)
+          OU=start(os.environ['RUNNER_TEMP']+'/sf/src/stockfish',ONE);OP=start(os.environ['RUNNER_TEMP']+'/sf/src/stockfish',ONE)
+          rows=[];dis=[]
+          try:
+            positions=json.load(open('positions.json'))
+            for i,x in enumerate(positions,1):
+              b=chess.Board()
+              for u in x['moves']: b.push_uci(u)
+              tok=(i,b.fen()); um,ums=move(U,b,unodes,('ultra',tok)); pm,pms=move(P,b,pnodes,('plenty',tok))
+              r={'i':i,'plies':len(x['moves']),'fen':b.fen(),'ultra':um.uci(),'plenty':pm.uci(),'ultra_ms':ums,'plenty_ms':pms,'disagree':um!=pm}
+              if um!=pm:
+                us=grade(OU,b,um,onodes,('oracle-ultra',tok)); ps=grade(OP,b,pm,onodes,('oracle-plenty',tok)); d=ps-us
+                r|={'ultra_oracle_score':us,'plenty_oracle_score':ps,'delta_plenty_minus_ultra':d};dis.append(r)
+              rows.append(r)
+              if i%10==0: print(f'{i}/60 disagreements={len(dis)}',flush=True)
+          finally:
+            for e in (U,P,OU,OP): e.quit()
+          ds=[r['delta_plenty_minus_ultra'] for r in dis]
+          out={'plenty_nodes':pnodes,'ultra_nodes':unodes,'positions':len(rows),'disagreements':len(dis),'disagreement_rate':len(dis)/len(rows),'plenty_better':sum(x>0 for x in ds),'ultra_better':sum(x<0 for x in ds),'ties':sum(x==0 for x in ds),'mean_delta_plenty_minus_ultra':statistics.fmean(ds) if ds else 0,'median_delta':statistics.median(ds) if ds else 0,'plenty_rescues_ge20':sum(x>=20 for x in ds),'plenty_harms_ge20':sum(x<=-20 for x in ds),'plenty_rescues_ge50':sum(x>=50 for x in ds),'plenty_harms_ge50':sum(x<=-50 for x in ds),'max_plenty_gain':max(ds) if ds else 0,'max_plenty_harm':min(ds) if ds else 0,'mean_ultra_ms':statistics.fmean(r['ultra_ms'] for r in rows),'mean_plenty_ms':statistics.fmean(r['plenty_ms'] for r in rows),'rows':rows}
+          open('threat-probe.json','w').write(json.dumps(out,indent=2)+'\n')
+          print(json.dumps({k:v for k,v in out.items() if k!='rows'},indent=2))
+          PY
+
+      - name: Provenance
+        run: |
+          printf 'ultra=%s\nplenty=%s\nplenty_network=%s\nstockfish=%s\nplenty_nodes=%s\n' \
+            "$(git -C ultra rev-parse HEAD)" "$(git -C plenty rev-parse HEAD)" "$(cat plenty/network.txt)" "$(git -C "$RUNNER_TEMP/sf" rev-parse HEAD)" '${{ matrix.plenty_nodes }}' > revisions.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: 'ultra-plenty-threat-${{ matrix.plenty_nodes }}'
+          path: |
+            threat-probe.json
+            threat-probe.log
+            positions.sha256
+            plenty-uci.txt
+            revisions.txt
+          retention-days: 30
