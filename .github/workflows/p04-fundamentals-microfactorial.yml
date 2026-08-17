@@ -49,36 +49,13 @@ jobs:
           p=Path('cand/src/leviathan_fundamentals.h')
           s=p.read_text()
           if profile in ('singlepiece','both'):
-              old='''inline bool advanced_pawn_move(const Position& pos, Move move) {
-    return pawn_move(pos, move) && relative_rank(mover_color(pos, move), move.to_sq()) >= RANK_6;
-}'''
-              new='''inline bool advanced_pawn_move(const Position& pos, Move move) {
-    if (!move.is_ok())
-        return false;
-
-    // Read the moved piece once. The old composition called moving_piece()
-    // through both pawn_move() and mover_color(). This is semantically identical
-    // for every legal move, including promotion and en passant.
-    const Piece pc = moving_piece(pos, move);
-    const bool isPawn = move.type_of() == PROMOTION || move.type_of() == EN_PASSANT
-                     || (pc != NO_PIECE && type_of(pc) == PAWN);
-    if (!isPawn)
-        return false;
-
-    const Color c = pc != NO_PIECE ? color_of(pc) : pos.side_to_move();
-    return relative_rank(c, move.to_sq()) >= RANK_6;
-}'''
+              old="inline bool advanced_pawn_move(const Position& pos, Move move) {\n    return pawn_move(pos, move) && relative_rank(mover_color(pos, move), move.to_sq()) >= RANK_6;\n}"
+              new="inline bool advanced_pawn_move(const Position& pos, Move move) {\n    if (!move.is_ok())\n        return false;\n\n    // Read the moved piece once instead of through both pawn_move() and mover_color().\n    const Piece pc = moving_piece(pos, move);\n    const bool isPawn = move.type_of() == PROMOTION || move.type_of() == EN_PASSANT\n                     || (pc != NO_PIECE && type_of(pc) == PAWN);\n    if (!isPawn)\n        return false;\n\n    const Color c = pc != NO_PIECE ? color_of(pc) : pos.side_to_move();\n    return relative_rank(c, move.to_sq()) >= RANK_6;\n}"
               if s.count(old)!=1: raise SystemExit('advanced pawn anchor mismatch')
               s=s.replace(old,new,1)
           if profile in ('popcount','both'):
-              old='''inline int non_pawn_count(const Position& pos) {
-    return pos.count<KNIGHT>() + pos.count<BISHOP>() + pos.count<ROOK>() + pos.count<QUEEN>();
-}'''
-              new='''inline int non_pawn_count(const Position& pos) {
-    // Same exact count from the already-maintained type bitboards. On POPCNT
-    // targets this replaces eight color-indexed count loads/adds with one mask count.
-    return popcount(pos.pieces(KNIGHT, BISHOP, ROOK, QUEEN));
-}'''
+              old="inline int non_pawn_count(const Position& pos) {\n    return pos.count<KNIGHT>() + pos.count<BISHOP>() + pos.count<ROOK>() + pos.count<QUEEN>();\n}"
+              new="inline int non_pawn_count(const Position& pos) {\n    // Same exact count from already-maintained type bitboards.\n    return popcount(pos.pieces(KNIGHT, BISHOP, ROOK, QUEEN));\n}"
               if s.count(old)!=1: raise SystemExit('non-pawn anchor mismatch')
               s=s.replace(old,new,1)
           p.write_text(s)
