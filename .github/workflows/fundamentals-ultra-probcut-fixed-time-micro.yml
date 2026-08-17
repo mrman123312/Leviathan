@@ -1,0 +1,148 @@
+name: Fundamentals Ultra ProbCut Fixed-Time Micro
+
+on:
+  push:
+    branches: [leviathan/fundamentals-ultra-lab]
+    paths: ['.github/workflows/fundamentals-ultra-probcut-fixed-time-micro.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  micro:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with: {ref: '${{ github.sha }}', path: lab}
+      - uses: actions/checkout@v4
+        with: {ref: leviathan/fundamentals-ultra-p01-qfrontier, path: cand}
+
+      - name: Materialize exact confirmed ProbCut paid-evidence candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import re
+          from pathlib import Path
+          p=Path('cand/src/search.cpp'); s=p.read_text()
+          pairs=[
+            ('Move  move, excludedMove, bestMove;', 'Move  move, excludedMove, bestMove, probCutNearMiss;'),
+            ('Value bestValue, value, eval, maxValue, probCutBeta;', 'Value bestValue, value, eval, maxValue, probCutBeta, probCutNearValue;'),
+            ('bestMove       = Move::none();\n    priorReduction = (ss - 1)->reduction;', 'bestMove         = Move::none();\n    probCutNearMiss  = Move::none();\n    probCutNearValue = -VALUE_INFINITE;\n    priorReduction   = (ss - 1)->reduction;'),
+            ('MovePicker mp(pos, ttData.move, depth, &mainHistory, &lowPlyHistory, &captureHistory, contHist,\n                  &sharedHistory, ss->ply);', 'const Move leviathanPreferredMove = ttData.move ? ttData.move : probCutNearMiss;\n    MovePicker mp(pos, leviathanPreferredMove, depth, &mainHistory, &lowPlyHistory, &captureHistory,\n                  contHist, &sharedHistory, ss->ply);')]
+          for a,b in pairs:
+            if s.count(a)!=1: raise SystemExit(f'anchor count={s.count(a)} for {a[:60]!r}')
+            s=s.replace(a,b,1)
+          pattern=r'(?ms)^(\s*)if \(value >= probCutBeta\)\n\1\{\n.*?^\1\}'
+          m=re.search(pattern,s)
+          if not m: raise SystemExit('ProbCut success-block regex anchor')
+          I=m.group(1)
+          extra=(f"\n{I}else if (value >= beta && !is_decisive(value) && value > probCutNearValue)\n"
+                 f"{I}{{\n{I}    probCutNearValue = value;\n{I}    probCutNearMiss  = move;\n{I}}}")
+          s=s[:m.end()]+extra+s[m.end():]
+          a='r += 697;  // Base reduction offset to compensate for other tweaks\n        r -= moveCount * 65;'
+          b='r += 697;  // Base reduction offset to compensate for other tweaks\n        if (move == probCutNearMiss)\n            r -= 256;\n        r -= moveCount * 65;'
+          if s.count(a)!=1: raise SystemExit('LMR base anchor')
+          s=s.replace(a,b,1)
+          p.write_text(s)
+          PY
+          git -C cand diff --check
+          git -C cand diff -- src/search.cpp | tee mutation.patch
+          test -s mutation.patch
+
+      - name: Build candidate and pinned current Stockfish
+        shell: bash
+        run: |
+          set -euo pipefail
+          make -C cand/src net
+          make -C cand/src clean
+          make -C cand/src -j2 ARCH=x86-64-avx2 build
+          git clone -q https://github.com/official-stockfish/Stockfish.git "$RUNNER_TEMP/sf"
+          git -C "$RUNNER_TEMP/sf" checkout -q 5062aee519a1ba262d472d8ab139851ced56573e
+          make -C "$RUNNER_TEMP/sf/src" -j2 ARCH=x86-64-avx2 build
+          python3 -m pip install --disable-pip-version-check chess==1.11.2
+
+      - name: Generate 20 fresh balanced opening pairs
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 lab/tools/generate_balanced_openings.py \
+            --stockfish "$RUNNER_TEMP/sf/src/stockfish" \
+            --output openings.json --count 20 --plies 18 \
+            --seed 244948974 --max-abs-cp 100
+          python3 - <<'PY'
+          import json
+          x=json.load(open('openings.json'))
+          assert len(x)==20, len(x)
+          PY
+          sha256sum openings.json > openings.sha256
+
+      - name: 40-game fixed-time micro-screen vs current Stockfish
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p match
+          python3 lab/tools/fundamentals_tournament.py \
+            --candidate "$PWD/cand/src/stockfish" \
+            --opponent "$RUNNER_TEMP/sf/src/stockfish" \
+            --candidate-label P01-ProbCut \
+            --opponent-label Stockfish-5062aee5 \
+            --candidate-fundamentals \
+            --move-time-ms 100 \
+            --openings-json "$PWD/openings.json" \
+            --max-plies 200 \
+            --output-dir match | tee match/match.log
+          test -s match/summary.json
+          test -s match/games.jsonl
+
+      - name: Predeclared micro decision
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json
+          s=json.load(open('match/summary.json'))
+          assert s['games']==40, s
+          assert not s.get('errors'), s.get('errors')
+          score=float(s['score_fraction'])
+          if score >= 0.525:
+              decision='PROVISIONAL_FIXED_TIME_CONFIRM'
+          elif score < 0.475:
+              decision='NEGATIVE_FIXED_TIME_SIGNAL'
+          else:
+              decision='INCONCLUSIVE_NO_MORE_GAMES_YET'
+          out={
+            'schema':'LV_PROBCUT_FIXED_TIME_MICRO_V1',
+            'games':40,
+            'opening_pairs':20,
+            'score_fraction':score,
+            'wins':s['wins'],'draws':s['draws'],'losses':s['losses'],
+            'naive_logistic_elo':s.get('naive_logistic_elo'),
+            'decision':decision,
+            'rule':'40-game screen only; >=52.5% keeps fixed-time hypothesis alive, <47.5% negative, otherwise inconclusive; no Elo proof from this sample'
+          }
+          print(json.dumps(out,indent=2))
+          open('decision.json','w').write(json.dumps(out,indent=2)+'\n')
+          PY
+
+      - name: Provenance
+        shell: bash
+        run: |
+          set -euo pipefail
+          printf 'candidate_base=%s\nstockfish=%s\nsource_confirmation_run=32006000162\nmove_time_ms=100\ngames=40\n' \
+            "$(git -C cand rev-parse HEAD)" \
+            "$(git -C "$RUNNER_TEMP/sf" rev-parse HEAD)" > revisions.txt
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ultra-probcut-fixed-time-micro
+          path: |
+            mutation.patch
+            openings.json
+            openings.sha256
+            match
+            decision.json
+            revisions.txt
+          retention-days: 30
