@@ -1,6 +1,7 @@
 #include "chess.h"
 #include "search.h"
 #include "tablebase.h"
+#include <algorithm>
 #include <iostream>
 #include <sstream>
 #include <string>
@@ -17,6 +18,11 @@ static uint64_t perft(const Position& p,int depth){
 
 static bool has_move(const Position& p, const char* text){
     for(Move m:p.legal_moves()) if(move_to_uci(m)==text) return true;
+    return false;
+}
+
+static bool has_tactical_move(const Position& p, const char* text){
+    for(Move m:p.legal_moves(true)) if(move_to_uci(m)==text) return true;
     return false;
 }
 
@@ -67,9 +73,30 @@ static bool selftest(){
     if(!promo || !has_move(*promo,"a7a8q") || !has_move(*promo,"a7a8r") || !has_move(*promo,"a7a8b") || !has_move(*promo,"a7a8n")){
         std::cerr<<"selftest promotion failed\n"; return false;
     }
+    if(!has_tactical_move(*promo,"a7a8q") || !has_tactical_move(*promo,"a7a8n")){
+        std::cerr<<"selftest quiet promotion missing from tactical/qsearch move set\n"; return false;
+    }
 
     if(!undo_roundtrip(start) || !undo_roundtrip(*castle) || !undo_roundtrip(ep) || !undo_roundtrip(*promo)){
         std::cerr<<"selftest make/unmake roundtrip failed\n"; return false;
+    }
+
+    auto phantomEp=Position::from_fen("rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq e3 0 1");
+    auto noEp=Position::from_fen("rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq - 0 1");
+    if(!phantomEp || !noEp || phantomEp->key()!=noEp->key()){
+        std::cerr<<"selftest phantom EP incorrectly changes repetition key\n"; return false;
+    }
+
+    auto realEp=Position::from_fen("4k3/8/8/3pP3/8/8/8/4K3 w - d6 0 1");
+    auto realEpNone=Position::from_fen("4k3/8/8/3pP3/8/8/8/4K3 w - - 0 1");
+    if(!realEp || !realEpNone || realEp->key()==realEpNone->key()){
+        std::cerr<<"selftest legal EP missing from repetition key\n"; return false;
+    }
+
+    auto pinnedEp=Position::from_fen("k3r3/8/8/3pP3/8/8/8/4K3 w - d6 0 1");
+    auto pinnedEpNone=Position::from_fen("k3r3/8/8/3pP3/8/8/8/4K3 w - - 0 1");
+    if(!pinnedEp || !pinnedEpNone || pinnedEp->key()!=pinnedEpNone->key()){
+        std::cerr<<"selftest illegal pinned EP incorrectly changes repetition key\n"; return false;
     }
 
     Position p=Position::startpos();
@@ -183,6 +210,16 @@ int main(int argc,char** argv){
             const auto e=default_evaluator().evaluate(pos);
             const auto& d=default_evaluator().descriptor();
             std::cout<<"info string evaluator "<<d.id<<" score "<<e.mean_cp<<" provenance "<<e.provenance<<"\n"<<std::flush;
+        } else if(cmd=="legal"){
+            auto moves=pos.legal_moves();
+            std::vector<std::string> text; text.reserve(moves.size());
+            for(Move m:moves) text.push_back(move_to_uci(m));
+            std::sort(text.begin(),text.end());
+            std::cout<<"legal";
+            for(const auto& m:text) std::cout<<' '<<m;
+            std::cout<<"\n"<<std::flush;
+        } else if(cmd=="key"){
+            std::cout<<"key "<<pos.key()<<"\n"<<std::flush;
         } else if(cmd=="perft"){
             int d=1; in>>d; std::cout<<"nodes "<<perft(pos,d)<<"\n"<<std::flush;
         } else if(cmd=="tbprobe"){
