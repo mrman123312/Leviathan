@@ -1,0 +1,59 @@
+name: Rewrite v4 Lc0 Native Data Smoke
+
+on:
+  push:
+    branches:
+      - leviathan/rewrite-v4-dual-training-data
+    paths:
+      - '.github/workflows/rewrite-v4-lc0-native-smoke.yml'
+
+jobs:
+  parse-native-lc0:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Audit dataset provenance
+        run: python3 rewrite/tools/audit_training_data.py
+      - name: Materialize exact Lc0 shard
+        run: |
+          python3 rewrite/tools/fetch_training_data.py \
+            lc0-small-real-shard-2020-07-13-0822 \
+            --output-dir "$RUNNER_TEMP/leviathan-training"
+      - name: Extract a bounded native chunk sample
+        shell: bash
+        run: |
+          set -euo pipefail
+          tarfile="$RUNNER_TEMP/leviathan-training/lc0-small-real-shard-2020-07-13-0822/training-run3--20200713-0822.tar"
+          mkdir -p "$RUNNER_TEMP/lc0-sample"
+          first=$(tar -tf "$tarfile" | grep -E '\.gz$' | head -n 1)
+          test -n "$first"
+          tar -xf "$tarfile" -C "$RUNNER_TEMP/lc0-sample" "$first"
+          printf '%s\n' "$first" | tee "$RUNNER_TEMP/lc0-sample/source-entry.txt"
+      - name: Build pinned official Lc0 training dumper
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y meson ninja-build libgtest-dev pybind11-dev zlib1g-dev pkg-config
+          git clone https://github.com/LeelaChessZero/lczero-training.git "$RUNNER_TEMP/lczero-training"
+          git -C "$RUNNER_TEMP/lczero-training" checkout 7c5d756ea6bb3531fb14a9b4df231577b1aa1081
+          git -C "$RUNNER_TEMP/lczero-training" submodule update --init --recursive
+          meson setup "$RUNNER_TEMP/lczero-training/build" "$RUNNER_TEMP/lczero-training" --buildtype release
+          meson compile -C "$RUNNER_TEMP/lczero-training/build" dump_chunk
+      - name: Decode native Lc0 record
+        shell: bash
+        run: |
+          set -euo pipefail
+          chunk=$(find "$RUNNER_TEMP/lc0-sample" -type f -name '*.gz' | head -n 1)
+          test -n "$chunk"
+          "$RUNNER_TEMP/lczero-training/build/dump_chunk" \
+            --chunk_path="$chunk" --max_entries=1 \
+            > "$RUNNER_TEMP/lc0-sample/native-entry.txt" 2>&1
+          test -s "$RUNNER_TEMP/lc0-sample/native-entry.txt"
+          grep -q 'Entry 0:' "$RUNNER_TEMP/lc0-sample/native-entry.txt"
+          head -n 120 "$RUNNER_TEMP/lc0-sample/native-entry.txt"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: leviathan-v4-lc0-native-record-smoke
+          path: ${{ runner.temp }}/lc0-sample
+          retention-days: 30
