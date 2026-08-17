@@ -1,0 +1,49 @@
+name: One Shot Current Leviathan vs Stockfish 18
+
+on:
+  push:
+    branches:
+      - leviathan/rewrite-v2-bootstrap-strength
+    paths:
+      - '.github/workflows/one-shot-current-vs-sf18.yml'
+
+jobs:
+  one-match:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build current Leviathan
+        run: |
+          cmake -S rewrite -B rewrite/build -DCMAKE_BUILD_TYPE=Release
+          cmake --build rewrite/build -j2
+          ctest --test-dir rewrite/build --output-on-failure
+
+      - name: Build official Stockfish 18
+        run: |
+          git clone --depth 1 --branch sf_18 https://github.com/official-stockfish/Stockfish.git /tmp/stockfish18
+          make -C /tmp/stockfish18/src -j2 build ARCH=x86-64
+
+      - name: Install match dependency
+        run: python3 -m pip install --disable-pip-version-check chess==1.11.2
+
+      - name: Run exactly one game
+        run: |
+          mkdir -p rewrite/results/one-shot-current
+          python3 rewrite/tools/uci_match.py \
+            --white "$PWD/rewrite/build/leviathan" \
+            --black /tmp/stockfish18/src/stockfish \
+            --white-name 'Leviathan Rewrite v2 distilled' \
+            --black-name 'Stockfish 18' \
+            --movetime 150 \
+            --max-plies 200 \
+            --pgn rewrite/results/one-shot-current/leviathan-current-vs-stockfish18.pgn \
+            --summary rewrite/results/one-shot-current/leviathan-current-vs-stockfish18.json
+          cat rewrite/results/one-shot-current/leviathan-current-vs-stockfish18.pgn
+          cat rewrite/results/one-shot-current/leviathan-current-vs-stockfish18.json
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: leviathan-current-one-shot-vs-sf18
+          path: rewrite/results/one-shot-current/
