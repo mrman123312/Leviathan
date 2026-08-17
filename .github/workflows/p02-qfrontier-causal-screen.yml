@@ -35,64 +35,51 @@ jobs:
           python3 - <<'PY'
           from pathlib import Path
 
-          old = '''                const Value leviathanCaptureCeiling =
-                  futilityBase + PieceValue[pos.piece_on(move.to_sq())];
+          needle = 'if (moveCount > 4 || (moveCount > 2 && leviathanCaptureCeiling < alpha - 48))'
 
-                // Leviathan Q-frontier: keep Stockfish's two-capture fast path,
-                // but inspect at most two extra captures when their crude material
-                // ceiling is still close enough to alpha to change the decision.
-                if (moveCount > 4 || (moveCount > 2 && leviathanCaptureCeiling < alpha - 48))
-                    continue;
+          def patch_gate(root, kind):
+              p = Path(root, 'src/search.cpp')
+              lines = p.read_text().splitlines()
+              hits = [i for i, line in enumerate(lines) if needle in line]
+              if len(hits) != 1:
+                  raise SystemExit(f'{root}: Q-frontier gate count={len(hits)}')
+              i = hits[0]
+              if i + 1 >= len(lines) or lines[i + 1].strip() != 'continue;':
+                  raise SystemExit(f'{root}: malformed Q-frontier gate')
+              ind = lines[i][:len(lines[i]) - len(lines[i].lstrip())]
 
-                Value futilityValue = leviathanCaptureCeiling;'''
+              if kind == 'qsearch':
+                  repl = [
+                      ind + 'if (moveCount > 4 || (moveCount > 2 && leviathanCaptureCeiling <= alpha))',
+                      ind + '    continue;',
+                  ]
+              elif kind == 'qbound':
+                  repl = [
+                      ind + 'if (moveCount > 2)',
+                      ind + '{',
+                      ind + '    if (moveCount <= 4 && leviathanCaptureCeiling >= alpha - 48',
+                      ind + '        && leviathanCaptureCeiling <= alpha)',
+                      ind + '        bestValue = std::max(bestValue, leviathanCaptureCeiling);',
+                      ind + '    continue;',
+                      ind + '}',
+                  ]
+              elif kind == 'qdecay6':
+                  repl = [
+                      ind + 'if (moveCount > 6',
+                      ind + '    || (moveCount > 4 && leviathanCaptureCeiling < alpha + 96)',
+                      ind + '    || (moveCount > 2 && moveCount <= 4',
+                      ind + '        && leviathanCaptureCeiling < alpha - 48))',
+                      ind + '    continue;',
+                  ]
+              else:
+                  raise ValueError(kind)
 
-          variants = {
-            'qsearch': '''                const Value leviathanCaptureCeiling =
-                  futilityBase + PieceValue[pos.piece_on(move.to_sq())];
+              lines[i:i + 2] = repl
+              p.write_text('\n'.join(lines) + '\n')
 
-                // P02-A: isolate Q-frontier's real-search effect. Moves 3-4 may
-                // continue only when their material ceiling can actually beat
-                // alpha; no near-alpha synthetic bestValue is admitted.
-                if (moveCount > 4 || (moveCount > 2 && leviathanCaptureCeiling <= alpha))
-                    continue;
-
-                Value futilityValue = leviathanCaptureCeiling;''',
-            'qbound': '''                const Value leviathanCaptureCeiling =
-                  futilityBase + PieceValue[pos.piece_on(move.to_sq())];
-
-                // P02-B: isolate Q-frontier's near-alpha bound effect while
-                // retaining Stockfish's original two-capture search frontier.
-                if (moveCount > 2)
-                {
-                    if (moveCount <= 4 && leviathanCaptureCeiling >= alpha - 48
-                        && leviathanCaptureCeiling <= alpha)
-                        bestValue = std::max(bestValue, leviathanCaptureCeiling);
-                    continue;
-                }
-
-                Value futilityValue = leviathanCaptureCeiling;''',
-            'qdecay6': '''                const Value leviathanCaptureCeiling =
-                  futilityBase + PieceValue[pos.piece_on(move.to_sq())];
-
-                // P02-C: confidence-decaying frontier. Keep P01 behavior for
-                // moves 3-4, but allow moves 5-6 only when their crude ceiling
-                // clears alpha by a full pawn-ish margin before the normal SEE
-                // gates are allowed to spend search nodes on them.
-                if (moveCount > 6
-                    || (moveCount > 4 && leviathanCaptureCeiling < alpha + 96)
-                    || (moveCount > 2 && moveCount <= 4
-                        && leviathanCaptureCeiling < alpha - 48))
-                    continue;
-
-                Value futilityValue = leviathanCaptureCeiling;'''
-          }
-
-          for name, new in variants.items():
-              p = Path(name, 'src/search.cpp')
-              s = p.read_text()
-              if s.count(old) != 1:
-                  raise SystemExit(f'{name}: Q-frontier anchor count={s.count(old)}')
-              p.write_text(s.replace(old, new, 1))
+          patch_gate('qsearch', 'qsearch')
+          patch_gate('qbound', 'qbound')
+          patch_gate('qdecay6', 'qdecay6')
           PY
           git -C qsearch diff --check
           git -C qbound diff --check
