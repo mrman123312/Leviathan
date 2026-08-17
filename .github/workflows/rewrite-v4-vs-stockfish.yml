@@ -1,0 +1,65 @@
+name: Rewrite v4 vs Stockfish Diagnostic Match
+
+on:
+  push:
+    branches:
+      - leviathan/rewrite-v4-dual-training-data
+    paths:
+      - '.github/workflows/rewrite-v4-vs-stockfish.yml'
+
+jobs:
+  match:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build current Leviathan
+        run: |
+          cmake -S rewrite -B rewrite/build-match -DCMAKE_BUILD_TYPE=Release
+          cmake --build rewrite/build-match -j2
+          rewrite/build-match/leviathan --selftest
+
+      - name: Build pinned Stockfish
+        shell: bash
+        run: |
+          set -euo pipefail
+          git clone https://github.com/official-stockfish/Stockfish.git "$RUNNER_TEMP/stockfish"
+          git -C "$RUNNER_TEMP/stockfish" checkout 5062aee519a1ba262d472d8ab139851ced56573e
+          make -C "$RUNNER_TEMP/stockfish/src" -j2 build ARCH=x86-64
+          test -x "$RUNNER_TEMP/stockfish/src/stockfish"
+          "$RUNNER_TEMP/stockfish/src/stockfish" bench 1 1 5 default depth | tail -n 20
+
+      - name: Install match controller
+        run: python3 -m pip install --disable-pip-version-check chess==1.11.2
+
+      - name: Run 16-game paired-opening equal-time match
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/leviathan-vs-stockfish"
+          python3 rewrite/tools/match_stockfish.py \
+            --leviathan "$PWD/rewrite/build-match/leviathan" \
+            --stockfish "$RUNNER_TEMP/stockfish/src/stockfish" \
+            --move-time-ms 50 \
+            --max-plies 180 \
+            --output-dir "$RUNNER_TEMP/leviathan-vs-stockfish" \
+            | tee "$RUNNER_TEMP/leviathan-vs-stockfish/match.log"
+          cat "$RUNNER_TEMP/leviathan-vs-stockfish/summary.json"
+
+      - name: Record exact revisions
+        shell: bash
+        run: |
+          {
+            echo "leviathan_sha=$(git rev-parse HEAD)"
+            echo "stockfish_sha=$(git -C "$RUNNER_TEMP/stockfish" rev-parse HEAD)"
+            echo "runner=$(uname -a)"
+            echo "cpu=$(lscpu | grep 'Model name' | head -n 1)"
+          } > "$RUNNER_TEMP/leviathan-vs-stockfish/revisions.txt"
+          cat "$RUNNER_TEMP/leviathan-vs-stockfish/revisions.txt"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: leviathan-v4-vs-stockfish-match
+          path: ${{ runner.temp }}/leviathan-vs-stockfish
+          retention-days: 30
