@@ -81,5 +81,11 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: 'ultra-margin-${{ matrix.label }}'
-          path: [nodes, time, regret.json, regret.log, openings.json, mutation.patch]
+          path: |
+            nodes
+            time
+            regret.json
+            regret.log
+            openings.json
+            mutation.patch
           retention-days: 30
