@@ -1,3 +1,4 @@
+# Rerun marker: pipefail-safe archive selection
 name: Rewrite v4 Lc0 Native Data Smoke
 
 on:
@@ -25,7 +26,9 @@ jobs:
           set -euo pipefail
           tarfile="$RUNNER_TEMP/leviathan-training/lc0-small-real-shard-2020-07-13-0822/training-run3--20200713-0822.tar"
           mkdir -p "$RUNNER_TEMP/lc0-sample"
-          first=$(tar -tf "$tarfile" | grep -E '\.gz$' | head -n 1)
+          tar -tf "$tarfile" > "$RUNNER_TEMP/lc0-sample/all-entries.txt"
+          grep -E '\.gz$' "$RUNNER_TEMP/lc0-sample/all-entries.txt" > "$RUNNER_TEMP/lc0-sample/gz-entries.txt"
+          first=$(sed -n '1p' "$RUNNER_TEMP/lc0-sample/gz-entries.txt")
           test -n "$first"
           tar -xf "$tarfile" -C "$RUNNER_TEMP/lc0-sample" "$first"
           printf '%s\n' "$first" | tee "$RUNNER_TEMP/lc0-sample/source-entry.txt"
@@ -44,7 +47,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          chunk=$(find "$RUNNER_TEMP/lc0-sample" -type f -name '*.gz' | head -n 1)
+          chunk=$(find "$RUNNER_TEMP/lc0-sample" -type f -name '*.gz' -print -quit)
           test -n "$chunk"
           "$RUNNER_TEMP/lczero-training/build/dump_chunk" \
             --chunk_path="$chunk" --max_entries=1 \
