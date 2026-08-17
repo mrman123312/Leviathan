@@ -1,0 +1,159 @@
+name: Fundamentals Ultra Lc0 Policy Replication
+
+on:
+  push:
+    branches: [leviathan/fundamentals-ultra-lab]
+    paths: ['.github/workflows/fundamentals-ultra-lc0-policy-replication.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  corpus:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with: {ref: '${{ github.sha }}', path: lab}
+      - name: Generate 240 mixed-horizon balanced positions
+        run: |
+          git clone -q https://github.com/official-stockfish/Stockfish.git "$RUNNER_TEMP/sf"
+          git -C "$RUNNER_TEMP/sf" checkout -q 5062aee519a1ba262d472d8ab139851ced56573e
+          make -C "$RUNNER_TEMP/sf/src" -j2 ARCH=x86-64-avx2 build
+          python3 -m pip install --disable-pip-version-check chess==1.11.2
+          python3 lab/tools/generate_balanced_openings.py --stockfish "$RUNNER_TEMP/sf/src/stockfish" --output h10.json --count 80 --plies 10 --seed 223606797 --max-abs-cp 120
+          python3 lab/tools/generate_balanced_openings.py --stockfish "$RUNNER_TEMP/sf/src/stockfish" --output h20.json --count 80 --plies 20 --seed 223606877 --max-abs-cp 120
+          python3 lab/tools/generate_balanced_openings.py --stockfish "$RUNNER_TEMP/sf/src/stockfish" --output h30.json --count 80 --plies 30 --seed 223606957 --max-abs-cp 120
+          python3 - <<'PY'
+          import json
+          pools=[json.load(open(p)) for p in ('h10.json','h20.json','h30.json')]
+          rows=[]
+          for h,pool in zip((10,20,30),pools):
+              for x in pool:
+                  q=dict(x);q['policy_horizon']=h;rows.append(q)
+          # Four shards, each gets 20 positions from each horizon.
+          for s in range(4):
+              part=[]
+              for hidx in range(3): part += rows[hidx*80+s*20:hidx*80+(s+1)*20]
+              assert len(part)==60
+              open(f'shard{s}.json','w').write(json.dumps(part,indent=2)+'\n')
+          PY
+          sha256sum shard*.json > corpus.sha256
+      - uses: actions/upload-artifact@v4
+        with:
+          name: lc0-policy-replication-corpus
+          path: |
+            shard*.json
+            corpus.sha256
+          retention-days: 30
+
+  scan:
+    needs: corpus
+    runs-on: ubuntu-22.04
+    timeout-minutes: 150
+    strategy:
+      fail-fast: false
+      matrix: {shard: [0,1,2,3]}
+    steps:
+      - uses: actions/checkout@v4
+        with: {ref: '${{ github.sha }}', path: lab}
+      - uses: actions/checkout@v4
+        with: {ref: leviathan/fundamentals-ultra-p01-qfrontier, path: p01}
+      - uses: actions/download-artifact@v4
+        with: {name: lc0-policy-replication-corpus, path: corpus}
+      - name: Build P01, Lc0 policyhead, and pinned Stockfish oracle
+        shell: bash
+        run: |
+          set -euo pipefail
+          make -C p01/src net && make -C p01/src clean && make -C p01/src -j2 ARCH=x86-64-avx2 build
+          git clone -q https://github.com/official-stockfish/Stockfish.git "$RUNNER_TEMP/sf"
+          git -C "$RUNNER_TEMP/sf" checkout -q 5062aee519a1ba262d472d8ab139851ced56573e
+          make -C "$RUNNER_TEMP/sf/src" -j2 ARCH=x86-64-avx2 build
+          sudo apt-get update -qq && sudo apt-get install -y -qq libopenblas-dev zlib1g-dev
+          python3 -m pip install --disable-pip-version-check chess==1.11.2 meson ninja
+          git clone -q --branch v0.32.1 --depth 1 https://github.com/LeelaChessZero/lc0.git "$RUNNER_TEMP/lc0"
+          (cd "$RUNNER_TEMP/lc0" && ./build.sh release -Dgtest=false)
+          curl -L --fail --retry 3 -o "$RUNNER_TEMP/net.pb.gz" https://storage.lczero.org/files/networks-contrib/t1-256x10-distilled-swa-2432500.pb.gz
+          cat > "$RUNNER_TEMP/lc0-policy" <<EOF
+          #!/bin/sh
+          exec "$RUNNER_TEMP/lc0/build/release/lc0" --weights="$RUNNER_TEMP/net.pb.gz" --backend=blas --search-algorithm=policyhead
+          EOF
+          chmod +x "$RUNNER_TEMP/lc0-policy"
+          printf 'uci\nquit\n' | "$RUNNER_TEMP/lc0-policy" > lc0-uci.txt
+          grep -q '^uciok$' lc0-uci.txt
+          sha256sum "$RUNNER_TEMP/net.pb.gz" > lc0-network.sha256
+      - name: Scan policy disagreements under isolated deep oracle
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY' | tee scan.log
+          import chess,chess.engine,json,os,statistics,time
+          shard=${{ matrix.shard }};R=json.load(open(f'corpus/shard{shard}.json'))
+          KOPT={'Threads':1,'Hash':64,'Leviathan Fundamentals':True,'Leviathan Fundamentals Authority':1,'Leviathan Quiet Overdrive':0};SOPT={'Threads':1,'Hash':64}
+          def eng(path,opt=None):
+              e=chess.engine.SimpleEngine.popen_uci(path)
+              if opt:e.configure(opt)
+              return e
+          K=eng('p01/src/stockfish',KOPT);L=eng(os.environ['RUNNER_TEMP']+'/lc0-policy');OB=eng(os.environ['RUNNER_TEMP']+'/sf/src/stockfish',SOPT);OK=eng(os.environ['RUNNER_TEMP']+'/sf/src/stockfish',SOPT);OL=eng(os.environ['RUNNER_TEMP']+'/sf/src/stockfish',SOPT)
+          out=[]
+          try:
+            for i,x in enumerate(R,1):
+              b=chess.Board(x['final_fen']);tok=(shard,i,b.fen())
+              ki=K.analyse(b,chess.engine.Limit(nodes=80000),game=('k',tok));km=ki['pv'][0]
+              t=time.perf_counter();lm=L.play(b,chess.engine.Limit(nodes=1),game=('l',tok)).move;lat=(time.perf_counter()-t)*1000
+              if lm is None or lm not in b.legal_moves: raise RuntimeError(f'illegal/no policy move {lm}')
+              if lm==km:
+                  kr=lr=0;om=km
+              else:
+                  oi=OB.analyse(b,chess.engine.Limit(nodes=700000),game=('ob',tok));om=oi['pv'][0];os=int(oi['score'].pov(b.turn).score(mate_score=100000) or 0)
+                  ks=int(OK.analyse(b,chess.engine.Limit(nodes=700000),root_moves=[km],game=('ok',tok))['score'].pov(b.turn).score(mate_score=100000) or 0)
+                  ls=int(OL.analyse(b,chess.engine.Limit(nodes=700000),root_moves=[lm],game=('ol',tok))['score'].pov(b.turn).score(mate_score=100000) or 0)
+                  kr=max(0,os-ks);lr=max(0,os-ls)
+              out.append({'shard':shard,'horizon':x['policy_horizon'],'fen':b.fen(),'p01':km.uci(),'policy':lm.uci(),'oracle':om.uci(),'p01_regret':kr,'policy_regret':lr,'disagree':km!=lm,'policy_ms':lat})
+              print(f's{shard} {i:02d}/60 h{x["policy_horizon"]} dis={km!=lm} K={kr} L={lr}',flush=True)
+          finally:
+            for e in (K,L,OB,OK,OL):e.quit()
+          json.dump({'schema':'LV_LC0_POLICY_REPLICATION_ROWS_V1','rows':out},open(f'rows-{shard}.json','w'),indent=2)
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: 'lc0-policy-rows-${{ matrix.shard }}'
+          path: |
+            rows-${{ matrix.shard }}.json
+            scan.log
+            lc0-uci.txt
+            lc0-network.sha256
+          retention-days: 30
+
+  aggregate:
+    needs: scan
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/download-artifact@v4
+        with: {pattern: 'lc0-policy-rows-*', path: rows}
+      - name: Aggregate predeclared complementarity test
+        run: |
+          python3 - <<'PY' | tee aggregate.log
+          import glob,json,statistics
+          R=[]
+          for p in glob.glob('rows/**/rows-*.json',recursive=True):R+=json.load(open(p))['rows']
+          assert len(R)==240,len(R);D=[r for r in R if r['disagree']]
+          pb=sum(r['policy_regret']<r['p01_regret'] for r in D);kb=sum(r['p01_regret']<r['policy_regret'] for r in D);ties=len(D)-pb-kb
+          rescue=sum(max(0,r['p01_regret']-r['policy_regret']) for r in D);harm=sum(max(0,r['policy_regret']-r['p01_regret']) for r in D)
+          by={}
+          for h in (10,20,30):
+              z=[r for r in R if r['horizon']==h];d=[r for r in z if r['disagree']]
+              by[str(h)]={'n':len(z),'disagreements':len(d),'policy_better':sum(r['policy_regret']<r['p01_regret'] for r in d),'p01_better':sum(r['p01_regret']<r['policy_regret'] for r in d)}
+          validity=len(D)>=25
+          passed=bool(validity and pb>=1.25*max(1,kb) and rescue>=1.5*max(1,harm))
+          out={'schema':'LV_LC0_POLICY_REPLICATION_V1','positions':len(R),'disagreements':len(D),'disagreement_rate':len(D)/len(R),'policy_better':pb,'p01_better':kb,'ties':ties,'total_policy_rescue_cp':rescue,'total_policy_harm_cp':harm,'rescue_to_harm_ratio':rescue/max(1,harm),'policy_latency_ms_median':statistics.median(r['policy_ms'] for r in R),'by_horizon':by,'validity_min25_disagreements':validity,'distillation_target_pass':passed,'rule':'policy must beat P01 >=1.25x by count and >=1.5x rescue/harm on >=25 fresh disagreements'}
+          json.dump(out,open('aggregate.json','w'),indent=2);print(json.dumps(out,indent=2))
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: lc0-policy-replication-aggregate
+          path: |
+            aggregate.json
+            aggregate.log
+          retention-days: 30
