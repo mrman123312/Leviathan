@@ -1,0 +1,50 @@
+name: Fundamentals Ultra Authority2 Parallel
+on:
+  push:
+    branches: [leviathan/fundamentals-ultra-lab]
+    paths: ['.github/workflows/fundamentals-ultra-authority2-parallel.yml']
+permissions: {contents: read}
+jobs:
+  gate:
+    runs-on: ubuntu-22.04
+    strategy:
+      fail-fast: false
+      matrix: {mode: [time, nodes, stockfish]}
+    steps:
+      - uses: actions/checkout@v4
+        with: {ref: leviathan/fundamentals-v2.1.1-phasefix, path: engine}
+      - uses: actions/checkout@v4
+        with: {ref: leviathan/fundamentals-ultra-lab, path: lab}
+      - name: Build engines
+        run: |
+          make -C engine/src net && make -C engine/src clean && make -C engine/src -j2 ARCH=x86-64-avx2 build
+          cp engine/src/stockfish engine/src/a1; cp engine/src/stockfish engine/src/a2
+          git clone https://github.com/official-stockfish/Stockfish.git "$RUNNER_TEMP/sf"
+          git -C "$RUNNER_TEMP/sf" checkout 5062aee519a1ba262d472d8ab139851ced56573e
+          make -C "$RUNNER_TEMP/sf/src" -j2 ARCH=x86-64-avx2 build
+          python3 -m pip install --disable-pip-version-check chess==1.11.2
+      - name: Corpus and Authority-aware controller
+        run: |
+          python3 lab/tools/generate_balanced_openings.py --stockfish "$RUNNER_TEMP/sf/src/stockfish" --output openings.json --count 50 --plies 8 --seed 8910 --max-abs-cp 80
+          test "$(sha256sum openings.json | cut -d' ' -f1)" = 444b13d062e5aa38e72f6ffc5a2f3aa8daf92d4b6712a2d40646c857b51795da
+          python3 - <<'PY'
+          p='lab/tools/fundamentals_tournament.py';s=open(p).read()
+          s=s.replace('ap.add_argument("--candidate-fundamentals",action="store_true")','ap.add_argument("--candidate-fundamentals",action="store_true");ap.add_argument("--candidate-authority",type=int,default=1)')
+          s=s.replace('ap.add_argument("--opponent-fundamentals",action="store_true")','ap.add_argument("--opponent-fundamentals",action="store_true");ap.add_argument("--opponent-authority",type=int,default=1)')
+          s=s.replace('def configure(e,fundamentals):','def configure(e,fundamentals,authority=1):')
+          s=s.replace('(\"Leviathan Fundamentals Authority\",1)', '("Leviathan Fundamentals Authority",authority)')
+          s=s.replace('co=configure(cand,a.candidate_fundamentals);oo=configure(opp,a.opponent_fundamentals)', 'co=configure(cand,a.candidate_fundamentals,a.candidate_authority);oo=configure(opp,a.opponent_fundamentals,a.opponent_authority)')
+          open('runner.py','w').write(s)
+          PY
+      - name: Run gate
+        shell: bash
+        run: |
+          mkdir out
+          case '${{ matrix.mode }}' in
+            time) python3 runner.py --candidate "$PWD/engine/src/a2" --opponent "$PWD/engine/src/a1" --candidate-label authority2 --opponent-label authority1 --candidate-fundamentals --opponent-fundamentals --candidate-authority 2 --opponent-authority 1 --move-time-ms 100 --openings-json openings.json --max-plies 180 --output-dir out ;;
+            nodes) python3 runner.py --candidate "$PWD/engine/src/a2" --opponent "$PWD/engine/src/a1" --candidate-label authority2 --opponent-label authority1 --candidate-fundamentals --opponent-fundamentals --candidate-authority 2 --opponent-authority 1 --nodes-per-move 80000 --openings-json openings.json --max-plies 180 --output-dir out ;;
+            stockfish) python3 runner.py --candidate "$PWD/engine/src/a2" --opponent "$RUNNER_TEMP/sf/src/stockfish" --candidate-label authority2 --opponent-label Stockfish-5062aee5 --candidate-fundamentals --candidate-authority 2 --move-time-ms 100 --openings-json openings.json --max-plies 180 --output-dir out ;;
+          esac
+          cat out/summary.json
+      - uses: actions/upload-artifact@v4
+        with: {name: 'authority2-${{ matrix.mode }}', path: out, retention-days: 30}
