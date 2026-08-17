@@ -1,0 +1,65 @@
+name: Fundamentals Ultra Materialize Candidates
+
+on:
+  push:
+    branches: [leviathan/fundamentals-ultra-lab]
+    paths: ['.github/workflows/fundamentals-ultra-build-candidates.yml']
+
+permissions:
+  contents: write
+
+jobs:
+  materialize:
+    runs-on: ubuntu-22.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - base: leviathan/fundamentals-v2.1
+            target: leviathan/fundamentals-ultra-qfrontier
+            label: qfrontier-isolated
+          - base: leviathan/fundamentals-v2.1.1-phasefix
+            target: leviathan/fundamentals-ultra-phasefix-qfrontier
+            label: phasefix-plus-qfrontier
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ matrix.base }}
+          fetch-depth: 0
+      - name: Apply bounded qsearch capture frontier exactly
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path('src/search.cpp');s=p.read_text()
+          old='''                if (moveCount > 2)
+                    continue;
+
+                Value futilityValue = futilityBase + PieceValue[pos.piece_on(move.to_sq())];'''
+          new='''                const Value leviathanCaptureCeiling =
+                  futilityBase + PieceValue[pos.piece_on(move.to_sq())];
+
+                // Leviathan Q-frontier: keep Stockfish's two-capture fast path,
+                // but inspect at most two extra captures when their crude material
+                // ceiling is still close enough to alpha to change the decision.
+                if (moveCount > 4 || (moveCount > 2 && leviathanCaptureCeiling < alpha - 48))
+                    continue;
+
+                Value futilityValue = leviathanCaptureCeiling;'''
+          if s.count(old)!=1: raise SystemExit(f'qfrontier anchor count={s.count(old)}')
+          p.write_text(s.replace(old,new,1))
+          PY
+          git diff --check
+          git diff -- src/search.cpp
+      - name: Build before publication
+        run: |
+          make -C src net
+          make -C src clean
+          make -C src -j2 ARCH=x86-64-avx2 build
+      - name: Commit candidate branch
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git checkout -B '${{ matrix.target }}'
+          git add src/search.cpp
+          git commit -m 'Ultra: materialize ${{ matrix.label }}'
+          git push --force-with-lease origin HEAD:'${{ matrix.target }}'
