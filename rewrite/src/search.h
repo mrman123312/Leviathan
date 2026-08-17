@@ -22,7 +22,9 @@ struct TTEntry {
 };
 
 struct SearchLimits {
-    int max_depth = 5;
+    // max_depth == 0 means no artificial depth ceiling; search is then bounded
+    // by movetime (or the engine's hard MAX_PLY safety limit).
+    int max_depth = 0;
     int movetime_ms = 0;
 };
 
