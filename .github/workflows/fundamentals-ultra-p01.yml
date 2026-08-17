@@ -1,9 +1,13 @@
-name: Fundamentals Ultra P0+P1 Lossless Speed
+name: Fundamentals Ultra P01 Lossless Speed
 
 on:
   push:
-    branches: [leviathan/fundamentals-ultra-lab]
-    paths: ['.github/workflows/fundamentals-ultra-p01.yml']
+    branches:
+      - leviathan/fundamentals-ultra-lab
+    paths:
+      - .github/workflows/fundamentals-ultra-p01.yml
+      - tools/apply_p01.py
+      - tools/lossless_pair_benchmark.py
 
 permissions:
   contents: write
@@ -13,195 +17,55 @@ jobs:
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
-        with: {ref: leviathan/fundamentals-v2.1, path: base, fetch-depth: 0}
-      - name: Clone candidate tree
-        run: cp -a base cand
-      - name: Apply P0+P1 dead-organ fast paths only
+        with:
+          ref: leviathan/fundamentals-ultra-lab
+          path: lab
+      - uses: actions/checkout@v4
+        with:
+          ref: leviathan/fundamentals-v2.1
+          path: base
+          fetch-depth: 0
+      - name: Materialize P01 candidate
         run: |
-          python3 - <<'PY'
-          from pathlib import Path
-          # DSL readiness: avoid constructing the 12-feature vector when disabled.
-          p=Path('cand/src/leviathan_dsl.h');s=p.read_text()
-          old='''inline bool ready() { return state().enabled && state().authority > 0 && state().loaded; }
-
-inline int eval(const std::array<int, FeatureCount>& x) {
-    if (!ready())
-        return 0;
-
-    int out = 0;
-    for (const auto& ins : state().code)
-'''
-          new='''inline bool ready() {
-    const auto& s = state();
-    return s.enabled && s.authority > 0 && s.loaded;
-}
-
-inline int eval_ready(const std::array<int, FeatureCount>& x) {
-    const auto& s = state();
-    int out = 0;
-    for (const auto& ins : s.code)
-'''
-          if s.count(old)!=1:raise SystemExit('dsl head anchor')
-          s=s.replace(old,new,1)
-          s=s.replace('''    if (state().authority == 1)
-        out = std::min(out, 0);
-    return std::clamp(out * state().weight / 100, -4096, 1536);
-}
-
-inline int lmr_adjustment''','''    if (s.authority == 1)
-        out = std::min(out, 0);
-    return std::clamp(out * s.weight / 100, -4096, 1536);
-}
-
-inline int eval(const std::array<int, FeatureCount>& x) {
-    return ready() ? eval_ready(x) : 0;
-}
-
-inline int lmr_adjustment''',1)
-          needle='''                          Value staticEval,
-                          Value alpha) {
-    const std::array<int, FeatureCount> x = {'''
-          repl='''                          Value staticEval,
-                          Value alpha) {
-    if (!ready())
-        return 0;
-
-    const std::array<int, FeatureCount> x = {'''
-          if s.count(needle)!=1:raise SystemExit('dsl lmr anchor')
-          s=s.replace(needle,repl,1).replace('''    return eval(x);
-}
-
-}  // namespace Stockfish::Leviathan::DSL''','''    return eval_ready(x);
-}
-
-}  // namespace Stockfish::Leviathan::DSL''',1)
-          p.write_text(s)
-
-          # Trace readiness snapshot.
-          p=Path('cand/src/leviathan_trace.h');s=p.read_text()
-          anchor='''    return s;
-}
-
-inline void set_file'''
-          repl='''    return s;
-}
-
-inline bool ready() {
-    const auto& s = state();
-    return s.samplePermille > 0 && !s.file.empty();
-}
-
-inline void set_file'''
-          if s.count(anchor)!=1:raise SystemExit('trace anchor')
-          p.write_text(s.replace(anchor,repl,1))
-
-          # MovePicker ready snapshots.
-          p=Path('cand/src/movepick.cpp');s=p.read_text()
-          anchor='''        threatByLesser[KING]  = 0;
-    }
-
-    ExtMove* it = cur;'''
-          repl='''        threatByLesser[KING]  = 0;
-    }
-
-    const bool leviathanPolicyReady = Type == QUIETS && Leviathan::Policy::ready();
-    const bool leviathanAtlasReady  = Type == QUIETS && Leviathan::Atlas::ready();
-    const bool leviathanRule50Ready = Type == QUIETS && Leviathan::Fundamentals::ready()
-                                      && Leviathan::Fundamentals::state().rule50Pressure
-                                      && pos.rule50_count() >= 70;
-
-    ExtMove* it = cur;'''
-          if s.count(anchor)!=1:raise SystemExit('movepick snapshot anchor')
-          s=s.replace(anchor,repl,1)
-          anchor='''            m.value += Leviathan::Policy::ordering_bonus(pos, m);
-            m.value += Leviathan::Atlas::ordering_bonus(pos, m);
-            m.value += Leviathan::Fundamentals::quiet_ordering_bonus(pos, m);'''
-          repl='''            if (leviathanPolicyReady)
-                m.value += Leviathan::Policy::ordering_bonus(pos, m);
-            if (leviathanAtlasReady)
-                m.value += Leviathan::Atlas::ordering_bonus(pos, m);
-            if (leviathanRule50Ready)
-                m.value += Leviathan::Fundamentals::quiet_ordering_bonus(pos, m);'''
-          if s.count(anchor)!=1:raise SystemExit('movepick bonus anchor')
-          p.write_text(s.replace(anchor,repl,1))
-
-          # Search readiness snapshots + avoid key/trace work when disabled.
-          p=Path('cand/src/search.cpp');s=p.read_text()
-          anchor='''    int moveCount = 0;
-
-    // Step 13. Loop through all pseudo-legal moves'''
-          repl='''    int moveCount = 0;
-
-    const bool leviathanRiskReady  = Leviathan::Control::risk_ready();
-    const bool leviathanDslReady   = Leviathan::DSL::ready();
-    const bool leviathanTraceReady = Leviathan::Trace::ready();
-
-    // Step 13. Loop through all pseudo-legal moves'''
-          if s.count(anchor)!=1:raise SystemExit('search ready anchor')
-          s=s.replace(anchor,repl,1)
-          s=s.replace('''        const u64 leviathanParentKey = u64(pos.key());''','''        const u64 leviathanParentKey = leviathanTraceReady ? u64(pos.key()) : 0;''',1)
-          anchor='''        r += Leviathan::Control::lmr_adjustment(
-          depth, moveCount, ss->statScore, correctionValue, PvNode, cutNode, allNode, capture,
-          givesCheck, ttData.depth, ss->staticEval, alpha);
-        r += Leviathan::DSL::lmr_adjustment(
-          depth, moveCount, ss->statScore, correctionValue, PvNode, cutNode, allNode, capture,
-          givesCheck, ttData.depth, ss->staticEval, alpha);'''
-          repl='''        if (leviathanRiskReady)
-            r += Leviathan::Control::lmr_adjustment(
-              depth, moveCount, ss->statScore, correctionValue, PvNode, cutNode, allNode, capture,
-              givesCheck, ttData.depth, ss->staticEval, alpha);
-        if (leviathanDslReady)
-            r += Leviathan::DSL::lmr_adjustment(
-              depth, moveCount, ss->statScore, correctionValue, PvNode, cutNode, allNode, capture,
-              givesCheck, ttData.depth, ss->staticEval, alpha);'''
-          if s.count(anchor)!=1:raise SystemExit('search lmr ready anchor')
-          s=s.replace(anchor,repl,1)
-          s=s.replace('''        if (leviathanReducedValue != VALUE_NONE)
-            Leviathan::Trace::record_lmr(''','''        if (leviathanTraceReady && leviathanReducedValue != VALUE_NONE)
-            Leviathan::Trace::record_lmr(''',1)
-          p.write_text(s)
-          PY
-          git -C cand diff --check
+          cp -a base cand
+          cp lab/tools/apply_p01.py cand/tools/apply_p01.py
+          cd cand
+          python3 tools/apply_p01.py
+          git diff --check
       - name: Build identical AVX2 binaries
         run: |
           make -C base/src net
           cp base/src/nn-ab28990d4ea3.nnue cand/src/
-          make -C base/src clean && make -C base/src -j2 ARCH=x86-64-avx2 build
+          make -C base/src clean
+          make -C base/src -j2 ARCH=x86-64-avx2 build
           cp base/src/stockfish base/src/control_a
           cp base/src/stockfish base/src/control_b
-          make -C cand/src clean && make -C cand/src -j2 ARCH=x86-64-avx2 build
-      - name: Strict exact-behavior 31-round A/A/B speed test
+          make -C cand/src clean
+          make -C cand/src -j2 ARCH=x86-64-avx2 build
+      - name: Write frozen options
         run: |
-          python3 - <<'PY' | tee speed.json
-          import subprocess,re,hashlib,json,statistics,random
-          A='base/src/control_a'; B='base/src/control_b'; C='cand/src/stockfish'
-          opts='setoption name Threads value 1\nsetoption name Hash value 64\nsetoption name Leviathan Fundamentals value true\nsetoption name Leviathan Fundamentals Authority value 1\nsetoption name Leviathan Quiet Overdrive value 0\n'
-          cmds={'default':'bench','depth11':'bench 16 1 11 default depth','nodes50k':'bench 16 1 50000 default nodes'}
-          def run(path,cmd):
-            p=subprocess.run([path],input=opts+cmd+'\nquit\n',text=True,capture_output=True,check=True);o=p.stdout+p.stderr
-            norm=[]
-            for raw in o.splitlines():
-              line=raw.strip()
-              if line.startswith('Position:') or line.startswith('bestmove '):norm.append(line)
-              elif line.startswith('info ') and not line.startswith('info string '):
-                line=re.sub(r'\s+nps\s+\d+','',line);line=re.sub(r'\s+time\s+\d+','',line);norm.append(line)
-            return {'ms':int(re.findall(r'Total time \(ms\)\s*:\s*(\d+)',o)[-1]),'nodes':int(re.findall(r'Nodes searched\s*:\s*(\d+)',o)[-1]),'sig':hashlib.sha256('\n'.join(norm).encode()).hexdigest()}
-          sig={}
-          for name,cmd in cmds.items():
-            sig[name]={x:run(p,cmd) for x,p in [('A',A),('B',B),('C',C)]}
-            if len({(v['nodes'],v['sig']) for v in sig[name].values()})!=1:raise SystemExit(f'LOSSLESS GATE FAILED {name}: {sig[name]}')
-          # Warm-up then alternating sandwich A/C/B, B/C/A; A/A calibrates in same rounds.
-          run(A,'bench');run(B,'bench');run(C,'bench'); ca=[];cc=[]
-          for i in range(31):
-            if i&1:
-              first=run(B,'bench')['ms']; cm=run(C,'bench')['ms']; second=run(A,'bench')['ms']; bm=run(B,'bench')['ms']
-            else:
-              first=run(A,'bench')['ms']; cm=run(C,'bench')['ms']; second=run(B,'bench')['ms']; bm=run(B,'bench')['ms']
-            ref=(first*second)**0.5;cc.append(ref/cm);ca.append(ref/bm)
-          out={'signatures':sig,'aa_median':statistics.median(ca),'candidate_median_speedup':statistics.median(cc),'candidate_mean_speedup':statistics.fmean(cc),'candidate_faster_rounds':sum(x>1 for x in cc),'rounds':31}
-          print(json.dumps(out,indent=2,sort_keys=True))
-          PY
-      - name: Publish materialized candidate
+          cat > options.json <<'EOF'
+          {
+            "Threads": 1,
+            "Hash": 64,
+            "Leviathan Fundamentals": true,
+            "Leviathan Fundamentals Authority": 1,
+            "Leviathan Quiet Overdrive": 0,
+            "Leviathan Search DSL": false,
+            "Leviathan Risk": false,
+            "Leviathan Atlas": false,
+            "Leviathan Policy": false
+          }
+          EOF
+      - name: Strict exact-behavior A/A/B speed test
+        run: |
+          python3 lab/tools/lossless_pair_benchmark.py \
+            --control-a base/src/control_a \
+            --control-b base/src/control_b \
+            --candidate cand/src/stockfish \
+            --options options.json --rounds 31 --output speed.json \
+            | tee speed.log
+      - name: Publish candidate branch
         working-directory: cand
         run: |
           git config user.name 'github-actions[bot]'
@@ -213,5 +77,8 @@ inline void set_file'''
       - uses: actions/upload-artifact@v4
         with:
           name: fundamentals-ultra-p01
-          path: speed.json
+          path: |
+            speed.json
+            speed.log
+            options.json
           retention-days: 30
