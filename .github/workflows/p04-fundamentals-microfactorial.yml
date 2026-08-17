@@ -1,0 +1,141 @@
+name: P04 Fundamentals Microfactorial
+
+on:
+  push:
+    branches: [agent/p04-fundamentals-microfactorial]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  screen:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 70
+    strategy:
+      fail-fast: false
+      matrix:
+        profile: [singlepiece, popcount, both]
+    steps:
+      - name: Checkout exact P03 candidate
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: e03466d02cc4214442e2ff82fb1a2f28b2d29186
+          path: cand
+          fetch-depth: 1
+
+      - name: Checkout exact P03 control
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: e03466d02cc4214442e2ff82fb1a2f28b2d29186
+          path: base
+          fetch-depth: 1
+
+      - name: Checkout benchmark harness
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: leviathan/fundamentals-ultra-lab
+          path: harness
+          fetch-depth: 1
+
+      - name: Apply isolated micro fast path
+        env:
+          PROFILE: '${{ matrix.profile }}'
+        run: |
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+          profile=os.environ['PROFILE']
+          p=Path('cand/src/leviathan_fundamentals.h')
+          s=p.read_text()
+          if profile in ('singlepiece','both'):
+              old='''inline bool advanced_pawn_move(const Position& pos, Move move) {
+    return pawn_move(pos, move) && relative_rank(mover_color(pos, move), move.to_sq()) >= RANK_6;
+}'''
+              new='''inline bool advanced_pawn_move(const Position& pos, Move move) {
+    if (!move.is_ok())
+        return false;
+
+    // Read the moved piece once. The old composition called moving_piece()
+    // through both pawn_move() and mover_color(). This is semantically identical
+    // for every legal move, including promotion and en passant.
+    const Piece pc = moving_piece(pos, move);
+    const bool isPawn = move.type_of() == PROMOTION || move.type_of() == EN_PASSANT
+                     || (pc != NO_PIECE && type_of(pc) == PAWN);
+    if (!isPawn)
+        return false;
+
+    const Color c = pc != NO_PIECE ? color_of(pc) : pos.side_to_move();
+    return relative_rank(c, move.to_sq()) >= RANK_6;
+}'''
+              if s.count(old)!=1: raise SystemExit('advanced pawn anchor mismatch')
+              s=s.replace(old,new,1)
+          if profile in ('popcount','both'):
+              old='''inline int non_pawn_count(const Position& pos) {
+    return pos.count<KNIGHT>() + pos.count<BISHOP>() + pos.count<ROOK>() + pos.count<QUEEN>();
+}'''
+              new='''inline int non_pawn_count(const Position& pos) {
+    // Same exact count from the already-maintained type bitboards. On POPCNT
+    // targets this replaces eight color-indexed count loads/adds with one mask count.
+    return popcount(pos.pieces(KNIGHT, BISHOP, ROOK, QUEEN));
+}'''
+              if s.count(old)!=1: raise SystemExit('non-pawn anchor mismatch')
+              s=s.replace(old,new,1)
+          p.write_text(s)
+          PY
+          git -C cand diff --check
+          git -C cand diff -- src/leviathan_fundamentals.h
+
+      - name: Build controls and candidate
+        run: |
+          make -C base/src net
+          make -C base/src clean
+          make -C base/src -j2 ARCH=x86-64-avx2 build
+          cp base/src/stockfish base/src/control_a
+          cp base/src/stockfish base/src/control_b
+          cp base/src/nn-ab28990d4ea3.nnue cand/src/
+          make -C cand/src clean
+          make -C cand/src -j2 ARCH=x86-64-avx2 build
+          cat > active.json <<'EOF'
+          {"Threads":1,"Hash":64,"Leviathan Fundamentals":true,"Leviathan Fundamentals Authority":1,"Leviathan Quiet Overdrive":0,"Leviathan Risk":false,"Leviathan Policy":false,"Leviathan MetaSearch":false,"Leviathan Specialist":false,"Leviathan Atlas":false,"Leviathan Search DSL":false}
+          EOF
+
+      - name: Exact behavior plus calibrated speed screen
+        env:
+          PROFILE: '${{ matrix.profile }}'
+        run: |
+          python3 harness/tools/lossless_pair_benchmark.py \
+            --control-a base/src/control_a \
+            --control-b base/src/control_b \
+            --candidate cand/src/stockfish \
+            --options active.json \
+            --rounds 25 \
+            --output "p04-${PROFILE}.json" | tee "p04-${PROFILE}.log"
+
+      - name: Summarize
+        env:
+          PROFILE: '${{ matrix.profile }}'
+        run: |
+          python3 - <<'PY'
+          import json,os
+          p=os.environ['PROFILE']; d=json.load(open(f'p04-{p}.json'))
+          sig=d['signatures']; r=d['results']; exact=True
+          for case in ('default','depth11','nodes50k'):
+              a=sig['control_a'][case]; c=sig['candidate'][case]
+              exact &= a['nodes']==c['nodes'] and a['behavior_sha256']==c['behavior_sha256']
+          c=r['candidate']; a=r['control_b']
+          summary={'profile':p,'exact_behavior':exact,'aa_median':a['median_speedup'],'aa_ci':a['bootstrap_median_95pct_ci'],'candidate_median':c['median_speedup'],'candidate_geo':c['geometric_mean_speedup'],'candidate_ci':c['bootstrap_median_95pct_ci'],'faster_rounds':c['faster_rounds'],'rounds':c['rounds']}
+          open(f'p04-{p}-summary.json','w').write(json.dumps(summary,indent=2)+'\n')
+          print(json.dumps(summary,indent=2))
+          if not exact: raise SystemExit('BEHAVIOR_MISMATCH')
+          PY
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: p04-${{ matrix.profile }}-${{ github.sha }}
+          path: |
+            p04-${{ matrix.profile }}.json
+            p04-${{ matrix.profile }}.log
+            p04-${{ matrix.profile }}-summary.json
+          retention-days: 30
