@@ -1,9 +1,10 @@
-name: Leviathan Rewrite v0
+name: Leviathan Rewrite
 
 on:
   push:
     branches:
       - leviathan/rewrite-v0-greenfield
+      - leviathan/rewrite-v1-donor-ecology
     paths:
       - 'rewrite/**'
       - '.github/workflows/rewrite-v0.yml'
@@ -21,7 +22,7 @@ jobs:
         run: cmake -S rewrite -B rewrite/build -DCMAKE_BUILD_TYPE=Release
       - name: Build
         run: cmake --build rewrite/build -j2
-      - name: Self-test
+      - name: Self-test and donor audit
         run: ctest --test-dir rewrite/build --output-on-failure
       - name: UCI smoke
         shell: bash
@@ -32,3 +33,20 @@ jobs:
           grep -q 'readyok' <<<"$output"
           grep -q 'nodes 197281' <<<"$output"
           grep -q '^bestmove ' <<<"$output"
+
+  fathom-donor-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Materialize pinned Fathom donor
+        run: python3 rewrite/tools/materialize_source.py rewrite/donors/locks/fathom.json --output-dir rewrite/.donor-cache
+      - name: Configure with Fathom
+        shell: bash
+        run: |
+          cmake -S rewrite -B rewrite/build-fathom \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DLEVIATHAN_FATHOM_DIR="$PWD/rewrite/.donor-cache/fathom/c9c6fef0dddc05d2e242c183acf5833149ab676d"
+      - name: Build with Fathom
+        run: cmake --build rewrite/build-fathom -j2
+      - name: Core tests with donor linked
+        run: ctest --test-dir rewrite/build-fathom --output-on-failure

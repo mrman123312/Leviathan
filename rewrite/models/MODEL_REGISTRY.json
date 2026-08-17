@@ -1,0 +1,35 @@
+{
+  "schema_version": 1,
+  "models": [
+    {
+      "id": "stockfish18-big",
+      "donor_id": "stockfish_networks",
+      "engine_compatibility": "official-stockfish/Stockfish@sf_18",
+      "filename": "nn-c288c895ea92.nnue",
+      "sha256_prefix": "c288c895ea92",
+      "license": "CC0-1.0",
+      "role": "frozen strong evaluation control",
+      "fetch_template": "https://tests.stockfishchess.org/api/nn/{filename}"
+    },
+    {
+      "id": "stockfish18-small",
+      "donor_id": "stockfish_networks",
+      "engine_compatibility": "official-stockfish/Stockfish@sf_18",
+      "filename": "nn-37f18f62d772.nnue",
+      "sha256_prefix": "37f18f62d772",
+      "license": "CC0-1.0",
+      "role": "frozen fast/small evaluation control",
+      "fetch_template": "https://tests.stockfishchess.org/api/nn/{filename}"
+    },
+    {
+      "id": "stockfish-master-2026-07-main",
+      "donor_id": "stockfish_networks",
+      "engine_compatibility": "Stockfish master after c8b91a2b",
+      "filename": "nn-ab28990d4ea3.nnue",
+      "sha256_prefix": "ab28990d4ea3",
+      "license": "CC0-1.0",
+      "role": "post-Stockfish-18 SFNNv16 research control",
+      "fetch_template": "https://tests.stockfishchess.org/api/nn/{filename}"
+    }
+  ]
+}

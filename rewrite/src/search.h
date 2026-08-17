@@ -1,5 +1,6 @@
 #pragma once
 #include "chess.h"
+#include "evaluator.h"
 #include <chrono>
 #include <cstdint>
 #include <unordered_map>
@@ -34,13 +35,17 @@ struct SearchReport {
 
 class SearchEngine {
 public:
+    explicit SearchEngine(const Evaluator& evaluator = default_evaluator()) : evaluator_(&evaluator) {}
+
     SearchReport search(const Position& root, const SearchLimits& limits,
                         const std::vector<uint64_t>& game_history = {});
     void clear();
+    const EvaluatorDescriptor& evaluator_descriptor() const { return evaluator_->descriptor(); }
 
 private:
     static constexpr int INF = 32000;
     static constexpr int MATE = 30000;
+    const Evaluator* evaluator_;
     std::unordered_map<uint64_t, TTEntry> tt_;
     uint64_t nodes_ = 0;
     bool stopped_ = false;

@@ -57,7 +57,7 @@ int SearchEngine::quiescence(const Position& p,int alpha,int beta,int ply){
     ++nodes_; if(time_up()) return alpha;
     if(p.halfmove_clock()>=100 || repeated(p.key())) return 0;
     bool checked=p.in_check(p.side_to_move());
-    int stand=checked ? -INF : evaluate_position(p).mean_cp;
+    int stand=checked ? -INF : evaluator_->evaluate(p).mean_cp;
     if(checked){
         auto evasions=ordered_moves(p,{},false);
         if(evasions.empty()) return -MATE+ply;

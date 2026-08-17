@@ -1,5 +1,6 @@
 #include "chess.h"
 #include "search.h"
+#include "tablebase.h"
 #include <iostream>
 #include <sstream>
 #include <string>
@@ -17,6 +18,17 @@ static uint64_t perft(const Position& p,int depth){
 static bool has_move(const Position& p, const char* text){
     for(Move m:p.legal_moves()) if(move_to_uci(m)==text) return true;
     return false;
+}
+
+static const char* wdl_name(Wdl wdl){
+    switch(wdl){
+        case Wdl::Loss: return "loss";
+        case Wdl::BlessedLoss: return "blessed-loss";
+        case Wdl::Draw: return "draw";
+        case Wdl::CursedWin: return "cursed-win";
+        case Wdl::Win: return "win";
+    }
+    return "unknown";
 }
 
 static bool selftest(){
@@ -56,6 +68,10 @@ static bool selftest(){
         std::cerr<<"selftest search failed depth="<<report.completed_depth<<" nodes="<<report.nodes<<"\n"; return false;
     }
 
+    if(null_tablebase().probe_wdl(Position::startpos()).has_value()){
+        std::cerr<<"selftest null tablebase unexpectedly returned a result\n"; return false;
+    }
+
     std::cout<<"selftest ok\n"; return true;
 }
 
@@ -63,16 +79,27 @@ int main(int argc,char** argv){
     if(argc>1 && std::string(argv[1])=="--selftest") return selftest()?0:1;
     Position pos=Position::startpos();
     SearchEngine search;
+    FathomTablebase tablebase;
     std::vector<uint64_t> game_history{pos.key()};
     std::string line;
     while(std::getline(std::cin,line)){
         std::istringstream in(line); std::string cmd; in>>cmd;
         if(cmd=="uci"){
-            std::cout<<"id name Leviathan Rewrite v0\n";
+            std::cout<<"id name Leviathan Rewrite v1\n";
             std::cout<<"id author Leviathan Project\n";
+            std::cout<<"option name SyzygyPath type string default <empty>\n";
             std::cout<<"uciok\n"<<std::flush;
         } else if(cmd=="isready"){
             std::cout<<"readyok\n"<<std::flush;
+        } else if(cmd=="setoption"){
+            static const std::string prefix="setoption name SyzygyPath value ";
+            if(line.rfind(prefix,0)==0){
+                const std::string path=line.substr(prefix.size());
+                const bool ok=tablebase.initialize(path);
+                std::cout<<"info string Fathom "<<(ok?"ready":"unavailable")
+                         <<" max_pieces "<<tablebase.max_pieces()
+                         <<" source "<<tablebase.descriptor().source_revision<<"\n"<<std::flush;
+            }
         } else if(cmd=="ucinewgame"){
             search.clear(); pos=Position::startpos(); game_history={pos.key()};
         } else if(cmd=="position"){
@@ -103,6 +130,11 @@ int main(int argc,char** argv){
             std::cout<<"\nbestmove "<<(r.best.is_null()?"0000":move_to_uci(r.best))<<"\n"<<std::flush;
         } else if(cmd=="perft"){
             int d=1; in>>d; std::cout<<"nodes "<<perft(pos,d)<<"\n"<<std::flush;
+        } else if(cmd=="tbprobe"){
+            auto result=tablebase.probe_wdl(pos);
+            if(result) std::cout<<"info string tablebase wdl "<<wdl_name(*result)<<"\n";
+            else std::cout<<"info string tablebase unknown\n";
+            std::cout<<std::flush;
         } else if(cmd=="d"){
             std::cout<<"Fen: "<<pos.fen()<<"\n"<<std::flush;
         } else if(cmd=="quit") break;
