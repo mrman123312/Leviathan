@@ -1,0 +1,151 @@
+name: Fundamentals Ultra Survivor Confirmation
+
+on:
+  push:
+    branches: [leviathan/fundamentals-ultra-lab]
+    paths:
+      - '.github/workflows/fundamentals-ultra-confirm.yml'
+      - 'tools/fundamentals_tournament.py'
+      - 'tools/generate_balanced_openings.py'
+
+permissions:
+  contents: read
+
+jobs:
+  openings:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+        with: {ref: leviathan/fundamentals-ultra-lab}
+      - name: Build pinned Stockfish and controller
+        run: |
+          git clone https://github.com/official-stockfish/Stockfish.git "$RUNNER_TEMP/sf"
+          git -C "$RUNNER_TEMP/sf" checkout 5062aee519a1ba262d472d8ab139851ced56573e
+          make -C "$RUNNER_TEMP/sf/src" -j2 ARCH=x86-64-avx2 build
+          python3 -m pip install --disable-pip-version-check chess==1.11.2
+      - name: Generate 50 deterministic balanced opening pairs
+        run: |
+          python3 tools/generate_balanced_openings.py --stockfish "$RUNNER_TEMP/sf/src/stockfish" --output openings.json --count 50 --plies 8 --seed 8910 --max-abs-cp 80
+          sha256sum openings.json | tee openings.sha256
+          cat openings.sha256
+      - uses: actions/upload-artifact@v4
+        with: {name: fundamentals-ultra-openings, path: 'openings.*', retention-days: 30}
+
+  aa100:
+    needs: openings
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+        with: {ref: leviathan/fundamentals-ultra-lab, path: lab}
+      - uses: actions/checkout@v4
+        with: {ref: leviathan/fundamentals-v2.1, path: a}
+      - uses: actions/download-artifact@v4
+        with: {name: fundamentals-ultra-openings, path: corpus}
+      - run: |
+          make -C a/src net && make -C a/src clean && make -C a/src -j2 ARCH=x86-64-avx2 build
+          python3 -m pip install --disable-pip-version-check chess==1.11.2
+      - name: 100-game A/A calibration
+        run: |
+          mkdir -p out
+          python3 lab/tools/fundamentals_tournament.py --candidate "$PWD/a/src/stockfish" --opponent "$PWD/a/src/stockfish" --candidate-label v2.1-A --opponent-label v2.1-B --candidate-fundamentals --opponent-fundamentals --move-time-ms 100 --openings-json corpus/openings.json --max-plies 180 --output-dir out | tee out/match.log
+      - uses: actions/upload-artifact@v4
+        with: {name: confirm-aa100, path: out, retention-days: 30}
+
+  direct:
+    needs: openings
+    runs-on: ubuntu-22.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: phasefix-time
+            ref: leviathan/fundamentals-v2.1.1-phasefix
+            mode: time
+          - label: qfrontier-time
+            ref: leviathan/fundamentals-v2.7-qfrontier
+            mode: time
+          - label: phasefix-nodes
+            ref: leviathan/fundamentals-v2.1.1-phasefix
+            mode: nodes
+          - label: qfrontier-nodes
+            ref: leviathan/fundamentals-v2.7-qfrontier
+            mode: nodes
+    steps:
+      - uses: actions/checkout@v4
+        with: {ref: leviathan/fundamentals-ultra-lab, path: lab}
+      - uses: actions/checkout@v4
+        with: {ref: '${{ matrix.ref }}', path: cand}
+      - uses: actions/checkout@v4
+        with: {ref: leviathan/fundamentals-v2.1, path: base}
+      - uses: actions/download-artifact@v4
+        with: {name: fundamentals-ultra-openings, path: corpus}
+      - name: Build both engines
+        run: |
+          make -C cand/src net && make -C cand/src clean && make -C cand/src -j2 ARCH=x86-64-avx2 build
+          make -C base/src net && make -C base/src clean && make -C base/src -j2 ARCH=x86-64-avx2 build
+          python3 -m pip install --disable-pip-version-check chess==1.11.2
+      - name: 100-game direct confirmation
+        shell: bash
+        run: |
+          set -euo pipefail; mkdir -p out
+          extra='--move-time-ms 100'
+          if [ '${{ matrix.mode }}' = nodes ]; then extra='--nodes-per-move 80000'; fi
+          python3 lab/tools/fundamentals_tournament.py --candidate "$PWD/cand/src/stockfish" --opponent "$PWD/base/src/stockfish" --candidate-label '${{ matrix.label }}' --opponent-label fundamentals-v2.1 --candidate-fundamentals --opponent-fundamentals $extra --openings-json corpus/openings.json --max-plies 180 --output-dir out | tee out/match.log
+          printf 'candidate=%s\nbase=%s\n' "$(git -C cand rev-parse HEAD)" "$(git -C base rev-parse HEAD)" > out/revisions.txt
+      - uses: actions/upload-artifact@v4
+        with: {name: 'confirm-${{ matrix.label }}', path: out, retention-days: 30}
+
+  stockfish:
+    needs: openings
+    runs-on: ubuntu-22.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: v2.1-vs-sf
+            ref: leviathan/fundamentals-v2.1
+          - label: phasefix-vs-sf
+            ref: leviathan/fundamentals-v2.1.1-phasefix
+          - label: qfrontier-vs-sf
+            ref: leviathan/fundamentals-v2.7-qfrontier
+    steps:
+      - uses: actions/checkout@v4
+        with: {ref: leviathan/fundamentals-ultra-lab, path: lab}
+      - uses: actions/checkout@v4
+        with: {ref: '${{ matrix.ref }}', path: cand}
+      - uses: actions/download-artifact@v4
+        with: {name: fundamentals-ultra-openings, path: corpus}
+      - name: Build candidate and pinned Stockfish
+        run: |
+          make -C cand/src net && make -C cand/src clean && make -C cand/src -j2 ARCH=x86-64-avx2 build
+          git clone https://github.com/official-stockfish/Stockfish.git "$RUNNER_TEMP/sf"
+          git -C "$RUNNER_TEMP/sf" checkout 5062aee519a1ba262d472d8ab139851ced56573e
+          make -C "$RUNNER_TEMP/sf/src" -j2 ARCH=x86-64-avx2 build
+          python3 -m pip install --disable-pip-version-check chess==1.11.2
+      - name: 100-game Stockfish confirmation
+        run: |
+          mkdir -p out
+          python3 lab/tools/fundamentals_tournament.py --candidate "$PWD/cand/src/stockfish" --opponent "$RUNNER_TEMP/sf/src/stockfish" --candidate-label '${{ matrix.label }}' --opponent-label Stockfish-5062aee5 --candidate-fundamentals --move-time-ms 100 --openings-json corpus/openings.json --max-plies 180 --output-dir out | tee out/match.log
+          printf 'candidate=%s\nstockfish=%s\n' "$(git -C cand rev-parse HEAD)" "$(git -C "$RUNNER_TEMP/sf" rev-parse HEAD)" > out/revisions.txt
+      - uses: actions/upload-artifact@v4
+        with: {name: 'confirm-${{ matrix.label }}', path: out, retention-days: 30}
+
+  aggregate:
+    if: always()
+    needs: [aa100,direct,stockfish]
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/download-artifact@v4
+        with: {pattern: 'confirm-*', path: results}
+      - name: Aggregate summaries
+        run: |
+          python3 - <<'PY'
+          import json,pathlib
+          rows=[]
+          for p in pathlib.Path('results').rglob('summary.json'): rows.append(json.loads(p.read_text()))
+          rows.sort(key=lambda x:(x['opponent'],x['score_fraction']),reverse=True)
+          pathlib.Path('confirmation.json').write_text(json.dumps(rows,indent=2,sort_keys=True)+'\n')
+          for x in rows: print(x['candidate'], 'vs',x['opponent'],x['wins'],x['draws'],x['losses'],f"{x['score_fraction']:.3f}",'nodes',x.get('nodes_per_move'),'time',x.get('move_time_ms'),'depth',x.get('candidate_mean_depth'))
+          PY
+      - uses: actions/upload-artifact@v4
+        with: {name: fundamentals-ultra-confirmation, path: confirmation.json, retention-days: 30}
