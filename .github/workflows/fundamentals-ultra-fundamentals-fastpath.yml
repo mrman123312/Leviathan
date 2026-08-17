@@ -15,7 +15,7 @@ jobs:
     timeout-minutes: 70
     steps:
       - uses: actions/checkout@v4
-        with: {ref: leviathan/fundamentals-ultra-lab, path: lab}
+        with: {ref: '${{ github.sha }}', path: lab}
       - uses: actions/checkout@v4
         with: {ref: leviathan/fundamentals-ultra-v0, path: cand}
       - uses: actions/checkout@v4
@@ -25,141 +25,56 @@ jobs:
         run: |
           python3 - <<'PY'
           from pathlib import Path
-          p=Path('cand/src/leviathan_fundamentals.h');s=p.read_text()
-          old='''inline int lmr_adjustment(const Position& pos,
-                          Move move,
-                          Square prevSq,
-                          Depth depth,
-                          int moveCount,
-                          bool pvNode,
-                          bool capture,
-                          bool givesCheck) {
-    if (!ready())
-        return 0;
-
-    int delta = 0;
-
-    if (givesCheck)
-        delta -= state().forcingBuyback;
-    if (recapture(move, prevSq, capture))
-        delta -= state().recaptureBuyback;
-    if (move.type_of() == PROMOTION || advanced_pawn_move(pos, move))
-        delta -= state().passerBuyback;
-
-    // v2.1: blanket endgame buyback made every sparse branch expensive. Keep
-    // the extra protection concentrated on early candidates and forcing moves.
-    if (low_material(pos) && (moveCount <= 4 || capture || givesCheck))
-        delta -= state().endgameBuyback;
-
-    // Authority 2 is the funding mechanism. v2.1 deliberately avoids
-    // overdriving pawn moves: even a quiet pawn move irreversibly changes the
-    // position and is a poor place to buy generic speed. We also start one move
-    // later and one ply deeper than v2 to concentrate the extra reduction on
-    // genuinely late, stable-looking branches.
-    if (state().authority >= 2 && depth >= 5 && moveCount >= 6 && !pvNode && !capture
-        && !givesCheck && move.type_of() != PROMOTION && !advanced_pawn_move(pos, move)
-        && !zeroing_quiet(pos, move, capture) && pos.rule50_count() < 70 && !low_material(pos))
-    {
-        const int lateness   = std::min(moveCount - 5, 8);
-        const int depthScale = std::min(int(depth), 10) + 2;
-        delta += state().quietOverdrive * lateness * depthScale / 48;
-    }
-
-    return std::clamp(delta, -2048, 768);
-}'''
-          new='''inline int lmr_adjustment(const Position& pos,
-                          Move move,
-                          Square prevSq,
-                          Depth depth,
-                          int moveCount,
-                          bool pvNode,
-                          bool capture,
-                          bool givesCheck) {
-    const State& cfg = state();
-    if (!cfg.enabled || cfg.authority <= 0)
-        return 0;
-
-    // These classifications are decision-invariant for this move. Compute each
-    // once instead of rediscovering it through several helper paths below.
-    const bool isRecapture   = recapture(move, prevSq, capture);
-    const bool isPromotion   = move.type_of() == PROMOTION;
-    const bool isAdvancedPawn = advanced_pawn_move(pos, move);
-    const bool isLowMaterial = low_material(pos);
-
-    int delta = 0;
-    if (givesCheck)
-        delta -= cfg.forcingBuyback;
-    if (isRecapture)
-        delta -= cfg.recaptureBuyback;
-    if (isPromotion || isAdvancedPawn)
-        delta -= cfg.passerBuyback;
-
-    if (isLowMaterial && (moveCount <= 4 || capture || givesCheck))
-        delta -= cfg.endgameBuyback;
-
-    if (cfg.authority >= 2 && depth >= 5 && moveCount >= 6 && !pvNode && !capture
-        && !givesCheck && !isPromotion && !isAdvancedPawn
-        && !zeroing_quiet(pos, move, capture) && pos.rule50_count() < 70 && !isLowMaterial)
-    {
-        const int lateness   = std::min(moveCount - 5, 8);
-        const int depthScale = std::min(int(depth), 10) + 2;
-        delta += cfg.quietOverdrive * lateness * depthScale / 48;
-    }
-
-    return std::clamp(delta, -2048, 768);
-}'''
-          if s.count(old)!=1: raise SystemExit('lmr_adjustment anchor')
-          s=s.replace(old,new,1)
-          # The same config object is read repeatedly in these cheap predicates.
-          s=s.replace('''inline bool ready() { return state().enabled && state().authority > 0; }''','''inline bool ready() {
-    const State& cfg = state();
-    return cfg.enabled && cfg.authority > 0;
-}''',1)
-          old='''inline bool zugzwang_risk(const Position& pos) {
-    if (!ready() || !state().zugzwangGuard)
-        return false;'''
-          new='''inline bool zugzwang_risk(const Position& pos) {
-    const State& cfg = state();
-    if (!cfg.enabled || cfg.authority <= 0 || !cfg.zugzwangGuard)
-        return false;'''
+          p=Path('cand/src/leviathan_fundamentals.h')
+          s=p.read_text()
+          start=s.index('inline int lmr_adjustment(')
+          end=s.index('\ninline int quiet_ordering_bonus', start)
+          f=s[start:end]
+          f=f.replace('    if (!ready())\n        return 0;','    const State& cfg = state();\n    if (!cfg.enabled || cfg.authority <= 0)\n        return 0;',1)
+          f=f.replace('    int delta = 0;','    const bool isRecapture = recapture(move, prevSq, capture);\n    const bool isPromotion = move.type_of() == PROMOTION;\n    const bool isAdvancedPawn = advanced_pawn_move(pos, move);\n    const bool isLowMaterial = low_material(pos);\n\n    int delta = 0;',1)
+          f=f.replace('state().forcingBuyback','cfg.forcingBuyback')
+          f=f.replace('recapture(move, prevSq, capture)','isRecapture')
+          f=f.replace('state().recaptureBuyback','cfg.recaptureBuyback')
+          f=f.replace('move.type_of() == PROMOTION || advanced_pawn_move(pos, move)','isPromotion || isAdvancedPawn')
+          f=f.replace('state().passerBuyback','cfg.passerBuyback')
+          f=f.replace('low_material(pos)','isLowMaterial')
+          f=f.replace('state().endgameBuyback','cfg.endgameBuyback')
+          f=f.replace('state().authority >= 2','cfg.authority >= 2')
+          f=f.replace('move.type_of() != PROMOTION && !advanced_pawn_move(pos, move)','!isPromotion && !isAdvancedPawn')
+          f=f.replace('!low_material(pos)','!isLowMaterial')
+          f=f.replace('state().quietOverdrive','cfg.quietOverdrive')
+          s=s[:start]+f+s[end:]
+          s=s.replace('inline bool ready() { return state().enabled && state().authority > 0; }','inline bool ready() {\n    const State& cfg = state();\n    return cfg.enabled && cfg.authority > 0;\n}',1)
+          old='inline bool zugzwang_risk(const Position& pos) {\n    if (!ready() || !state().zugzwangGuard)\n        return false;'
+          new='inline bool zugzwang_risk(const Position& pos) {\n    const State& cfg = state();\n    if (!cfg.enabled || cfg.authority <= 0 || !cfg.zugzwangGuard)\n        return false;'
           if s.count(old)!=1: raise SystemExit('zugzwang anchor')
           s=s.replace(old,new,1)
-          old='''inline int quiet_ordering_bonus(const Position& pos, Move move) {
-    if (!ready() || !state().rule50Pressure || pos.rule50_count() < 70)
-        return 0;
-
-    // Captures are scored in another MovePicker stage. Push pawn moves upward
-    // when the fifty-move counter is dangerous because they reset it.
-    return pawn_move(pos, move) ? state().rule50PawnBonus : 0;
-}'''
-          new='''inline int quiet_ordering_bonus(const Position& pos, Move move) {
-    const State& cfg = state();
-    if (!cfg.enabled || cfg.authority <= 0 || !cfg.rule50Pressure || pos.rule50_count() < 70)
-        return 0;
-
-    return pawn_move(pos, move) ? cfg.rule50PawnBonus : 0;
-}'''
-          if s.count(old)!=1: raise SystemExit('quiet bonus anchor')
-          s=s.replace(old,new,1)
+          start=s.index('inline int quiet_ordering_bonus(')
+          end=s.index('\ninline bool allow_null_move', start)
+          q=s[start:end]
+          q=q.replace('    if (!ready() || !state().rule50Pressure || pos.rule50_count() < 70)','    const State& cfg = state();\n    if (!cfg.enabled || cfg.authority <= 0 || !cfg.rule50Pressure || pos.rule50_count() < 70)',1)
+          q=q.replace('state().rule50PawnBonus','cfg.rule50PawnBonus')
+          s=s[:start]+q+s[end:]
           p.write_text(s)
           PY
           git -C cand diff --check
           git -C cand diff -- src/leviathan_fundamentals.h | tee candidate.patch
 
-      - name: Build control A/A and candidate
+      - name: Build A/A controls and candidate
         run: |
-          make -C base/src net
-          cp base/src/nn-ab28990d4ea3.nnue cand/src/
-          make -C base/src clean && make -C base/src -j2 ARCH=x86-64-avx2 build
+          make -C base/src net && make -C base/src clean && make -C base/src -j2 ARCH=x86-64-avx2 build
           cp base/src/stockfish base/src/control_a
           cp base/src/stockfish base/src/control_b
+          cp base/src/nn-ab28990d4ea3.nnue cand/src/
           make -C cand/src clean && make -C cand/src -j2 ARCH=x86-64-avx2 build
           cat > active.json <<'EOF'
           {"Threads":1,"Hash":64,"Leviathan Fundamentals":true,"Leviathan Fundamentals Authority":1,"Leviathan Quiet Overdrive":0,"Leviathan Risk":false,"Leviathan Policy":false,"Leviathan MetaSearch":false,"Leviathan Specialist":false,"Leviathan Atlas":false,"Leviathan Search DSL":false}
           EOF
+
       - name: Strict transcript-equivalent 31-round speed replication
         run: |
           python3 lab/tools/lossless_pair_benchmark.py --control-a base/src/control_a --control-b base/src/control_b --candidate cand/src/stockfish --options active.json --rounds 31 --output active-fastpath.json | tee active-fastpath.log
+
       - uses: actions/upload-artifact@v4
         with:
           name: ultra-active-fastpath
