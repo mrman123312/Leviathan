@@ -2,7 +2,9 @@ name: Fundamentals Ultra Margin Skeptic Parallel
 on:
   push:
     branches: [leviathan/fundamentals-ultra-lab]
-    paths: ['.github/workflows/fundamentals-ultra-margin-parallel.yml']
+    paths:
+      - '.github/workflows/fundamentals-ultra-margin-parallel.yml'
+      - 'tools/apply_margin_skeptic.py'
 permissions: {contents: read}
 jobs:
   gate:
