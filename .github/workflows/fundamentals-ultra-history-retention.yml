@@ -1,0 +1,76 @@
+name: Fundamentals Ultra History Retention
+
+on:
+  push:
+    branches: [leviathan/fundamentals-ultra-lab]
+    paths: ['.github/workflows/fundamentals-ultra-history-retention.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  screen:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: retain75
+            num: 768
+          - label: retain875
+            num: 896
+    steps:
+      - uses: actions/checkout@v4
+        with: {ref: '${{ github.sha }}', path: lab}
+      - uses: actions/checkout@v4
+        with: {ref: leviathan/fundamentals-ultra-p01-qfrontier, path: cand}
+      - uses: actions/checkout@v4
+        with: {ref: leviathan/fundamentals-ultra-p01-qfrontier, path: base}
+      - name: Materialize retention variant
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path('cand/src/search.cpp');s=p.read_text()
+          old='mainHistory[c][i] = mainHistory[c][i] * 729 / 1024;'
+          new='mainHistory[c][i] = mainHistory[c][i] * ${{ matrix.num }} / 1024;'
+          if s.count(old)!=1: raise SystemExit(f'expected one mainHistory decay anchor, got {s.count(old)}')
+          p.write_text(s.replace(old,new,1))
+          PY
+          git -C cand diff --check
+          git -C cand diff -- src/search.cpp | tee mutation.patch
+      - name: Build variants and current Stockfish for openings
+        run: |
+          make -C cand/src net && make -C cand/src clean && make -C cand/src -j2 ARCH=x86-64-avx2 build
+          make -C base/src net && make -C base/src clean && make -C base/src -j2 ARCH=x86-64-avx2 build
+          git clone -q https://github.com/official-stockfish/Stockfish.git "$RUNNER_TEMP/sf"
+          git -C "$RUNNER_TEMP/sf" checkout -q 5062aee519a1ba262d472d8ab139851ced56573e
+          make -C "$RUNNER_TEMP/sf/src" -j2 ARCH=x86-64-avx2 build
+          python3 -m pip install --disable-pip-version-check chess==1.11.2
+      - name: Generate fresh game-continuity corpus
+        run: |
+          python3 lab/tools/generate_balanced_openings.py --stockfish "$RUNNER_TEMP/sf/src/stockfish" --output openings.json --count 60 --plies 16 --seed $((271828182 + ${{ matrix.num }})) --max-abs-cp 100
+      - name: 120-game equal-node A/B
+        run: |
+          mkdir -p nodes
+          python3 lab/tools/fundamentals_tournament.py --candidate "$PWD/cand/src/stockfish" --opponent "$PWD/base/src/stockfish" --candidate-label '${{ matrix.label }}' --opponent-label P01 --candidate-fundamentals --opponent-fundamentals --nodes-per-move 100000 --openings-json "$PWD/openings.json" --max-plies 200 --output-dir nodes | tee nodes/match.log
+      - name: 120-game fixed-time A/B
+        run: |
+          mkdir -p time
+          python3 lab/tools/fundamentals_tournament.py --candidate "$PWD/cand/src/stockfish" --opponent "$PWD/base/src/stockfish" --candidate-label '${{ matrix.label }}' --opponent-label P01 --candidate-fundamentals --opponent-fundamentals --movetime-ms 100 --openings-json "$PWD/openings.json" --max-plies 200 --output-dir time | tee time/match.log
+      - name: Provenance
+        run: |
+          printf 'candidate_base=%s\nbaseline=%s\ncaissa_donor=22c867064adfdb6c7b33630fb7475f1056f66096\nretention=${{ matrix.num }}/1024\n' "$(git -C cand rev-parse HEAD)" "$(git -C base rev-parse HEAD)" > revisions.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: 'ultra-history-${{ matrix.label }}'
+          path: |
+            mutation.patch
+            openings.json
+            nodes
+            time
+            revisions.txt
+          retention-days: 30
