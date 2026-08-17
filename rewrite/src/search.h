@@ -52,6 +52,7 @@ private:
     int negamax(Position& p, int depth, int alpha, int beta, int ply);
     int quiescence(Position& p, int alpha, int beta, int ply);
     bool repeated(uint64_t key) const;
+    bool has_legal_move(Position& p) const;
     bool history_sensitive(const Position& p) const;
     uint64_t context_key(const Position& p) const;
     bool time_up();
