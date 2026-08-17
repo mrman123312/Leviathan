@@ -1,0 +1,101 @@
+name: Fundamentals Ultra Q Frontier Tail Miner
+
+on:
+  push:
+    branches: [leviathan/fundamentals-ultra-lab]
+    paths: ['.github/workflows/fundamentals-ultra-qfrontier-tail-miner.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  mine:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with: {ref: leviathan/fundamentals-ultra-lab, path: lab}
+      - uses: actions/checkout@v4
+        with: {ref: leviathan/fundamentals-ultra-v0, path: cap5}
+      - uses: actions/checkout@v4
+        with: {ref: leviathan/fundamentals-ultra-v0, path: cap4}
+      - name: Materialize cap5 only
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path('cap5/src/search.cpp');s=p.read_text()
+          old='moveCount > 4 || (moveCount > 2 && leviathanCaptureCeiling < alpha - 48)'
+          new='moveCount > 5 || (moveCount > 2 && leviathanCaptureCeiling < alpha - 48)'
+          if s.count(old)!=1: raise SystemExit('anchor')
+          p.write_text(s.replace(old,new,1))
+          PY
+          git -C cap5 diff --check
+      - name: Build engines and current Stockfish
+        run: |
+          make -C cap5/src net && make -C cap5/src clean && make -C cap5/src -j2 ARCH=x86-64-avx2 build
+          make -C cap4/src net && make -C cap4/src clean && make -C cap4/src -j2 ARCH=x86-64-avx2 build
+          git clone -q https://github.com/official-stockfish/Stockfish.git "$RUNNER_TEMP/sf"
+          git -C "$RUNNER_TEMP/sf" checkout -q 5062aee519a1ba262d472d8ab139851ced56573e
+          make -C "$RUNNER_TEMP/sf/src" -j2 ARCH=x86-64-avx2 build
+          python3 -m pip install --disable-pip-version-check chess==1.11.2
+      - name: Generate 150 positions over three horizons
+        run: |
+          python3 lab/tools/generate_balanced_openings.py --stockfish "$RUNNER_TEMP/sf/src/stockfish" --output p8.json  --count 50 --plies 8  --seed 11235813 --max-abs-cp 120
+          python3 lab/tools/generate_balanced_openings.py --stockfish "$RUNNER_TEMP/sf/src/stockfish" --output p14.json --count 50 --plies 14 --seed 11235821 --max-abs-cp 120
+          python3 lab/tools/generate_balanced_openings.py --stockfish "$RUNNER_TEMP/sf/src/stockfish" --output p22.json --count 50 --plies 22 --seed 11235834 --max-abs-cp 120
+          python3 - <<'PY'
+          import json
+          out=[]
+          for p in ('p8.json','p14.json','p22.json'): out += json.load(open(p))
+          open('positions.json','w').write(json.dumps(out,indent=2)+'\n')
+          PY
+          sha256sum positions.json > positions.sha256
+      - name: Mine decision disagreements and oracle deltas
+        run: |
+          python3 - <<'PY' | tee tail-miner.log
+          import json,statistics,os
+          import chess,chess.engine
+          OPT={'Threads':1,'Hash':64,'Leviathan Fundamentals':True,'Leviathan Fundamentals Authority':1,'Leviathan Quiet Overdrive':0}
+          SFOPT={'Threads':1,'Hash':64}
+          def start(p,opt):
+            e=chess.engine.SimpleEngine.popen_uci(p); e.configure({k:v for k,v in opt.items() if k in e.options}); return e
+          def choice(e,b,n,game): return e.play(b,chess.engine.Limit(nodes=n),game=game).move
+          def grade(e,b,m,n,game):
+            z=e.analyse(b,chess.engine.Limit(nodes=n),root_moves=[m],game=game)
+            return int(z['score'].pov(b.turn).score(mate_score=100000) or 0)
+          A=start('cap4/src/stockfish',OPT);B=start('cap5/src/stockfish',OPT)
+          OA=start(os.environ['RUNNER_TEMP']+'/sf/src/stockfish',SFOPT);OB=start(os.environ['RUNNER_TEMP']+'/sf/src/stockfish',SFOPT)
+          rows=[];dis=[]
+          try:
+            P=json.load(open('positions.json'))
+            for i,x in enumerate(P,1):
+              b=chess.Board();
+              for u in x['moves']: b.push_uci(u)
+              tok=(i,b.fen())
+              am=choice(A,b,60000,('cap4',tok)); bm=choice(B,b,60000,('cap5',tok))
+              row={'i':i,'plies':len(x['moves']),'fen':b.fen(),'cap4':am.uci(),'cap5':bm.uci(),'disagree':am!=bm}
+              if am!=bm:
+                sa=grade(OA,b,am,600000,('oracle-cap4',tok)); sb=grade(OB,b,bm,600000,('oracle-cap5',tok));delta=sb-sa
+                row|={'cap4_oracle_score':sa,'cap5_oracle_score':sb,'delta_cap5_minus_cap4':delta}
+                dis.append(row)
+              rows.append(row)
+              if i%10==0: print(f'{i}/150 disagreements={len(dis)}',flush=True)
+          finally:
+            for e in (A,B,OA,OB):e.quit()
+          ds=[r['delta_cap5_minus_cap4'] for r in dis]
+          out={'positions':len(rows),'disagreements':len(dis),'disagreement_rate':len(dis)/len(rows),'cap5_better':sum(x>0 for x in ds),'cap4_better':sum(x<0 for x in ds),'oracle_ties':sum(x==0 for x in ds),'mean_delta_cap5_minus_cap4':statistics.fmean(ds) if ds else 0,'median_delta':statistics.median(ds) if ds else 0,'cap5_rescues_ge20':sum(x>=20 for x in ds),'cap5_harms_ge20':sum(x<=-20 for x in ds),'cap5_rescues_ge50':sum(x>=50 for x in ds),'cap5_harms_ge50':sum(x<=-50 for x in ds),'max_cap5_gain':max(ds) if ds else 0,'max_cap5_harm':min(ds) if ds else 0,'by_horizon':{},'disagreement_rows':dis,'all_rows':rows}
+          for p in (8,14,22):
+            z=[r['delta_cap5_minus_cap4'] for r in dis if r['plies']==p]
+            out['by_horizon'][str(p)]={'disagreements':len(z),'mean_delta':statistics.fmean(z) if z else 0,'cap5_better':sum(x>0 for x in z),'cap4_better':sum(x<0 for x in z),'rescues20':sum(x>=20 for x in z),'harms20':sum(x<=-20 for x in z)}
+          open('tail-miner.json','w').write(json.dumps(out,indent=2)+'\n')
+          print(json.dumps({k:v for k,v in out.items() if k not in ('disagreement_rows','all_rows')},indent=2))
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: qf-cap5-tail-miner
+          path: |
+            tail-miner.json
+            tail-miner.log
+            positions.sha256
+          retention-days: 30
