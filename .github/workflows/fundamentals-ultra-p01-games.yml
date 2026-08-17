@@ -1,0 +1,44 @@
+name: Fundamentals Ultra P01 Game Confirmation
+on:
+  push:
+    branches: [leviathan/fundamentals-ultra-lab]
+    paths: ['.github/workflows/fundamentals-ultra-p01-games.yml']
+permissions: {contents: read}
+jobs:
+  gate:
+    runs-on: ubuntu-22.04
+    strategy:
+      fail-fast: false
+      matrix: {mode: [time, nodes, stockfish]}
+    steps:
+      - uses: actions/checkout@v4
+        with: {ref: leviathan/fundamentals-ultra-phasefix-p01, path: cand}
+      - uses: actions/checkout@v4
+        with: {ref: leviathan/fundamentals-v2.1.1-phasefix, path: base}
+      - uses: actions/checkout@v4
+        with: {ref: leviathan/fundamentals-ultra-lab, path: lab}
+      - name: Build candidate/control/Stockfish
+        run: |
+          make -C cand/src net; cp cand/src/nn-ab28990d4ea3.nnue base/src/
+          make -C cand/src clean && make -C cand/src -j2 ARCH=x86-64-avx2 build
+          make -C base/src clean && make -C base/src -j2 ARCH=x86-64-avx2 build
+          git clone https://github.com/official-stockfish/Stockfish.git "$RUNNER_TEMP/sf"
+          git -C "$RUNNER_TEMP/sf" checkout 5062aee519a1ba262d472d8ab139851ced56573e
+          make -C "$RUNNER_TEMP/sf/src" -j2 ARCH=x86-64-avx2 build
+          python3 -m pip install --disable-pip-version-check chess==1.11.2
+      - name: Exact balanced corpus
+        run: |
+          python3 lab/tools/generate_balanced_openings.py --stockfish "$RUNNER_TEMP/sf/src/stockfish" --output openings.json --count 50 --plies 8 --seed 8910 --max-abs-cp 80
+          test "$(sha256sum openings.json | cut -d' ' -f1)" = 444b13d062e5aa38e72f6ffc5a2f3aa8daf92d4b6712a2d40646c857b51795da
+      - name: Run 100-game gate
+        shell: bash
+        run: |
+          mkdir out
+          case '${{ matrix.mode }}' in
+            time) python3 lab/tools/fundamentals_tournament.py --candidate "$PWD/cand/src/stockfish" --opponent "$PWD/base/src/stockfish" --candidate-label phasefix-p01 --opponent-label phasefix --candidate-fundamentals --opponent-fundamentals --move-time-ms 100 --openings-json openings.json --max-plies 180 --output-dir out ;;
+            nodes) python3 lab/tools/fundamentals_tournament.py --candidate "$PWD/cand/src/stockfish" --opponent "$PWD/base/src/stockfish" --candidate-label phasefix-p01 --opponent-label phasefix --candidate-fundamentals --opponent-fundamentals --nodes-per-move 80000 --openings-json openings.json --max-plies 180 --output-dir out ;;
+            stockfish) python3 lab/tools/fundamentals_tournament.py --candidate "$PWD/cand/src/stockfish" --opponent "$RUNNER_TEMP/sf/src/stockfish" --candidate-label phasefix-p01 --opponent-label Stockfish-5062aee5 --candidate-fundamentals --move-time-ms 100 --openings-json openings.json --max-plies 180 --output-dir out ;;
+          esac
+          cat out/summary.json
+      - uses: actions/upload-artifact@v4
+        with: {name: 'p01-games-${{ matrix.mode }}', path: out, retention-days: 30}
