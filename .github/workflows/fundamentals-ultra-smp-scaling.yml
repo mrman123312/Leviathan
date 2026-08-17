@@ -1,0 +1,67 @@
+name: Fundamentals Ultra SMP Scaling
+
+on:
+  push:
+    branches: [leviathan/fundamentals-ultra-lab]
+    paths: ['.github/workflows/fundamentals-ultra-smp-scaling.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  openings:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+        with: {ref: leviathan/fundamentals-ultra-lab, path: lab}
+      - name: Build current Stockfish and make shared corpus
+        run: |
+          git clone -q https://github.com/official-stockfish/Stockfish.git "$RUNNER_TEMP/sf"
+          git -C "$RUNNER_TEMP/sf" checkout -q 5062aee519a1ba262d472d8ab139851ced56573e
+          make -C "$RUNNER_TEMP/sf/src" -j2 ARCH=x86-64-avx2 build
+          python3 -m pip install --disable-pip-version-check chess==1.11.2
+          python3 lab/tools/generate_balanced_openings.py --stockfish "$RUNNER_TEMP/sf/src/stockfish" --output openings.json --count 30 --plies 12 --seed 42424242 --max-abs-cp 100
+      - uses: actions/upload-artifact@v4
+        with: {name: ultra-smp-openings, path: openings.json, retention-days: 30}
+
+  match:
+    needs: openings
+    runs-on: ubuntu-22.04
+    timeout-minutes: 80
+    strategy:
+      fail-fast: false
+      matrix:
+        threads: [1, 2, 4]
+    steps:
+      - uses: actions/checkout@v4
+        with: {ref: leviathan/fundamentals-ultra-lab, path: lab}
+      - uses: actions/checkout@v4
+        with: {ref: leviathan/fundamentals-ultra-v0, path: ultra}
+      - uses: actions/download-artifact@v4
+        with: {name: ultra-smp-openings, path: shared}
+      - name: Build Ultra and current Stockfish
+        run: |
+          make -C ultra/src net && make -C ultra/src clean && make -C ultra/src -j2 ARCH=x86-64-avx2 build
+          git clone -q https://github.com/official-stockfish/Stockfish.git "$RUNNER_TEMP/sf"
+          git -C "$RUNNER_TEMP/sf" checkout -q 5062aee519a1ba262d472d8ab139851ced56573e
+          make -C "$RUNNER_TEMP/sf/src" -j2 ARCH=x86-64-avx2 build
+          python3 -m pip install --disable-pip-version-check chess==1.11.2
+      - name: 60-game same-thread fixed-time match
+        run: |
+          mkdir match
+          python3 lab/tools/fundamentals_tournament.py \
+            --candidate "$PWD/ultra/src/stockfish" --opponent "$RUNNER_TEMP/sf/src/stockfish" \
+            --candidate-label 'Ultra-v0-T${{ matrix.threads }}' --opponent-label 'Stockfish-T${{ matrix.threads }}' \
+            --candidate-fundamentals --candidate-threads '${{ matrix.threads }}' --opponent-threads '${{ matrix.threads }}' \
+            --move-time-ms 150 --openings-json "$PWD/shared/openings.json" --max-plies 180 --output-dir match | tee match/match.log
+      - name: Provenance
+        run: |
+          printf 'threads=%s\nultra=%s\nstockfish=%s\n' '${{ matrix.threads }}' "$(git -C ultra rev-parse HEAD)" "$(git -C "$RUNNER_TEMP/sf" rev-parse HEAD)" > revisions.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: 'ultra-smp-t${{ matrix.threads }}'
+          path: |
+            match
+            revisions.txt
+          retention-days: 30
