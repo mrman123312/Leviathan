@@ -150,14 +150,15 @@ inline void set_enabled(bool v) {
 inline void set_authority(int v) { state().authority = std::clamp(v, 0, 2); }
 inline void set_weight(int v) { state().weight = std::clamp(v, 0, 400); }
 inline bool set_file(const std::string& path) { return load(path); }
-inline bool ready() { return state().enabled && state().authority > 0 && state().loaded; }
+inline bool ready() {
+    const auto& s = state();
+    return s.enabled && s.authority > 0 && s.loaded;
+}
 
-inline int eval(const std::array<int, FeatureCount>& x) {
-    if (!ready())
-        return 0;
-
+inline int eval_ready(const std::array<int, FeatureCount>& x) {
+    const auto& s = state();
     int out = 0;
-    for (const auto& ins : state().code)
+    for (const auto& ins : s.code)
     {
         switch (ins.op)
         {
@@ -170,9 +171,13 @@ inline int eval(const std::array<int, FeatureCount>& x) {
         out = std::clamp(out, -4096, 2048);
     }
 
-    if (state().authority == 1)
+    if (s.authority == 1)
         out = std::min(out, 0);
-    return std::clamp(out * state().weight / 100, -4096, 1536);
+    return std::clamp(out * s.weight / 100, -4096, 1536);
+}
+
+inline int eval(const std::array<int, FeatureCount>& x) {
+    return ready() ? eval_ready(x) : 0;
 }
 
 inline int lmr_adjustment(Depth depth,
@@ -187,6 +192,9 @@ inline int lmr_adjustment(Depth depth,
                           Depth ttDepth,
                           Value staticEval,
                           Value alpha) {
+    if (!ready())
+        return 0;
+
     const std::array<int, FeatureCount> x = {
       std::clamp(int(depth), 0, 128),
       std::clamp(moveCount, 0, 128),
@@ -200,7 +208,7 @@ inline int lmr_adjustment(Depth depth,
       std::clamp(int(ttDepth - depth), -64, 64),
       std::clamp((staticEval - alpha) / 16, -256, 256),
       std::clamp(std::abs(staticEval) / 32, 0, 256)};
-    return eval(x);
+    return eval_ready(x);
 }
 
 }  // namespace Stockfish::Leviathan::DSL

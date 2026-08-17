@@ -212,6 +212,12 @@ ExtMove* MovePicker::score(const MoveList<Type>& ml) {
         threatByLesser[KING]  = 0;
     }
 
+    const bool leviathanPolicyReady = Type == QUIETS && Leviathan::Policy::ready();
+    const bool leviathanAtlasReady  = Type == QUIETS && Leviathan::Atlas::ready();
+    const bool leviathanRule50Ready = Type == QUIETS && Leviathan::Fundamentals::ready()
+                                      && Leviathan::Fundamentals::state().rule50Pressure
+                                      && pos.rule50_count() >= 70;
+
     ExtMove* it = cur;
     for (auto move : ml)
     {
@@ -253,9 +259,12 @@ ExtMove* MovePicker::score(const MoveList<Type>& ml) {
             // Leviathan P001: add a bounded learned prior only to quiet move ordering.
             // With no valid model loaded this is exactly zero, preserving the parent
             // engine's ordering and deterministic bench signature.
-            m.value += Leviathan::Policy::ordering_bonus(pos, m);
-            m.value += Leviathan::Atlas::ordering_bonus(pos, m);
-            m.value += Leviathan::Fundamentals::quiet_ordering_bonus(pos, m);
+            if (leviathanPolicyReady)
+                m.value += Leviathan::Policy::ordering_bonus(pos, m);
+            if (leviathanAtlasReady)
+                m.value += Leviathan::Atlas::ordering_bonus(pos, m);
+            if (leviathanRule50Ready)
+                m.value += Leviathan::Fundamentals::quiet_ordering_bonus(pos, m);
         }
 
         else  // Type == EVASIONS
