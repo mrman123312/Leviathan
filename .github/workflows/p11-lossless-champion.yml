@@ -1,0 +1,120 @@
+name: P11 Lossless Champion
+
+on:
+  push:
+    branches: [agent/p11-lossless-champion]
+    paths: ['.github/workflows/p11-lossless-champion.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  validate-and-materialize:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 80
+    steps:
+      - name: Checkout P11 candidate branch
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: agent/p11-lossless-champion
+          path: cand
+          fetch-depth: 8
+          persist-credentials: true
+
+      - name: Checkout exact P01 baseline
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: 3404fa2ea9b4fe75236e2584be9da3416e646ec2
+          path: base
+          fetch-depth: 1
+
+      - name: Checkout hardened benchmark harness
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: leviathan/fundamentals-ultra-lab
+          path: harness
+          fetch-depth: 1
+
+      - name: Materialize P06 on top of P03
+        working-directory: cand
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path('src/search.cpp'); s=p.read_text()
+          old="    const bool leviathanRiskReady  = Leviathan::Control::risk_ready();\n    const bool leviathanDslReady   = Leviathan::DSL::ready();\n    const bool leviathanTraceReady = Leviathan::Trace::ready();"
+          new="    const bool leviathanRiskReady         = Leviathan::Control::risk_ready();\n    const bool leviathanDslReady          = Leviathan::DSL::ready();\n    const bool leviathanTraceReady        = Leviathan::Trace::ready();\n    const bool leviathanFundamentalsReady = Leviathan::Fundamentals::ready();"
+          if s.count(old)!=1: raise SystemExit(f'ready anchor count={s.count(old)}')
+          s=s.replace(old,new,1)
+          old="                const bool leviathanScopeProtected =\n                  Leviathan::Fundamentals::protected_scope_move(\n                    pos, move, prevSq, capture, givesCheck);"
+          new="                // Quiet branch specialization: capture and givesCheck are already false.\n                // Reuse movedPiece and node-level readiness instead of re-entering the generic classifier.\n                const bool leviathanScopeProtected = leviathanFundamentalsReady\n                  && (move.type_of() == PROMOTION\n                      || (type_of(movedPiece) == PAWN\n                          && relative_rank(color_of(movedPiece), move.to_sq()) >= RANK_6));"
+          if s.count(old)!=1: raise SystemExit(f'scope anchor count={s.count(old)}')
+          p.write_text(s.replace(old,new,1))
+          PY
+          git diff --check
+          git diff -- src/search.cpp
+
+      - name: Build P01 controls and combined candidate
+        run: |
+          make -C base/src net
+          make -C base/src clean
+          make -C base/src -j2 ARCH=x86-64-avx2 build
+          cp base/src/stockfish base/src/control_a
+          cp base/src/stockfish base/src/control_b
+          cp base/src/nn-ab28990d4ea3.nnue cand/src/
+          make -C cand/src clean
+          make -C cand/src -j2 ARCH=x86-64-avx2 build
+          cat > active.json <<'EOF'
+          {"Threads":1,"Hash":64,"Leviathan Fundamentals":true,"Leviathan Fundamentals Authority":1,"Leviathan Quiet Overdrive":0,"Leviathan Risk":false,"Leviathan Policy":false,"Leviathan MetaSearch":false,"Leviathan Specialist":false,"Leviathan Atlas":false,"Leviathan Search DSL":false}
+          EOF
+
+      - name: Exact behavior plus 31-round P01-relative speed replication
+        run: |
+          python3 harness/tools/lossless_pair_benchmark.py \
+            --control-a base/src/control_a \
+            --control-b base/src/control_b \
+            --candidate cand/src/stockfish \
+            --options active.json \
+            --rounds 31 \
+            --output p11.json | tee p11.log
+
+      - name: Promotion decision
+        id: gate
+        run: |
+          python3 - <<'PY'
+          import json
+          d=json.load(open('p11.json')); sig=d['signatures']; r=d['results']; exact=True
+          for case in ('default','depth11','nodes50k'):
+              a=sig['control_a'][case]; c=sig['candidate'][case]
+              exact &= a['nodes']==c['nodes'] and a['behavior_sha256']==c['behavior_sha256']
+          aa=r['control_b']; c=r['candidate']
+          out={'exact_behavior':exact,'aa_median':aa['median_speedup'],'aa_ci':aa['bootstrap_median_95pct_ci'],'candidate_median':c['median_speedup'],'candidate_geo':c['geometric_mean_speedup'],'candidate_ci':c['bootstrap_median_95pct_ci'],'faster_rounds':c['faster_rounds'],'rounds':c['rounds']}
+          open('p11-summary.json','w').write(json.dumps(out,indent=2)+'\n'); print(json.dumps(out,indent=2))
+          if not exact: raise SystemExit('P11_BEHAVIOR_MISMATCH')
+          if c['bootstrap_median_95pct_ci'][0] <= 1.0 or c['median_speedup'] < 1.01:
+              raise SystemExit('P11_SPEED_GATE_FAIL')
+          print('P11_PROMOTION_GATE_PASS')
+          PY
+
+      - name: Commit materialized combined source to isolated branch
+        working-directory: cand
+        run: |
+          git config user.name 'Leviathan Research Bot'
+          git config user.email '154391238+mrman123312@users.noreply.github.com'
+          git add src/search.cpp
+          if git diff --cached --quiet; then
+            echo 'No source delta to commit.'
+          else
+            git commit -m 'P11: materialize lossless P03+P06 champion [skip ci]'
+            git push origin HEAD:agent/p11-lossless-champion
+          fi
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: p11-lossless-champion-${{ github.sha }}
+          path: |
+            p11.json
+            p11.log
+            p11-summary.json
+          retention-days: 30
