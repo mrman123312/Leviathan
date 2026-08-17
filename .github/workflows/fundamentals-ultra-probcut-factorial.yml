@@ -1,0 +1,134 @@
+name: Fundamentals Ultra ProbCut Factorial
+
+on:
+  push:
+    branches: [leviathan/fundamentals-ultra-lab]
+    paths: ['.github/workflows/fundamentals-ultra-probcut-factorial.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  factorial:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with: {ref: '${{ github.sha }}', path: lab}
+      - uses: actions/checkout@v4
+        with: {ref: leviathan/fundamentals-ultra-p01-qfrontier, path: order}
+      - uses: actions/checkout@v4
+        with: {ref: leviathan/fundamentals-ultra-p01-qfrontier, path: depth}
+
+      - name: Materialize order-only and depth-only organs
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import re
+          from pathlib import Path
+
+          COMMON=[
+            ('Move  move, excludedMove, bestMove;', 'Move  move, excludedMove, bestMove, probCutNearMiss;'),
+            ('Value bestValue, value, eval, maxValue, probCutBeta;', 'Value bestValue, value, eval, maxValue, probCutBeta, probCutNearValue;'),
+            ('bestMove       = Move::none();\n    priorReduction = (ss - 1)->reduction;', 'bestMove         = Move::none();\n    probCutNearMiss  = Move::none();\n    probCutNearValue = -VALUE_INFINITE;\n    priorReduction   = (ss - 1)->reduction;')]
+
+          def base_mutate(root):
+              p=Path(root)/'src/search.cpp'; s=p.read_text()
+              for a,b in COMMON:
+                  if s.count(a)!=1: raise SystemExit(f'{root}: anchor count={s.count(a)} for {a[:60]!r}')
+                  s=s.replace(a,b,1)
+              pattern=r'(?ms)^(\s*)if \(value >= probCutBeta\)\n\1\{\n.*?^\1\}'
+              m=re.search(pattern,s)
+              if not m: raise SystemExit(f'{root}: ProbCut success-block anchor')
+              I=m.group(1)
+              extra=(f"\n{I}else if (value >= beta && !is_decisive(value) && value > probCutNearValue)\n"
+                     f"{I}{{\n{I}    probCutNearValue = value;\n{I}    probCutNearMiss  = move;\n{I}}}")
+              return p, s[:m.end()]+extra+s[m.end():]
+
+          p,s=base_mutate('order')
+          a='MovePicker mp(pos, ttData.move, depth, &mainHistory, &lowPlyHistory, &captureHistory, contHist,\n                  &sharedHistory, ss->ply);'
+          b='const Move leviathanPreferredMove = ttData.move ? ttData.move : probCutNearMiss;\n    MovePicker mp(pos, leviathanPreferredMove, depth, &mainHistory, &lowPlyHistory, &captureHistory,\n                  contHist, &sharedHistory, ss->ply);'
+          if s.count(a)!=1: raise SystemExit('order: MovePicker anchor')
+          p.write_text(s.replace(a,b,1))
+
+          p,s=base_mutate('depth')
+          a='r += 697;  // Base reduction offset to compensate for other tweaks\n        r -= moveCount * 65;'
+          b='r += 697;  // Base reduction offset to compensate for other tweaks\n        if (move == probCutNearMiss)\n            r -= 256;\n        r -= moveCount * 65;'
+          if s.count(a)!=1: raise SystemExit('depth: LMR anchor')
+          p.write_text(s.replace(a,b,1))
+          PY
+          git -C order diff --check
+          git -C depth diff --check
+          git -C order diff -- src/search.cpp > order.patch
+          git -C depth diff -- src/search.cpp > depth.patch
+          test -s order.patch && test -s depth.patch
+
+      - name: Build variants and pinned Stockfish oracle
+        shell: bash
+        run: |
+          set -euo pipefail
+          for d in order depth; do
+            make -C "$d/src" net
+            make -C "$d/src" clean
+            make -C "$d/src" -j2 ARCH=x86-64-avx2 build
+          done
+          git clone -q https://github.com/official-stockfish/Stockfish.git "$RUNNER_TEMP/sf"
+          git -C "$RUNNER_TEMP/sf" checkout -q 5062aee519a1ba262d472d8ab139851ced56573e
+          make -C "$RUNNER_TEMP/sf/src" -j2 ARCH=x86-64-avx2 build
+          python3 -m pip install --disable-pip-version-check chess==1.11.2
+
+      - name: Eight-position factorial counterexample panel
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY' | tee factorial.log
+          import chess, chess.engine, json, os
+          rows=[
+            {'position':5,'fen':'rn1qk2r/pbp2pb1/1p1ppnpp/8/2PPP2B/N1N2P2/PP4PP/R2QKB1R w KQkq - 2 10','baseline_move':'f1e2','baseline_regret':0,'baseline_score':60,'full_move':'a3c2','full_regret':0,'full_score':53,'oracle_move':'a3c2','oracle_score':53},
+            {'position':6,'fen':'r1bqk2r/1p2bppp/p1n2n2/3p4/2PN4/6P1/PP3PBP/RNBQK2R w KQkq - 1 10','baseline_move':'e1g1','baseline_regret':6,'baseline_score':4,'full_move':'c4d5','full_regret':0,'full_score':12,'oracle_move':'b1c3','oracle_score':10},
+            {'position':25,'fen':'r1bq1rk1/2pnppbp/p2p2p1/QN1n4/3P3P/8/PPPBPPP1/2KR1BNR w - - 0 10','baseline_move':'e2e4','baseline_regret':27,'baseline_score':62,'full_move':'b5c3','full_regret':0,'full_score':89,'oracle_move':'b5c3','oracle_score':89},
+            {'position':27,'fen':'r1bqk2r/pp1nppbp/2p2np1/2Pp4/3P1B2/2N1PN1P/PP3PP1/2RQKB1R w Kkq - 1 10','baseline_move':'f1e2','baseline_regret':0,'baseline_score':112,'full_move':'f1d3','full_regret':15,'full_score':97,'oracle_move':'f1e2','oracle_score':112},
+            {'position':29,'fen':'r1bqk2r/pp2bppp/2n1p3/8/4Pn2/5N1P/PP1N1PP1/R1BQKB1R w KQkq - 1 10','baseline_move':'d2c4','baseline_regret':16,'baseline_score':-37,'full_move':'d2b3','full_regret':0,'full_score':-21,'oracle_move':'d2b3','oracle_score':-21},
+            {'position':35,'fen':'2rqkbnr/pp1b1pp1/4p2p/n2pP3/3P4/P1NB4/1P2NPPP/R1BQK2R w KQk - 1 10','baseline_move':'a1b1','baseline_regret':0,'baseline_score':119,'full_move':'h2h4','full_regret':5,'full_score':114,'oracle_move':'a1b1','oracle_score':119},
+            {'position':43,'fen':'r1bqk2r/1ppn1ppp/p1nbp3/3p4/3P1BN1/2P1P2P/PP1N1PP1/R2QKB1R w KQkq - 5 10','baseline_move':'d2f3','baseline_regret':0,'baseline_score':4,'full_move':'f1e2','full_regret':0,'full_score':14,'oracle_move':'f1d3','oracle_score':4},
+            {'position':45,'fen':'r1bqk2r/1p2npb1/p1npp1pp/2p5/P3PB2/1BNP1N1P/1PP2PP1/R2QK2R w KQkq - 2 10','baseline_move':'e1g1','baseline_regret':0,'baseline_score':-19,'full_move':'d1d2','full_regret':10,'full_score':-29,'oracle_move':'e1g1','oracle_score':-19}]
+          opts={'Threads':1,'Hash':64,'Leviathan Fundamentals':True,'Leviathan Fundamentals Authority':1,'Leviathan Quiet Overdrive':0}
+          E={}
+          for label,path in [('order','order/src/stockfish'),('depth','depth/src/stockfish')]:
+              e=chess.engine.SimpleEngine.popen_uci(path);e.configure(opts);E[label]=e
+          O=chess.engine.SimpleEngine.popen_uci(os.environ['RUNNER_TEMP']+'/sf/src/stockfish');O.configure({'Threads':1,'Hash':64})
+          out=[]
+          try:
+              for r in rows:
+                  b=chess.Board(r['fen']); known={r['baseline_move']:r['baseline_score'],r['full_move']:r['full_score'],r['oracle_move']:r['oracle_score']}
+                  z={'position':r['position'],'fen':r['fen'],'baseline_regret':r['baseline_regret'],'full_regret':r['full_regret']}
+                  for label,e in E.items():
+                      info=e.analyse(b,chess.engine.Limit(nodes=120000),game=(label,r['position'],r['fen']));m=info['pv'][0].uci()
+                      if m in known: score=known[m]; src='reused_confirmed_1m_grade'
+                      else:
+                          mm=chess.Move.from_uci(m); oi=O.analyse(b,chess.engine.Limit(nodes=1000000),root_moves=[mm],game=('grade',label,r['position'],m));score=int(oi['score'].pov(b.turn).score(mate_score=100000) or 0);src='fresh_1m_grade'
+                      z[label]={'move':m,'score':score,'regret':max(0,r['oracle_score']-score),'grade_source':src}
+                  out.append(z);print(json.dumps(z),flush=True)
+          finally:
+              for e in E.values():e.quit()
+              O.quit()
+          summary={}
+          for label in ('order','depth'):
+              rescue=sum(max(0,r['baseline_regret']-r[label]['regret']) for r in out);harm=sum(max(0,r[label]['regret']-r['baseline_regret']) for r in out)
+              summary[label]={'rescue_cp':rescue,'harm_cp':harm,'fresh_holdout_worthy':bool(rescue>=39 and harm<=15)}
+          result={'schema':'LV_PROBCUT_FACTORIAL_V1','development_positions':8,'baseline_reference':{'rescue_cp':0,'harm_cp':0},'full_AB_reference':{'rescue_cp':49,'harm_cp':30},'variants':summary,'rows':out,'rule':'development-only factorial: organ earns fresh holdout iff rescue>=39cp and harm<=15cp; otherwise retain A+B interaction as the candidate'}
+          json.dump(result,open('factorial.json','w'),indent=2);print(json.dumps(result,indent=2))
+          PY
+          test -s factorial.json
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ultra-probcut-factorial
+          path: |
+            order.patch
+            depth.patch
+            factorial.json
+            factorial.log
+          retention-days: 30
