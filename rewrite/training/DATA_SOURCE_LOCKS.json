@@ -14,9 +14,9 @@
       },
       "license": "ODbL-1.0; individual database contents DbCL-1.0",
       "expected_bytes": 15452160,
-      "expected_sha256": null,
+      "expected_sha256": "dfaf79680b92e317a05b343f3c11c52c8ca98957a48c3fcc86b992e3762b1c7a",
       "default_max_bytes": 33554432,
-      "verification": "Verify official-index byte length, record SHA-256 on materialization, then promote SHA-256 into this lock.",
+      "verification": "Verify official-index byte length and materialized SHA-256 before use.",
       "purpose": "Small real Lc0 training-data shard for format, extraction and dual-view pipeline validation."
     },
     {
@@ -50,9 +50,9 @@
       "license": "Repository-distributed fixture; nnue-pytorch source repository is GPL-3.0. No separate dataset-license assertion is made here.",
       "expected_bytes": 1048745,
       "expected_git_blob_sha1": "42a834ca624b03b1decb02ea4c1a32a9222e62d3",
-      "expected_sha256": null,
+      "expected_sha256": "61b894937b24e031147a6734f9f176507a9b4f62225eb202d6852dbb054faf71",
       "default_max_bytes": 2097152,
-      "verification": "Verify exact byte length and Git blob SHA-1 after download.",
+      "verification": "Verify exact byte length, SHA-256 and Git blob SHA-1 after download.",
       "purpose": "Stockfish-compatible binpack loader/trainer smoke test; not production-scale training data."
     }
   ],
