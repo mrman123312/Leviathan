@@ -1,0 +1,176 @@
+name: P10 En Passant Qsearch Accounting
+
+on:
+  push:
+    branches: [agent/p10-en-passant-qsearch-accounting]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  adversarial-ep:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 90
+    steps:
+      - name: Checkout exact P03 source twice
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: e03466d02cc4214442e2ff82fb1a2f28b2d29186
+          path: cand
+          fetch-depth: 1
+
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: e03466d02cc4214442e2ff82fb1a2f28b2d29186
+          path: base
+          fetch-depth: 1
+
+      - name: Checkout frozen current Stockfish oracle
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          repository: official-stockfish/Stockfish
+          ref: 5062aee519a1ba262d472d8ab139851ced56573e
+          path: oracle
+          fetch-depth: 1
+
+      - name: Correct EP captured-value accounting in qsearch
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path('cand/src/search.cpp'); s=p.read_text()
+          old="                const Value leviathanCaptureCeiling =\n                  futilityBase + PieceValue[pos.piece_on(move.to_sq())];"
+          new="                // En passant captures a pawn behind an empty destination square.\n                // Account for the actual captured material before frontier/futility pruning.\n                const Value leviathanCapturedValue = move.type_of() == EN_PASSANT\n                  ? PawnValue : PieceValue[pos.piece_on(move.to_sq())];\n                const Value leviathanCaptureCeiling = futilityBase + leviathanCapturedValue;"
+          if s.count(old)!=1: raise SystemExit(f'qsearch capture ceiling anchor count={s.count(old)}')
+          p.write_text(s.replace(old,new,1))
+          PY
+          git -C cand diff --check
+          git -C cand diff -- src/search.cpp
+
+      - name: Build engines
+        run: |
+          for d in base cand oracle; do
+            make -C "$d/src" net
+            make -C "$d/src" clean
+            make -C "$d/src" -j2 ARCH=x86-64-avx2 build
+          done
+          python3 -m pip install --disable-pip-version-check 'python-chess>=1.999,<2'
+
+      - name: Generate adversarial legal-EP corpus and grade
+        run: |
+          mkdir -p ep-results
+          cat > ep-results/test_ep.py <<'PY'
+          import json,random,statistics
+          from pathlib import Path
+          import chess,chess.engine
+
+          SEED=2026081708910
+          TARGET=24
+          CHOICE_NODES=80000
+          ORACLE_NODES=1000000
+          GRADE_NODES=300000
+
+          def cfg_lv(e):
+              opts={}
+              if 'Threads' in e.options: opts['Threads']=1
+              if 'Hash' in e.options: opts['Hash']=64
+              if 'Leviathan Fundamentals' in e.options: opts['Leviathan Fundamentals']=True
+              if 'Leviathan Fundamentals Authority' in e.options: opts['Leviathan Fundamentals Authority']=1
+              if 'Leviathan Quiet Overdrive' in e.options: opts['Leviathan Quiet Overdrive']=0
+              for n in ['Leviathan Risk','Leviathan Policy','Leviathan MetaSearch','Leviathan Specialist','Leviathan Atlas','Leviathan Search DSL']:
+                  if n in e.options: opts[n]=False
+              if opts:e.configure(opts)
+
+          def cp(info,color):
+              s=info.get('score')
+              return None if s is None else s.pov(color).score(mate_score=100000)
+
+          def ep_moves(b):
+              return [m for m in b.legal_moves if b.is_en_passant(m)]
+
+          def creates_ep(b,m):
+              if b.piece_type_at(m.from_square)!=chess.PAWN or abs(m.to_square-m.from_square)!=16:
+                  return None
+              x=b.copy(stack=False);x.push(m)
+              return x if ep_moves(x) else None
+
+          rng=random.Random(SEED)
+          gen=chess.engine.SimpleEngine.popen_uci('oracle/src/stockfish')
+          base=chess.engine.SimpleEngine.popen_uci('base/src/stockfish')
+          cand=chess.engine.SimpleEngine.popen_uci('cand/src/stockfish')
+          best_oracle=chess.engine.SimpleEngine.popen_uci('oracle/src/stockfish')
+          grade_b=chess.engine.SimpleEngine.popen_uci('oracle/src/stockfish')
+          grade_c=chess.engine.SimpleEngine.popen_uci('oracle/src/stockfish')
+          for e in (gen,best_oracle,grade_b,grade_c): e.configure({'Threads':1,'Hash':64})
+          cfg_lv(base);cfg_lv(cand)
+          positions=[];seen=set();attempt=0
+          try:
+              while len(positions)<TARGET and attempt<900:
+                  attempt+=1;b=chess.Board()
+                  target=rng.choice([10,14,18,22,26,30])
+                  for ply in range(target):
+                      if b.is_game_over(): break
+                      # First harvest any legal double push that creates a genuine legal EP reply.
+                      harvest=[]
+                      for m in list(b.legal_moves):
+                          x=creates_ep(b,m)
+                          if x is not None:
+                              harvest.append((m,x))
+                      rng.shuffle(harvest)
+                      for m,x in harvest[:3]:
+                          key=' '.join(x.fen().split()[:4])
+                          if key in seen: continue
+                          info=gen.analyse(x,chess.engine.Limit(nodes=6000),game=('filter',attempt,ply,m.uci()))
+                          sc=cp(info,x.turn)
+                          if sc is not None and abs(sc)<=260 and x.legal_moves.count()>=6:
+                              seen.add(key); positions.append(x.fen())
+                              print('harvest',len(positions),'score',sc,'ep',','.join(z.uci() for z in ep_moves(x)),flush=True)
+                              if len(positions)>=TARGET: break
+                      if len(positions)>=TARGET: break
+                      infos=gen.analyse(b,chess.engine.Limit(nodes=1200),multipv=min(6,b.legal_moves.count()),game=('walk',attempt,ply))
+                      if not isinstance(infos,list):infos=[infos]
+                      ranked=[]
+                      for z in infos:
+                          if z.get('pv'):
+                              ranked.append((z['pv'][0],int(z['score'].pov(b.turn).score(mate_score=100000) or 0)))
+                      if not ranked: break
+                      best=ranked[0][1]; viable=[x for x in ranked if best-x[1]<=120] or ranked[:1]
+                      b.push(rng.choice(viable)[0])
+                  if len(positions)>=TARGET: break
+              if len(positions)<TARGET: raise RuntimeError(f'only generated {len(positions)} EP positions')
+              Path('ep-results/fens.txt').write_text('\n'.join(positions)+'\n')
+
+              rows=[]
+              for i,fen in enumerate(positions):
+                  b=chess.Board(fen); color=b.turn
+                  oi=best_oracle.analyse(b,chess.engine.Limit(nodes=ORACLE_NODES),game=('best',i)); os=cp(oi,color)
+                  order=[('base',base),('cand',cand)] if i%2==0 else [('cand',cand),('base',base)]
+                  ch={}
+                  for name,e in order:
+                      r=e.play(b,chess.engine.Limit(nodes=CHOICE_NODES),info=chess.engine.INFO_ALL,game=(name,i))
+                      ch[name]=(r.move,cp(r.info,color))
+                  bm,bs=ch['base'];cm,cs=ch['cand']
+                  bg=cp(grade_b.analyse(b,chess.engine.Limit(nodes=GRADE_NODES),root_moves=[bm],game=('gb',i)),color)
+                  cg=cp(grade_c.analyse(b,chess.engine.Limit(nodes=GRADE_NODES),root_moves=[cm],game=('gc',i)),color)
+                  reg=lambda g:max(0,os-g) if os is not None and g is not None else None
+                  br,cr=reg(bg),reg(cg)
+                  rows.append({'fen':fen,'ep_moves':[m.uci() for m in ep_moves(b)],'oracle_score':os,'oracle_move':oi.get('pv',[None])[0].uci() if oi.get('pv') else None,'base_move':bm.uci(),'cand_move':cm.uci(),'base_score':bs,'cand_score':cs,'base_grade':bg,'cand_grade':cg,'base_regret':br,'cand_regret':cr,'improvement_cp':br-cr})
+                  print('test',i+1,'base',bm,'cand',cm,'delta',br-cr,flush=True)
+
+              ds=[r['improvement_cp'] for r in rows]
+              changed=[r for r in rows if r['base_move']!=r['cand_move']]
+              out={'seed':SEED,'positions':len(rows),'changed_roots':len(changed),'base_mean_regret_cp':statistics.mean(r['base_regret'] for r in rows),'cand_mean_regret_cp':statistics.mean(r['cand_regret'] for r in rows),'mean_improvement_cp':statistics.mean(ds),'median_improvement_cp':statistics.median(ds),'better':sum(x>0 for x in ds),'tie':sum(x==0 for x in ds),'worse':sum(x<0 for x in ds),'largest_rescue_cp':max(ds),'largest_harm_cp':min(ds),'ep_root_choices_base':sum(r['base_move'] in r['ep_moves'] for r in rows),'ep_root_choices_cand':sum(r['cand_move'] in r['ep_moves'] for r in rows)}
+              Path('ep-results/rows.json').write_text(json.dumps(rows,indent=2)+'\n')
+              Path('ep-results/summary.json').write_text(json.dumps(out,indent=2)+'\n')
+              print(json.dumps(out,indent=2))
+          finally:
+              for e in (gen,base,cand,best_oracle,grade_b,grade_c): e.quit()
+          PY
+          python3 ep-results/test_ep.py
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: p10-en-passant-${{ github.sha }}
+          path: ep-results/
+          retention-days: 30
