@@ -1,0 +1,94 @@
+name: Fundamentals Ultra Phase Q Frontier
+
+on:
+  push:
+    branches: [leviathan/fundamentals-ultra-lab]
+    paths: ['.github/workflows/fundamentals-ultra-phase-qfrontier.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  screen:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 105
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {label: control-cap4, threshold: 999}
+          - {label: phase16, threshold: 16}
+          - {label: phase18, threshold: 18}
+          - {label: phase20, threshold: 20}
+          - {label: phase24, threshold: 24}
+    steps:
+      - uses: actions/checkout@v4
+        with: {ref: leviathan/fundamentals-ultra-lab, path: lab}
+      - uses: actions/checkout@v4
+        with: {ref: leviathan/fundamentals-ultra-v0, path: cand}
+      - uses: actions/checkout@v4
+        with: {ref: leviathan/fundamentals-ultra-v0, path: base}
+      - name: Materialize phase-adaptive frontier
+        if: matrix.threshold != 999
+        env: {THRESHOLD: '${{ matrix.threshold }}'}
+        run: |
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+          t=int(os.environ['THRESHOLD']);p=Path('cand/src/search.cpp');s=p.read_text()
+          old='''                if (moveCount > 4 || (moveCount > 2 && leviathanCaptureCeiling < alpha - 48))
+                    continue;'''
+          new=f'''                // Tail-mined adaptive frontier: retain cap4 in the early game,
+                // widen to cap5 only after enough real game history exists for
+                // tactical interaction density to justify the extra candidate.
+                const int leviathanQCap = pos.game_ply() >= {t} ? 5 : 4;
+                if (moveCount > leviathanQCap
+                    || (moveCount > 2 && leviathanCaptureCeiling < alpha - 48))
+                    continue;'''
+          if s.count(old)!=1: raise SystemExit('frontier anchor')
+          p.write_text(s.replace(old,new,1))
+          PY
+          git -C cand diff --check
+          git -C cand diff -- src/search.cpp | tee mutation.patch
+      - name: Build candidate, baseline, current Stockfish
+        run: |
+          make -C cand/src net && make -C cand/src clean && make -C cand/src -j2 ARCH=x86-64-avx2 build
+          make -C base/src net && make -C base/src clean && make -C base/src -j2 ARCH=x86-64-avx2 build
+          git clone -q https://github.com/official-stockfish/Stockfish.git "$RUNNER_TEMP/sf"
+          git -C "$RUNNER_TEMP/sf" checkout -q 5062aee519a1ba262d472d8ab139851ced56573e
+          make -C "$RUNNER_TEMP/sf/src" -j2 ARCH=x86-64-avx2 build
+          python3 -m pip install --disable-pip-version-check chess==1.11.2
+      - name: Generate broad fresh phase-distributed holdout
+        run: |
+          python3 lab/tools/generate_balanced_openings.py --stockfish "$RUNNER_TEMP/sf/src/stockfish" --output p10.json --count 20 --plies 10 --seed 17320508 --max-abs-cp 120
+          python3 lab/tools/generate_balanced_openings.py --stockfish "$RUNNER_TEMP/sf/src/stockfish" --output p18.json --count 20 --plies 18 --seed 17320518 --max-abs-cp 120
+          python3 lab/tools/generate_balanced_openings.py --stockfish "$RUNNER_TEMP/sf/src/stockfish" --output p26.json --count 20 --plies 26 --seed 17320526 --max-abs-cp 120
+          python3 - <<'PY'
+          import json
+          out=[]
+          for p in ('p10.json','p18.json','p26.json'):out+=json.load(open(p))
+          open('openings.json','w').write(json.dumps(out,indent=2)+'\n')
+          PY
+          sha256sum openings.json > openings.sha256
+      - name: 120 equal-node games
+        run: |
+          mkdir nodes
+          python3 lab/tools/fundamentals_tournament.py --candidate "$PWD/cand/src/stockfish" --opponent "$PWD/base/src/stockfish" --candidate-label '${{ matrix.label }}' --opponent-label Ultra-v0 --candidate-fundamentals --opponent-fundamentals --nodes-per-move 100000 --openings-json openings.json --max-plies 200 --output-dir nodes | tee nodes/match.log
+      - name: 120 fixed-time games
+        run: |
+          mkdir time
+          python3 lab/tools/fundamentals_tournament.py --candidate "$PWD/cand/src/stockfish" --opponent "$PWD/base/src/stockfish" --candidate-label '${{ matrix.label }}' --opponent-label Ultra-v0 --candidate-fundamentals --opponent-fundamentals --move-time-ms 150 --openings-json openings.json --max-plies 200 --output-dir time | tee time/match.log
+      - name: Hardened isolated deep-oracle regret
+        run: python3 lab/tools/oracle_regret.py --candidate "$PWD/cand/src/stockfish" --baseline "$PWD/base/src/stockfish" --oracle "$RUNNER_TEMP/sf/src/stockfish" --openings-json openings.json --candidate-label '${{ matrix.label }}' --candidate-fundamentals --baseline-fundamentals --choice-nodes 120000 --oracle-nodes 800000 --output regret.json | tee regret.log
+      - uses: actions/upload-artifact@v4
+        with:
+          name: 'phase-qf-${{ matrix.label }}'
+          path: |
+            nodes
+            time
+            regret.json
+            regret.log
+            openings.sha256
+            mutation.patch
+          retention-days: 30
