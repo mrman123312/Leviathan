@@ -1,0 +1,66 @@
+name: Fundamentals Ultra Deep Oracle Regret
+
+on:
+  push:
+    branches: [leviathan/fundamentals-ultra-lab]
+    paths:
+      - '.github/workflows/fundamentals-ultra-oracle.yml'
+      - 'tools/oracle_regret.py'
+
+permissions:
+  contents: read
+
+jobs:
+  regret:
+    runs-on: ubuntu-22.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: phasefix
+            ref: leviathan/fundamentals-v2.1.1-phasefix
+          - label: qfrontier
+            ref: leviathan/fundamentals-v2.7-qfrontier
+    steps:
+      - uses: actions/checkout@v4
+        with: {ref: leviathan/fundamentals-ultra-lab, path: lab}
+      - uses: actions/checkout@v4
+        with: {ref: '${{ matrix.ref }}', path: cand}
+      - uses: actions/checkout@v4
+        with: {ref: leviathan/fundamentals-v2.1, path: base}
+      - name: Build candidate and baseline
+        run: |
+          make -C cand/src net && make -C cand/src clean && make -C cand/src -j2 ARCH=x86-64-avx2 build
+          make -C base/src net && make -C base/src clean && make -C base/src -j2 ARCH=x86-64-avx2 build
+      - name: Build pinned Stockfish oracle
+        run: |
+          git clone https://github.com/official-stockfish/Stockfish.git "$RUNNER_TEMP/sf"
+          git -C "$RUNNER_TEMP/sf" checkout 5062aee519a1ba262d472d8ab139851ced56573e
+          make -C "$RUNNER_TEMP/sf/src" -j2 ARCH=x86-64-avx2 build
+          python3 -m pip install --disable-pip-version-check chess==1.11.2
+      - name: Recreate exact balanced corpus
+        run: |
+          python3 lab/tools/generate_balanced_openings.py --stockfish "$RUNNER_TEMP/sf/src/stockfish" --output openings.json --count 50 --plies 8 --seed 8910 --max-abs-cp 80
+          got=$(sha256sum openings.json | cut -d' ' -f1)
+          test "$got" = '444b13d062e5aa38e72f6ffc5a2f3aa8daf92d4b6712a2d40646c857b51795da'
+      - name: Equal-node deep-oracle regret
+        run: |
+          python3 lab/tools/oracle_regret.py \
+            --candidate "$PWD/cand/src/stockfish" \
+            --baseline "$PWD/base/src/stockfish" \
+            --oracle "$RUNNER_TEMP/sf/src/stockfish" \
+            --openings-json openings.json \
+            --candidate-label '${{ matrix.label }}' \
+            --candidate-fundamentals --baseline-fundamentals \
+            --choice-nodes 80000 --oracle-nodes 500000 \
+            --output regret.json | tee regret.log
+          printf 'candidate=%s\nbaseline=%s\noracle=%s\n' "$(git -C cand rev-parse HEAD)" "$(git -C base rev-parse HEAD)" "$(git -C "$RUNNER_TEMP/sf" rev-parse HEAD)" > revisions.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: 'oracle-${{ matrix.label }}'
+          path: |
+            regret.json
+            regret.log
+            revisions.txt
+            openings.json
+          retention-days: 30
