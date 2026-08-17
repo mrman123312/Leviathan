@@ -62,8 +62,6 @@ static bool selftest(){
     auto round=Position::from_fen(p.fen());
     if(!round || round->fen()!=p.fen()){std::cerr<<"selftest FEN roundtrip failed\n";return false;}
 
-    // Exact C++/Python feature-contract checks from the untouched distillation holdout.
-    // Expected values here are side-to-move scores; the archived JSONL stores White POV.
     struct EvalCase { const char* fen; int expected; };
     const EvalCase evalCases[] = {
         {"r3kb1r/pp1n1ppp/2p5/3PP3/2P1b1n1/N1B5/PP1NBPPP/R3K2R b KQkq - 4 14", -140},
@@ -86,6 +84,16 @@ static bool selftest(){
         std::cerr<<"selftest search failed depth="<<report.completed_depth<<" nodes="<<report.nodes<<"\n"; return false;
     }
 
+    // A pure movetime search must not inherit the old implicit depth-five ceiling.
+    auto sparse=Position::from_fen("8/8/8/8/8/2k5/8/2K5 w - - 0 1");
+    if(!sparse){std::cerr<<"selftest timed-search FEN parse failed\n";return false;}
+    SearchEngine timed;
+    auto timedReport=timed.search(*sparse,SearchLimits{0,30},{sparse->key()});
+    if(timedReport.completed_depth<=5){
+        std::cerr<<"selftest timed search still depth-capped at "<<timedReport.completed_depth<<"\n";
+        return false;
+    }
+
     if(null_tablebase().probe_wdl(Position::startpos()).has_value()){
         std::cerr<<"selftest null tablebase unexpectedly returned a result\n"; return false;
     }
@@ -103,7 +111,7 @@ int main(int argc,char** argv){
     while(std::getline(std::cin,line)){
         std::istringstream in(line); std::string cmd; in>>cmd;
         if(cmd=="uci"){
-            std::cout<<"id name Leviathan Rewrite v2\n";
+            std::cout<<"id name Leviathan Rewrite v3\n";
             std::cout<<"id author Leviathan Project\n";
             std::cout<<"option name SyzygyPath type string default <empty>\n";
             std::cout<<"uciok\n"<<std::flush;
@@ -140,8 +148,14 @@ int main(int argc,char** argv){
             }
             if(ok) pos=next; else std::cout<<"info string invalid position command\n";
         } else if(cmd=="go"){
-            SearchLimits lim; lim.max_depth=5;
-            std::string t; while(in>>t){ if(t=="depth") in>>lim.max_depth; else if(t=="movetime") in>>lim.movetime_ms; }
+            SearchLimits lim;
+            bool sawDepth=false, sawMovetime=false;
+            std::string t;
+            while(in>>t){
+                if(t=="depth"){ in>>lim.max_depth; sawDepth=true; }
+                else if(t=="movetime"){ in>>lim.movetime_ms; sawMovetime=true; }
+            }
+            if(!sawDepth && !sawMovetime) lim.max_depth=5;
             auto r=search.search(pos,lim,game_history);
             std::cout<<"info depth "<<r.completed_depth<<" score cp "<<r.score<<" nodes "<<r.nodes<<" pv";
             for(auto m:r.pv) std::cout<<' '<<move_to_uci(m);
