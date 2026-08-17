@@ -77,7 +77,7 @@ jobs:
           curl -L --fail --retry 3 -o "$RUNNER_TEMP/net.pb.gz" https://storage.lczero.org/files/networks-contrib/t1-256x10-distilled-swa-2432500.pb.gz
           cat > "$RUNNER_TEMP/lc0-policy" <<EOF
           #!/bin/sh
-          exec "$RUNNER_TEMP/lc0/build/release/lc0" --weights="$RUNNER_TEMP/net.pb.gz" --backend=blas --search-algorithm=policyhead
+          exec "$RUNNER_TEMP/lc0/build/release/lc0" policyhead --weights="$RUNNER_TEMP/net.pb.gz" --backend=blas
           EOF
           chmod +x "$RUNNER_TEMP/lc0-policy"
           printf 'uci\nquit\n' | "$RUNNER_TEMP/lc0-policy" > lc0-uci.txt
