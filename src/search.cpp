@@ -1839,10 +1839,16 @@ Value Search::Worker::qsearch(Position& pos, Stack* ss, Value alpha, Value beta)
             if (!givesCheck && move.to_sq() != prevSq && !is_loss(futilityBase)
                 && move.type_of() != PROMOTION)
             {
-                if (moveCount > 2)
+                const Value leviathanCaptureCeiling =
+                  futilityBase + PieceValue[pos.piece_on(move.to_sq())];
+
+                // Leviathan Q-frontier: keep Stockfish's two-capture fast path,
+                // but inspect at most two extra captures when their crude material
+                // ceiling is still close enough to alpha to change the decision.
+                if (moveCount > 4 || (moveCount > 2 && leviathanCaptureCeiling < alpha - 48))
                     continue;
 
-                Value futilityValue = futilityBase + PieceValue[pos.piece_on(move.to_sq())];
+                Value futilityValue = leviathanCaptureCeiling;
 
                 // If static eval + value of piece we are going to capture is
                 // much lower than alpha, we can prune this move.
