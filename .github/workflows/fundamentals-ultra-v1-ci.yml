@@ -1,0 +1,29 @@
+name: Fundamentals Ultra v1 CI
+on:
+  push:
+    branches: [leviathan/fundamentals-ultra-v1]
+  pull_request:
+    paths: ['src/**','research/**','.github/workflows/fundamentals-ultra-v1-ci.yml']
+permissions: {contents: read}
+jobs:
+  integrity:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build AVX2 Fundamentals Ultra
+        run: |
+          make -C src net
+          make -C src clean
+          make -C src -j2 ARCH=x86-64-avx2 build
+      - name: Frozen Fundamentals smoke / bench
+        shell: bash
+        run: |
+          printf 'uci\nsetoption name Threads value 1\nsetoption name Hash value 64\nsetoption name Leviathan Fundamentals value true\nsetoption name Leviathan Fundamentals Authority value 1\nsetoption name Leviathan Quiet Overdrive value 0\nisready\nquit\n' | src/stockfish | tee uci.txt
+          grep -q 'uciok' uci.txt && grep -q 'readyok' uci.txt
+          src/stockfish bench 16 1 8 default depth > bench.txt 2>&1
+          tail -n 10 bench.txt
+      - name: Dual-view data provenance/fusion tests
+        run: |
+          python3 research/tools/audit_training_data.py
+          python3 research/tools/test_training_tools.py
+          python3 research/tools/fetch_training_data.py --list
