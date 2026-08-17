@@ -1,0 +1,175 @@
+name: Fundamentals Ultra ProbCut Order Holdout
+
+on:
+  push:
+    branches: [leviathan/fundamentals-ultra-lab]
+    paths: ['.github/workflows/fundamentals-ultra-probcut-order-holdout.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  holdout:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@v4
+        with: {ref: '${{ github.sha }}', path: lab}
+      - uses: actions/checkout@v4
+        with: {ref: leviathan/fundamentals-ultra-p01-qfrontier, path: cand}
+      - uses: actions/checkout@v4
+        with: {ref: leviathan/fundamentals-ultra-p01-qfrontier, path: base}
+
+      - name: Materialize order-only ProbCut evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import re
+          from pathlib import Path
+          p=Path('cand/src/search.cpp'); s=p.read_text()
+          pairs=[
+            ('Move  move, excludedMove, bestMove;', 'Move  move, excludedMove, bestMove, probCutNearMiss;'),
+            ('Value bestValue, value, eval, maxValue, probCutBeta;', 'Value bestValue, value, eval, maxValue, probCutBeta, probCutNearValue;'),
+            ('bestMove       = Move::none();\n    priorReduction = (ss - 1)->reduction;', 'bestMove         = Move::none();\n    probCutNearMiss  = Move::none();\n    probCutNearValue = -VALUE_INFINITE;\n    priorReduction   = (ss - 1)->reduction;'),
+            ('MovePicker mp(pos, ttData.move, depth, &mainHistory, &lowPlyHistory, &captureHistory, contHist,\n                  &sharedHistory, ss->ply);', 'const Move leviathanPreferredMove = ttData.move ? ttData.move : probCutNearMiss;\n    MovePicker mp(pos, leviathanPreferredMove, depth, &mainHistory, &lowPlyHistory, &captureHistory,\n                  contHist, &sharedHistory, ss->ply);')]
+          for a,b in pairs:
+              if s.count(a)!=1: raise SystemExit(f'anchor count={s.count(a)} for {a[:60]!r}')
+              s=s.replace(a,b,1)
+          pattern=r'(?ms)^(\s*)if \(value >= probCutBeta\)\n\1\{\n.*?^\1\}'
+          m=re.search(pattern,s)
+          if not m: raise SystemExit('ProbCut success-block anchor')
+          I=m.group(1)
+          extra=(f"\n{I}else if (value >= beta && !is_decisive(value) && value > probCutNearValue)\n"
+                 f"{I}{{\n{I}    probCutNearValue = value;\n{I}    probCutNearMiss  = move;\n{I}}}")
+          p.write_text(s[:m.end()]+extra+s[m.end():])
+          PY
+          git -C cand diff --check
+          git -C cand diff -- src/search.cpp > order-only.patch
+          test -s order-only.patch
+
+      - name: Build P01, order-only, and pinned Stockfish oracle
+        shell: bash
+        run: |
+          set -euo pipefail
+          make -C base/src net
+          make -C base/src clean
+          make -C base/src -j2 ARCH=x86-64-avx2 build
+          cp base/src/stockfish base/src/control_a
+          cp base/src/stockfish base/src/control_b
+          cp base/src/nn-ab28990d4ea3.nnue cand/src/
+          make -C cand/src clean
+          make -C cand/src -j2 ARCH=x86-64-avx2 build
+          git clone -q https://github.com/official-stockfish/Stockfish.git "$RUNNER_TEMP/sf"
+          git -C "$RUNNER_TEMP/sf" checkout -q 5062aee519a1ba262d472d8ab139851ced56573e
+          make -C "$RUNNER_TEMP/sf/src" -j2 ARCH=x86-64-avx2 build
+          python3 -m pip install --disable-pip-version-check chess==1.11.2
+          cat > active.json <<'EOF'
+          {"Threads":1,"Hash":64,"Leviathan Fundamentals":true,"Leviathan Fundamentals Authority":1,"Leviathan Quiet Overdrive":0,"Leviathan Risk":false,"Leviathan Policy":false,"Leviathan MetaSearch":false,"Leviathan Specialist":false,"Leviathan Atlas":false,"Leviathan Search DSL":false}
+          EOF
+
+      - name: Generate 24 fresh mixed-horizon positions
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 lab/tools/generate_balanced_openings.py --stockfish "$RUNNER_TEMP/sf/src/stockfish" --output h14.json --count 12 --plies 14 --seed 314159265 --max-abs-cp 110
+          python3 lab/tools/generate_balanced_openings.py --stockfish "$RUNNER_TEMP/sf/src/stockfish" --output h24.json --count 12 --plies 24 --seed 271828182 --max-abs-cp 110
+          python3 - <<'PY'
+          import json
+          rows=[]
+          for h,p in ((14,'h14.json'),(24,'h24.json')):
+              for x in json.load(open(p)):
+                  rows.append({'horizon':h,'fen':x['final_fen']})
+          assert len(rows)==24,len(rows)
+          json.dump(rows,open('holdout.json','w'),indent=2)
+          PY
+          sha256sum holdout.json > holdout.sha256
+
+      - name: Fresh isolated-oracle holdout
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY' | tee oracle.log
+          import chess, chess.engine, json, os, statistics
+          rows=json.load(open('holdout.json'))
+          opts={'Threads':1,'Hash':64,'Leviathan Fundamentals':True,'Leviathan Fundamentals Authority':1,'Leviathan Quiet Overdrive':0,'Leviathan Risk':False,'Leviathan Policy':False,'Leviathan MetaSearch':False,'Leviathan Specialist':False,'Leviathan Atlas':False,'Leviathan Search DSL':False}
+          B=chess.engine.SimpleEngine.popen_uci('base/src/stockfish');B.configure(opts)
+          C=chess.engine.SimpleEngine.popen_uci('cand/src/stockfish');C.configure(opts)
+          O=chess.engine.SimpleEngine.popen_uci(os.environ['RUNNER_TEMP']+'/sf/src/stockfish');O.configure({'Threads':1,'Hash':64})
+          out=[]
+          try:
+              for i,x in enumerate(rows,1):
+                  b=chess.Board(x['fen']); token=(i,x['fen'])
+                  bm=B.analyse(b,chess.engine.Limit(nodes=100000),game=('b',token))['pv'][0]
+                  cm=C.analyse(b,chess.engine.Limit(nodes=100000),game=('c',token))['pv'][0]
+                  oi=O.analyse(b,chess.engine.Limit(nodes=600000),game=('o',token)); om=oi['pv'][0]
+                  oscore=int(oi['score'].pov(b.turn).score(mate_score=100000) or 0)
+                  scores={om:oscore}
+                  for label,m in [('b',bm),('c',cm)]:
+                      if m not in scores:
+                          gi=O.analyse(b,chess.engine.Limit(nodes=600000),root_moves=[m],game=('grade',label,token,m.uci()))
+                          scores[m]=int(gi['score'].pov(b.turn).score(mate_score=100000) or 0)
+                  br=max(0,oscore-scores[bm]); cr=max(0,oscore-scores[cm])
+                  r={'position':i,'horizon':x['horizon'],'fen':x['fen'],'baseline_move':bm.uci(),'candidate_move':cm.uci(),'oracle_move':om.uci(),'baseline_regret_cp':br,'candidate_regret_cp':cr,'disagree':bm!=cm}
+                  out.append(r);print(json.dumps(r),flush=True)
+          finally:
+              B.quit();C.quit();O.quit()
+          d=[r for r in out if r['disagree']]
+          rescue=sum(max(0,r['baseline_regret_cp']-r['candidate_regret_cp']) for r in d)
+          harm=sum(max(0,r['candidate_regret_cp']-r['baseline_regret_cp']) for r in d)
+          bmean=statistics.mean(r['baseline_regret_cp'] for r in out);cmean=statistics.mean(r['candidate_regret_cp'] for r in out)
+          validity=len(d)>=3
+          oracle_pass=bool(validity and cmean<=bmean and rescue>=harm+5 and rescue>=1.25*max(1,harm))
+          result={'schema':'LV_PROBCUT_ORDER_HOLDOUT_V1','positions':len(out),'choice_nodes':100000,'oracle_nodes_per_search':600000,'disagreements':len(d),'baseline_mean_regret_cp':bmean,'candidate_mean_regret_cp':cmean,'rescue_cp':rescue,'harm_cp':harm,'rescue_to_harm':rescue/max(1,harm),'validity_min3_disagreements':validity,'oracle_pass':oracle_pass,'rule':'prospective generation-2 gate: >=3 disagreements, no higher mean regret, rescue exceeds harm by >=5cp and >=1.25x','rows':out}
+          json.dump(result,open('oracle.json','w'),indent=2);print(json.dumps(result,indent=2))
+          PY
+          test -s oracle.json
+
+      - name: Calibrated order-only throughput
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 lab/tools/divergent_pair_throughput.py \
+            --control-a base/src/control_a \
+            --control-b base/src/control_b \
+            --candidate cand/src/stockfish \
+            --options active.json \
+            --rounds 12 \
+            --command 'bench 16 1 50000 default nodes' \
+            --output throughput.json | tee throughput.log
+          test -s throughput.json
+
+      - name: Combined decision
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json
+          o=json.load(open('oracle.json'));t=json.load(open('throughput.json'))
+          c=t['results']['candidate']; cal=t['results']['control_b']
+          throughput_ok=cal['status']=='CALIBRATION_PASS' and c['median_throughput_ratio']>=0.992
+          if o['oracle_pass'] and throughput_ok:
+              decision='SURVIVES_TO_FINALIST_SCREEN'
+          elif not o['validity_min3_disagreements']:
+              decision='INSUFFICIENT_PROSPECTIVE_DISAGREEMENTS'
+          else:
+              decision='REJECT_ORDER_ONLY'
+          out={'schema':'LV_PROBCUT_ORDER_COMBINED_V1','oracle_pass':o['oracle_pass'],'throughput_median_ratio':c['median_throughput_ratio'],'throughput_ci':c['bootstrap_median_95pct_ci'],'throughput_ok_ge_0p992':throughput_ok,'decision':decision,'rule':'zero-game gate: prospective oracle must pass and median per-node throughput must retain >=99.2% of P01'}
+          json.dump(out,open('decision.json','w'),indent=2);print(json.dumps(out,indent=2))
+          PY
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ultra-probcut-order-holdout
+          path: |
+            order-only.patch
+            holdout.json
+            holdout.sha256
+            oracle.json
+            oracle.log
+            throughput.json
+            throughput.log
+            decision.json
+            active.json
+          retention-days: 30
