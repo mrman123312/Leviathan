@@ -1,0 +1,25 @@
+{
+  "schema": "LEVIATHAN_ADVERSARIAL_WITNESS_V1",
+  "family": "qsearch-frontier-evidence-loss",
+  "created": "2026-08-17",
+  "baseline": "leviathan/fundamentals-ultra-v0@0625df7581109e4db15a936b4b0237d9476e2074",
+  "oracle": "official-stockfish/Stockfish@5062aee519a1ba262d472d8ab139851ced56573e",
+  "status": "PROVISIONAL_WITNESS_REQUIRES_HARDENED_ORACLE_REVALIDATION",
+  "witnesses": [
+    {
+      "id": "QF-T01",
+      "fen": "r1bqk1nr/ppp1bppp/2n5/3p4/2P5/3QP3/PP3PPP/RNB1KBNR w KQkq - 0 6",
+      "origin_moves": ["e2e3", "e7e5", "d2d4", "e5d4", "d1d4", "b8c6", "d4d3", "f8e7", "c2c4", "d7d5"],
+      "baseline_move": "b1c3",
+      "candidate_move": "c4d5",
+      "candidate_mechanism": "qsearch capture frontier cap 4 -> 5",
+      "old_oracle": {
+        "baseline_score_cp": -111,
+        "candidate_score_cp": -28,
+        "delta_candidate_minus_baseline_cp": 83
+      },
+      "interpretation": "A late qsearch capture or its bound evidence may be discarded before existing futility/SEE logic can influence the returned bound.",
+      "promotion_rule": "Do not treat this single witness as general strength. Revalidate with isolated root-restricted oracle graders and fresh tail-mining before mechanism promotion."
+    }
+  ]
+}
