@@ -1,0 +1,108 @@
+name: Fundamentals Ultra Stars P01 Kernel
+
+on:
+  push:
+    branches: [leviathan/fundamentals-ultra-lab]
+    paths: ['.github/workflows/fundamentals-ultra-stars-p01-kernel.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  p01-kernel:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with: {ref: leviathan/fundamentals-ultra-lab, path: lab}
+      - uses: actions/checkout@v4
+        with: {ref: leviathan/fundamentals-ultra-phasefix-qfrontier, path: cand, fetch-depth: 0}
+      - uses: actions/checkout@v4
+        with: {ref: leviathan/fundamentals-ultra-phasefix-qfrontier, path: base}
+
+      - name: Transplant the isolated P0+P1 source delta
+        working-directory: cand
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git cherry-pick ae6f326512bd418c30c7bf9919f9546866619a57
+          git diff HEAD^ --check
+          git show --stat --oneline HEAD
+
+      - name: Build candidate, kernel control, and pinned Stockfish
+        run: |
+          make -C cand/src net && make -C cand/src clean && make -C cand/src -j2 ARCH=x86-64-avx2 build
+          make -C base/src net && make -C base/src clean && make -C base/src -j2 ARCH=x86-64-avx2 build
+          git clone -q https://github.com/official-stockfish/Stockfish.git "$RUNNER_TEMP/sf"
+          git -C "$RUNNER_TEMP/sf" checkout -q 5062aee519a1ba262d472d8ab139851ced56573e
+          make -C "$RUNNER_TEMP/sf/src" -j2 ARCH=x86-64-avx2 build
+          python3 -m pip install --disable-pip-version-check chess==1.11.2
+
+      - name: Exact normalized behavior gates
+        run: |
+          python3 - <<'PY' | tee lossless-gate.json
+          import subprocess,re,hashlib,json
+          A='base/src/stockfish'; C='cand/src/stockfish'
+          opts='setoption name Threads value 1\nsetoption name Hash value 64\nsetoption name Leviathan Fundamentals value true\nsetoption name Leviathan Fundamentals Authority value 1\nsetoption name Leviathan Quiet Overdrive value 0\n'
+          commands={'default':'bench','depth11':'bench 16 1 11 default depth','nodes50k':'bench 16 1 50000 default nodes'}
+          def run(p,cmd):
+            x=subprocess.run([p],input=opts+cmd+'\nquit\n',text=True,capture_output=True,check=True);o=x.stdout+x.stderr;n=[]
+            for raw in o.splitlines():
+              line=raw.strip()
+              if line.startswith('Position:') or line.startswith('bestmove '): n.append(line)
+              elif line.startswith('info ') and not line.startswith('info string '):
+                line=re.sub(r'\s+nps\s+\d+','',line);line=re.sub(r'\s+time\s+\d+','',line);n.append(line)
+            return {'nodes':int(re.findall(r'Nodes searched\s*:\s*(\d+)',o)[-1]),'sig':hashlib.sha256('\n'.join(n).encode()).hexdigest(),'lines':len(n)}
+          out={k:{'base':run(A,v),'candidate':run(C,v)} for k,v in commands.items()}
+          for k,v in out.items():
+            if v['base']!=v['candidate']: raise SystemExit(f'LOSSLESS GATE FAILED {k}: {v}')
+          print(json.dumps(out,indent=2))
+          PY
+
+      - name: Generate fresh balanced 50-opening corpus
+        run: |
+          python3 lab/tools/generate_balanced_openings.py --stockfish "$RUNNER_TEMP/sf/src/stockfish" --output openings.json --count 50 --plies 10 --seed 17082027 --max-abs-cp 90
+
+      - name: 100-game equal-node identity test
+        run: |
+          mkdir -p nodes
+          python3 lab/tools/fundamentals_tournament.py --candidate "$PWD/cand/src/stockfish" --opponent "$PWD/base/src/stockfish" --candidate-label ultra-p01-kernel --opponent-label ultra-kernel --candidate-fundamentals --opponent-fundamentals --nodes-per-move 80000 --openings-json openings.json --max-plies 180 --output-dir nodes | tee nodes/match.log
+
+      - name: 100-game fixed-time strength test
+        run: |
+          mkdir -p time
+          python3 lab/tools/fundamentals_tournament.py --candidate "$PWD/cand/src/stockfish" --opponent "$PWD/base/src/stockfish" --candidate-label ultra-p01-kernel --opponent-label ultra-kernel --candidate-fundamentals --opponent-fundamentals --move-time-ms 100 --openings-json openings.json --max-plies 180 --output-dir time | tee time/match.log
+
+      - name: 100-game Stockfish confirmation
+        run: |
+          mkdir -p stockfish
+          python3 lab/tools/fundamentals_tournament.py --candidate "$PWD/cand/src/stockfish" --opponent "$RUNNER_TEMP/sf/src/stockfish" --candidate-label ultra-p01-kernel --opponent-label Stockfish-5062aee5 --candidate-fundamentals --move-time-ms 100 --openings-json openings.json --max-plies 180 --output-dir stockfish | tee stockfish/match.log
+
+      - name: Equal-node deep-oracle identity test
+        run: |
+          python3 lab/tools/oracle_regret.py --candidate "$PWD/cand/src/stockfish" --baseline "$PWD/base/src/stockfish" --oracle "$RUNNER_TEMP/sf/src/stockfish" --openings-json openings.json --candidate-label ultra-p01-kernel --candidate-fundamentals --baseline-fundamentals --choice-nodes 80000 --oracle-nodes 500000 --output regret.json | tee regret.log
+
+      - name: Publish materialized candidate
+        working-directory: cand
+        run: |
+          git checkout -B leviathan/fundamentals-ultra-p01-qfrontier
+          git push --force origin HEAD:leviathan/fundamentals-ultra-p01-qfrontier
+
+      - name: Provenance
+        run: |
+          printf 'candidate=%s\nbase=%s\nstockfish=%s\np01_source=%s\n' "$(git -C cand rev-parse HEAD)" "$(git -C base rev-parse HEAD)" "$(git -C "$RUNNER_TEMP/sf" rev-parse HEAD)" 'ae6f326512bd418c30c7bf9919f9546866619a57' > revisions.txt
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: fundamentals-ultra-p01-qfrontier
+          path: |
+            lossless-gate.json
+            nodes
+            time
+            stockfish
+            regret.json
+            regret.log
+            openings.json
+            revisions.txt
+          retention-days: 30
