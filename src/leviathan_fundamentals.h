@@ -62,12 +62,12 @@ inline void set_rule50_pressure(bool v) { state().rule50Pressure = v; }
 
 inline bool ready() { return state().enabled && state().authority > 0; }
 
-inline int non_pawn_count(const Position& pos) {
-    return pos.count<KNIGHT>() + pos.count<BISHOP>() + pos.count<ROOK>() + pos.count<QUEEN>();
-}
-
 inline bool low_material(const Position& pos) {
-    return pos.count<ALL_PIECES>() <= 10 || non_pawn_count(pos) <= 3;
+    // Legal search positions always contain both kings. Count all occupied
+    // squares once, then pawns once, instead of popcounting four non-pawn piece
+    // types separately. This is exactly equivalent to non-pawn-piece count <= 3.
+    const int pieces = pos.count<ALL_PIECES>();
+    return pieces <= 10 || pieces - pos.count<PAWN>() <= 5;
 }
 
 inline bool zugzwang_risk(const Position& pos) {
@@ -76,7 +76,8 @@ inline bool zugzwang_risk(const Position& pos) {
 
     // Conservative detector: sparse positions with very little non-pawn
     // mobility are where null-move assumptions are structurally least safe.
-    return pos.count<ALL_PIECES>() <= 9 && non_pawn_count(pos) <= 2;
+    const int pieces = pos.count<ALL_PIECES>();
+    return pieces <= 9 && pieces - pos.count<PAWN>() <= 4;
 }
 
 inline Piece moving_piece(const Position& pos, Move move) {
@@ -175,7 +176,7 @@ inline int lmr_adjustment(const Position& pos,
     // v2.1: blanket endgame buyback made every sparse branch expensive. Keep
     // the extra protection concentrated on early candidates and forcing moves.
     // Check the cheap move-class gate first: late quiet moves no longer pay for
-    // several piece-count/popcount operations when they cannot receive buyback.
+    // material counts when they cannot receive buyback.
     if ((moveCount <= 4 || capture || givesCheck) && low_material(pos))
         delta -= s.endgameBuyback;
 
