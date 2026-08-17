@@ -1,0 +1,89 @@
+name: P03 P01 Active Fast Path
+
+on:
+  push:
+    branches: [agent/p03-p01-active-fastpath]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  lossless-speed:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 70
+    steps:
+      - name: Checkout candidate
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: '${{ github.sha }}'
+          path: cand
+          fetch-depth: 1
+
+      - name: Checkout exact P01 twice for calibrated A/A control
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: 3404fa2ea9b4fe75236e2584be9da3416e646ec2
+          path: base
+          fetch-depth: 1
+
+      - name: Checkout hardened benchmark harness
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: leviathan/fundamentals-ultra-lab
+          path: harness
+          fetch-depth: 1
+
+      - name: Build P01 controls and P03 candidate
+        run: |
+          git -C cand diff 3404fa2ea9b4fe75236e2584be9da3416e646ec2 --check
+          make -C base/src net
+          make -C base/src clean
+          make -C base/src -j2 ARCH=x86-64-avx2 build
+          cp base/src/stockfish base/src/control_a
+          cp base/src/stockfish base/src/control_b
+          cp base/src/nn-ab28990d4ea3.nnue cand/src/
+          make -C cand/src clean
+          make -C cand/src -j2 ARCH=x86-64-avx2 build
+          cat > active.json <<'EOF'
+          {"Threads":1,"Hash":64,"Leviathan Fundamentals":true,"Leviathan Fundamentals Authority":1,"Leviathan Quiet Overdrive":0,"Leviathan Risk":false,"Leviathan Policy":false,"Leviathan MetaSearch":false,"Leviathan Specialist":false,"Leviathan Atlas":false,"Leviathan Search DSL":false}
+          EOF
+
+      - name: Exact behavior and 41-round calibrated speed replication
+        run: |
+          python3 harness/tools/lossless_pair_benchmark.py \
+            --control-a base/src/control_a \
+            --control-b base/src/control_b \
+            --candidate cand/src/stockfish \
+            --options active.json \
+            --rounds 41 \
+            --output p03-active-fastpath.json | tee p03-active-fastpath.log
+
+      - name: Promotion gate
+        run: |
+          python3 - <<'PY'
+          import json,sys
+          d=json.load(open('p03-active-fastpath.json'))
+          sig=d['signatures']; r=d['results'];
+          for case in ('default','depth11','nodes50k'):
+              a=sig['control_a'][case]; c=sig['candidate'][case]
+              if a['nodes'] != c['nodes'] or a['behavior_sha256'] != c['behavior_sha256']:
+                  raise SystemExit(f'BEHAVIOR MISMATCH: {case}')
+          aa=r['control_b']; c=r['candidate']
+          print('A/A median',aa['median_speedup'],'CI',aa['bootstrap_median_95pct_ci'])
+          print('candidate median',c['median_speedup'],'CI',c['bootstrap_median_95pct_ci'])
+          print('candidate geo',c['geometric_mean_speedup'],'faster',c['faster_rounds'],'/',c['rounds'])
+          # Require a positive lower confidence bound and at least 0.5% median speedup.
+          if c['bootstrap_median_95pct_ci'][0] <= 1.0 or c['median_speedup'] < 1.005:
+              raise SystemExit('P03_NOT_PROMOTABLE')
+          print('P03_PROMOTION_GATE_PASS')
+          PY
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: p03-p01-active-fastpath-${{ github.sha }}
+          path: |
+            p03-active-fastpath.json
+            p03-active-fastpath.log
+          retention-days: 30
