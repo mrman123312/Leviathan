@@ -1,0 +1,103 @@
+name: Fundamentals Ultra NNUE Phase Residual Audit
+
+on:
+  push:
+    branches: [leviathan/fundamentals-ultra-lab]
+    paths: ['.github/workflows/fundamentals-ultra-nnue-phase-residual-audit.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+        with: {ref: '${{ github.sha }}', path: lab}
+      - name: Build pinned current Stockfish and install oracle tools
+        run: |
+          git clone -q https://github.com/official-stockfish/Stockfish.git "$RUNNER_TEMP/sf"
+          git -C "$RUNNER_TEMP/sf" checkout -q 5062aee519a1ba262d472d8ab139851ced56573e
+          make -C "$RUNNER_TEMP/sf/src" -j2 ARCH=x86-64-avx2 build
+          python3 -m pip install --disable-pip-version-check chess==1.11.2
+      - name: Generate predeclared middlegame and endgame panels
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 lab/tools/generate_balanced_openings.py --stockfish "$RUNNER_TEMP/sf/src/stockfish" --output middle.json --count 80 --plies 20 --seed 141421356 --max-abs-cp 180
+          python3 - <<'PY' | tee endgame-generation.log
+          import chess,chess.engine,json,random,os
+          rng=random.Random(1732050807); path=os.environ['RUNNER_TEMP']+'/sf/src/stockfish'
+          e=chess.engine.SimpleEngine.popen_uci(path);e.configure({'Threads':1,'Hash':64})
+          out=[]; attempts=0
+          try:
+            while len(out)<80 and attempts<600:
+              attempts+=1;b=chess.Board()
+              # Diversify early play, then let low-budget Stockfish steer toward legal realistic games.
+              for ply in range(100):
+                if b.is_game_over():break
+                if ply<8:
+                  moves=list(b.legal_moves);m=rng.choice(moves)
+                else:
+                  info=e.analyse(b,chess.engine.Limit(nodes=2500),multipv=min(3,b.legal_moves.count()),game=('g',attempts,ply))
+                  if isinstance(info,dict): info=[info]
+                  choice=info[rng.randrange(min(len(info),2))];m=choice['pv'][0]
+                b.push(m)
+                if ply>=24 and len(b.piece_map())<=12 and not b.is_game_over():
+                  z=e.analyse(b,chess.engine.Limit(nodes=15000),game=('f',attempts,ply));score=int(z['score'].pov(b.turn).score(mate_score=100000) or 0)
+                  if abs(score)<=300:
+                    out.append({'final_fen':b.fen(),'source_attempt':attempts,'source_ply':ply+1,'screen_cp':score,'piece_count':len(b.piece_map())});break
+            if len(out)<80: raise SystemExit(f'only generated {len(out)} endgames after {attempts} attempts')
+          finally:e.quit()
+          json.dump(out,open('endgame.json','w'),indent=2);print(f'endgames={len(out)} attempts={attempts}')
+          PY
+          sha256sum middle.json endgame.json > panels.sha256
+      - name: Measure static NNUE residual against isolated deep search
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY' | tee residual.log
+          import chess,chess.engine,json,subprocess,re,statistics,os
+          sf=os.environ['RUNNER_TEMP']+'/sf/src/stockfish'
+          E=chess.engine.SimpleEngine.popen_uci(sf);E.configure({'Threads':1,'Hash':64})
+          pat=re.compile(r'Final evaluation\s+([+-]?[0-9.]+)')
+          def static_eval(fen):
+              p=subprocess.run([sf],input=f'uci\nisready\nposition fen {fen}\neval\nquit\n',text=True,capture_output=True,check=True)
+              m=pat.search(p.stdout)
+              if not m: raise RuntimeError('no Final evaluation in Stockfish eval output')
+              # Stockfish eval command prints from side-to-move perspective in pawns.
+              return round(float(m.group(1))*100)
+          groups={}
+          try:
+            for label,path in [('middle','middle.json'),('endgame','endgame.json')]:
+              rows=[]
+              for i,x in enumerate(json.load(open(path)),1):
+                b=chess.Board(x['final_fen']); se=static_eval(b.fen())
+                z=E.analyse(b,chess.engine.Limit(nodes=800000),game=(label,i,b.fen())); ds=int(z['score'].pov(b.turn).score(mate_score=100000) or 0)
+                err=abs(ds-se);rows.append({'fen':b.fen(),'static_cp':se,'deep_cp':ds,'abs_residual_cp':err,'piece_count':len(b.piece_map())})
+                print(f'{label} {i:02d}/80 static={se:+d} deep={ds:+d} abs={err}',flush=True)
+              groups[label]=rows
+          finally:E.quit()
+          out={'schema':'LV_NNUE_PHASE_RESIDUAL_V1','groups':{}}
+          for k,R in groups.items():
+              vals=[r['abs_residual_cp'] for r in R]
+              out['groups'][k]={'n':len(R),'mae_cp':statistics.fmean(vals),'median_abs_cp':statistics.median(vals),'p90_abs_cp':sorted(vals)[int(.9*len(vals))-1],'max_abs_cp':max(vals),'ge50':sum(v>=50 for v in vals),'rows':R}
+          em=out['groups']['endgame']['mae_cp'];mm=out['groups']['middle']['mae_cp']
+          out['endgame_to_middle_mae_ratio']=em/mm if mm else None
+          out['targeted_endgame_data_priority']=bool(em>=1.25*mm and out['groups']['endgame']['ge50']>=out['groups']['middle']['ge50'])
+          json.dump(out,open('residual.json','w'),indent=2);print(json.dumps({k:v for k,v in out.items() if k!='groups'},indent=2));print({k:{kk:vv for kk,vv in v.items() if kk!='rows'} for k,v in out['groups'].items()})
+          PY
+          test -s residual.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ultra-nnue-phase-residual-audit
+          path: |
+            residual.json
+            residual.log
+            middle.json
+            endgame.json
+            endgame-generation.log
+            panels.sha256
+          retention-days: 30
