@@ -41,7 +41,7 @@ static char piece_fen(Piece p) {
     return chars[static_cast<int>(p)];
 }
 
-static void add_promotions(std::vector<Move>& out,int from,int to,uint8_t flags){
+static void add_promotions(MoveList& out,int from,int to,uint8_t flags){
     for(PieceType pt: {PieceType::Queen,PieceType::Rook,PieceType::Bishop,PieceType::Knight})
         out.push_back(Move{static_cast<uint8_t>(from),static_cast<uint8_t>(to),static_cast<uint8_t>(pt),flags});
 }
@@ -118,8 +118,6 @@ int Position::canonical_ep_square() const {
         if(std::abs((from & 7) - targetFile) != 1) continue;
         if(board_[from] != ownPawn) continue;
 
-        // FIDE repetition identity includes an en-passant right only when the
-        // capture is actually legal, not merely present as raw FEN metadata.
         Position q = *this;
         q.board_[from] = Piece::Empty;
         q.board_[capturedSq] = Piece::Empty;
@@ -252,8 +250,8 @@ bool Position::in_check(Color c) const {
     return k>=0 && attacked(k,opposite(c));
 }
 
-std::vector<Move> Position::pseudo_legal_moves(bool captures_only) const {
-    std::vector<Move> out; out.reserve(64);
+MoveList Position::pseudo_legal_moves(bool captures_only) const {
+    MoveList out;
     Color us=side_;
     for(int sq=0;sq<64;++sq){
         Piece pc=board_[sq]; if(pc==Piece::Empty||color_of(pc)!=us) continue;
