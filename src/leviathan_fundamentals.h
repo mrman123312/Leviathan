@@ -153,35 +153,44 @@ inline int lmr_adjustment(const Position& pos,
                           bool pvNode,
                           bool capture,
                           bool givesCheck) {
-    if (!ready())
+    const auto& s = state();
+    if (!s.enabled || s.authority <= 0)
         return 0;
+
+    // This function sits directly in the LMR hot path. Classify the move once
+    // and make cheap gates fire before material-popcount work. The resulting
+    // adjustment is intentionally identical to the previous implementation.
+    const bool isRecapture = recapture(move, prevSq, capture);
+    const bool isPasser = move.type_of() == PROMOTION || advanced_pawn_move(pos, move);
 
     int delta = 0;
 
     if (givesCheck)
-        delta -= state().forcingBuyback;
-    if (recapture(move, prevSq, capture))
-        delta -= state().recaptureBuyback;
-    if (move.type_of() == PROMOTION || advanced_pawn_move(pos, move))
-        delta -= state().passerBuyback;
+        delta -= s.forcingBuyback;
+    if (isRecapture)
+        delta -= s.recaptureBuyback;
+    if (isPasser)
+        delta -= s.passerBuyback;
 
     // v2.1: blanket endgame buyback made every sparse branch expensive. Keep
     // the extra protection concentrated on early candidates and forcing moves.
-    if (low_material(pos) && (moveCount <= 4 || capture || givesCheck))
-        delta -= state().endgameBuyback;
+    // Check the cheap move-class gate first: late quiet moves no longer pay for
+    // several piece-count/popcount operations when they cannot receive buyback.
+    if ((moveCount <= 4 || capture || givesCheck) && low_material(pos))
+        delta -= s.endgameBuyback;
 
     // Authority 2 is the funding mechanism. v2.1 deliberately avoids
     // overdriving pawn moves: even a quiet pawn move irreversibly changes the
     // position and is a poor place to buy generic speed. We also start one move
     // later and one ply deeper than v2 to concentrate the extra reduction on
     // genuinely late, stable-looking branches.
-    if (state().authority >= 2 && depth >= 5 && moveCount >= 6 && !pvNode && !capture
-        && !givesCheck && move.type_of() != PROMOTION && !advanced_pawn_move(pos, move)
-        && !zeroing_quiet(pos, move, capture) && pos.rule50_count() < 70 && !low_material(pos))
+    if (s.authority >= 2 && depth >= 5 && moveCount >= 6 && !pvNode && !capture && !givesCheck
+        && !isPasser && !zeroing_quiet(pos, move, capture) && pos.rule50_count() < 70
+        && !low_material(pos))
     {
         const int lateness   = std::min(moveCount - 5, 8);
         const int depthScale = std::min(int(depth), 10) + 2;
-        delta += state().quietOverdrive * lateness * depthScale / 48;
+        delta += s.quietOverdrive * lateness * depthScale / 48;
     }
 
     return std::clamp(delta, -2048, 768);
