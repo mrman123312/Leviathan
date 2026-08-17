@@ -1,0 +1,82 @@
+name: P16 P01 Lossless Triple
+on:
+  push:
+    branches: [agent/p16-p01-lossless-triple]
+    paths: ['.github/workflows/p16-p01-lossless-triple.yml']
+  workflow_dispatch:
+permissions: {contents: write}
+jobs:
+  validate:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 80
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with: {ref: agent/p16-p01-lossless-triple, path: cand, fetch-depth: 5, persist-credentials: true}
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with: {ref: 3404fa2ea9b4fe75236e2584be9da3416e646ec2, path: base, fetch-depth: 1}
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with: {ref: leviathan/fundamentals-ultra-lab, path: harness, fetch-depth: 1}
+      - name: Apply P06 P07 P09 stack
+        working-directory: cand
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          # P07 + P06 in search.cpp
+          p=Path('src/search.cpp');s=p.read_text()
+          a="    const bool leviathanRiskReady  = Leviathan::Control::risk_ready();\n    const bool leviathanDslReady   = Leviathan::DSL::ready();\n    const bool leviathanTraceReady = Leviathan::Trace::ready();";b="    constexpr bool leviathanRiskReady      = false;\n    constexpr bool leviathanDslReady       = false;\n    constexpr bool leviathanTraceReady     = false;\n    constexpr bool leviathanFundamentalsReady = true;"
+          if s.count(a)!=1:raise SystemExit('search ready');s=s.replace(a,b,1)
+          a="                const bool leviathanScopeProtected =\n                  Leviathan::Fundamentals::protected_scope_move(\n                    pos, move, prevSq, capture, givesCheck);";b="                const bool leviathanScopeProtected =\n                  move.type_of() == PROMOTION\n                  || (type_of(movedPiece) == PAWN\n                      && relative_rank(color_of(movedPiece), move.to_sq()) >= RANK_6);"
+          if s.count(a)!=1:raise SystemExit('scope');p.write_text(s.replace(a,b,1))
+
+          # P07 policy/atlas elimination + P09 rule50 specialization in movepick.cpp
+          p=Path('src/movepick.cpp');s=p.read_text()
+          a="    const bool leviathanPolicyReady = Type == QUIETS && Leviathan::Policy::ready();\n    const bool leviathanAtlasReady  = Type == QUIETS && Leviathan::Atlas::ready();";b="    constexpr bool leviathanPolicyReady = false;\n    constexpr bool leviathanAtlasReady  = false;"
+          if s.count(a)!=1:raise SystemExit('policy');s=s.replace(a,b,1)
+          a="    const bool leviathanRule50Ready = Type == QUIETS && Leviathan::Fundamentals::ready()\n                                      && Leviathan::Fundamentals::state().rule50Pressure\n                                      && pos.rule50_count() >= 70;";b="    const bool leviathanRule50Ready = Type == QUIETS && pos.rule50_count() >= 70;"
+          if s.count(a)!=1:raise SystemExit('rule50 ready');p.write_text(s.replace(a,b,1))
+
+          # P09 static Fundamentals
+          p=Path('src/leviathan_fundamentals.h');s=p.read_text()
+          a="inline bool ready() {\n    const State& cfg = state();\n    return cfg.enabled && cfg.authority > 0;\n}";b="inline constexpr bool ready() { return true; }"
+          if s.count(a)!=1:raise SystemExit('F ready');s=s.replace(a,b,1)
+          a="inline bool zugzwang_risk(const Position& pos) {\n    const State& cfg = state();\n    if (!cfg.enabled || cfg.authority <= 0 || !cfg.zugzwangGuard)\n        return false;\n\n    // Conservative detector: sparse positions with very little non-pawn\n    // mobility are where null-move assumptions are structurally least safe.\n    return pos.count<ALL_PIECES>() <= 9 && non_pawn_count(pos) <= 2;\n}";b="inline bool zugzwang_risk(const Position& pos) {\n    return pos.count<ALL_PIECES>() <= 9 && non_pawn_count(pos) <= 2;\n}"
+          if s.count(a)!=1:raise SystemExit('zug');s=s.replace(a,b,1)
+          a="    if (!ready() || !state().sacrificeRescue)\n        return false;\n\n"
+          if s.count(a)!=1:raise SystemExit('rescue');s=s.replace(a,'',1)
+          a="    const State& cfg = state();\n    if (!cfg.enabled || cfg.authority <= 0)\n        return 0;\n\n"
+          if s.count(a)!=1:raise SystemExit('lmr');s=s.replace(a,'',1)
+          for old,new in [('delta -= cfg.forcingBuyback;','delta -= 384;'),('delta -= cfg.recaptureBuyback;','delta -= 256;'),('delta -= cfg.passerBuyback;','delta -= 320;'),('delta -= cfg.endgameBuyback;','delta -= 128;')]:
+            if s.count(old)!=1:raise SystemExit(old);s=s.replace(old,new,1)
+          start="    // Authority 2 is the funding mechanism. v2.1 deliberately avoids\n";end="        delta += cfg.quietOverdrive * lateness * depthScale / 48;\n    }\n\n";i=s.find(start);j=s.find(end,i)
+          if i<0 or j<0:raise SystemExit('authority2');j+=len(end);s=s[:i]+"    // Static Authority-1 champion: overdrive compiled out.\n\n"+s[j:]
+          a="inline int quiet_ordering_bonus(const Position& pos, Move move) {\n    const State& cfg = state();\n    if (!cfg.enabled || cfg.authority <= 0 || !cfg.rule50Pressure || pos.rule50_count() < 70)\n        return 0;\n\n    // Captures are scored in another MovePicker stage. Push pawn moves upward\n    // when the fifty-move counter is dangerous because they reset it.\n    return pawn_move(pos, move) ? cfg.rule50PawnBonus : 0;\n}";b="inline int quiet_ordering_bonus(const Position& pos, Move move) {\n    if (pos.rule50_count() < 70) return 0;\n    return pawn_move(pos, move) ? 3072 : 0;\n}"
+          if s.count(a)!=1:raise SystemExit('bonus');p.write_text(s.replace(a,b,1))
+          PY
+          git diff --check
+      - name: Build
+        run: |
+          make -C base/src net && make -C base/src clean && make -C base/src -j2 ARCH=x86-64-avx2 build
+          cp base/src/stockfish base/src/control_a; cp base/src/stockfish base/src/control_b
+          cp base/src/nn-ab28990d4ea3.nnue cand/src/
+          make -C cand/src clean && make -C cand/src -j2 ARCH=x86-64-avx2 build
+          echo '{"Threads":1,"Hash":64,"Leviathan Fundamentals":true,"Leviathan Fundamentals Authority":1,"Leviathan Quiet Overdrive":0,"Leviathan Risk":false,"Leviathan Policy":false,"Leviathan MetaSearch":false,"Leviathan Specialist":false,"Leviathan Atlas":false,"Leviathan Search DSL":false}' > active.json
+      - name: Benchmark
+        run: python3 harness/tools/lossless_pair_benchmark.py --control-a base/src/control_a --control-b base/src/control_b --candidate cand/src/stockfish --options active.json --rounds 41 --output p16.json | tee p16.log
+      - name: Gate
+        run: |
+          python3 - <<'PY'
+          import json
+          d=json.load(open('p16.json'));s=d['signatures'];r=d['results'];exact=True
+          for c in ('default','depth11','nodes50k'):exact &= s['control_a'][c]['nodes']==s['candidate'][c]['nodes'] and s['control_a'][c]['behavior_sha256']==s['candidate'][c]['behavior_sha256']
+          x=r['candidate'];a=r['control_b'];o={'exact':exact,'aa_median':a['median_speedup'],'aa_ci':a['bootstrap_median_95pct_ci'],'median':x['median_speedup'],'geo':x['geometric_mean_speedup'],'ci':x['bootstrap_median_95pct_ci'],'faster':x['faster_rounds'],'rounds':x['rounds']};open('p16-summary.json','w').write(json.dumps(o,indent=2));print(json.dumps(o,indent=2))
+          if not exact or x['bootstrap_median_95pct_ci'][0] <= 1.0 or x['median_speedup'] < 1.015:raise SystemExit('P16_GATE_FAIL')
+          PY
+      - name: Materialize source
+        working-directory: cand
+        run: |
+          git config user.name 'Leviathan Research Bot'; git config user.email '154391238+mrman123312@users.noreply.github.com'
+          git add src/search.cpp src/movepick.cpp src/leviathan_fundamentals.h
+          git commit -m 'P16: materialize lossless triple champion [skip ci]' && git push origin HEAD:agent/p16-p01-lossless-triple
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with: {name: 'p16-${{ github.sha }}', path: 'p16*', retention-days: 30}
