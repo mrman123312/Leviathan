@@ -2,6 +2,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -49,7 +50,10 @@ public:
     static constexpr std::size_t kCapacity = 256;
 
     void push_back(Move m) {
-        if(size_ < kCapacity) moves_[size_++] = m;
+        // Never silently truncate the search tree. Capacity exhaustion is a
+        // correctness failure and must crash loudly in every build mode.
+        if(size_ >= kCapacity) std::abort();
+        moves_[size_++] = m;
     }
     bool empty() const { return size_ == 0; }
     std::size_t size() const { return size_; }
