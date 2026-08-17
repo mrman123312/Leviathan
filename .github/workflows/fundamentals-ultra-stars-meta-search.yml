@@ -1,0 +1,56 @@
+name: Fundamentals Ultra Stars Meta Search
+
+on:
+  push:
+    branches: [leviathan/fundamentals-ultra-lab]
+    paths:
+      - '.github/workflows/fundamentals-ultra-stars-meta-search.yml'
+      - 'tools/ultra_meta_regret.py'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  regret:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        strategy: [monolith, portfolio2, portfolio3, duel-base, duel-stockfish, committee3]
+    steps:
+      - uses: actions/checkout@v4
+        with: {ref: leviathan/fundamentals-ultra-lab, path: lab}
+      - uses: actions/checkout@v4
+        with: {ref: leviathan/fundamentals-ultra-phasefix-qfrontier, path: kernel}
+      - uses: actions/checkout@v4
+        with: {ref: leviathan/fundamentals-v2.1, path: base}
+      - name: Build kernel, independent base, and pinned Stockfish
+        run: |
+          make -C kernel/src net && make -C kernel/src clean && make -C kernel/src -j2 ARCH=x86-64-avx2 build
+          make -C base/src net && make -C base/src clean && make -C base/src -j2 ARCH=x86-64-avx2 build
+          git clone -q https://github.com/official-stockfish/Stockfish.git "$RUNNER_TEMP/sf"
+          git -C "$RUNNER_TEMP/sf" checkout -q 5062aee519a1ba262d472d8ab139851ced56573e
+          make -C "$RUNNER_TEMP/sf/src" -j2 ARCH=x86-64-avx2 build
+          python3 -m pip install --disable-pip-version-check chess==1.11.2
+      - name: Equal-budget deep-oracle experiment
+        run: |
+          python3 lab/tools/ultra_meta_regret.py \
+            --kernel "$PWD/kernel/src/stockfish" \
+            --base "$PWD/base/src/stockfish" \
+            --stockfish "$RUNNER_TEMP/sf/src/stockfish" \
+            --strategy '${{ matrix.strategy }}' \
+            --positions 40 --total-nodes 80000 --oracle-nodes 400000 --seed 26081701 \
+            --output 'meta-${{ matrix.strategy }}.json' | tee 'meta-${{ matrix.strategy }}.log'
+      - name: Provenance
+        run: |
+          printf 'strategy=%s\nkernel=%s\nbase=%s\nstockfish=%s\n' '${{ matrix.strategy }}' "$(git -C kernel rev-parse HEAD)" "$(git -C base rev-parse HEAD)" "$(git -C "$RUNNER_TEMP/sf" rev-parse HEAD)" > revisions.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: 'ultra-meta-${{ matrix.strategy }}'
+          path: |
+            meta-${{ matrix.strategy }}.json
+            meta-${{ matrix.strategy }}.log
+            revisions.txt
+          retention-days: 30
