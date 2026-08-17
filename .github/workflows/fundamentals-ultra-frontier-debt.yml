@@ -1,0 +1,99 @@
+name: Fundamentals Ultra Frontier Debt
+
+on:
+  push:
+    branches: [leviathan/fundamentals-ultra-lab]
+    paths: ['.github/workflows/fundamentals-ultra-frontier-debt.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  openings:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+        with: {ref: '${{ github.sha }}', path: lab}
+      - name: Build pinned current Stockfish and fresh holdout
+        run: |
+          git clone -q https://github.com/official-stockfish/Stockfish.git "$RUNNER_TEMP/sf"
+          git -C "$RUNNER_TEMP/sf" checkout -q 5062aee519a1ba262d472d8ab139851ced56573e
+          make -C "$RUNNER_TEMP/sf/src" -j2 ARCH=x86-64-avx2 build
+          python3 -m pip install --disable-pip-version-check chess==1.11.2
+          python3 lab/tools/generate_balanced_openings.py --stockfish "$RUNNER_TEMP/sf/src/stockfish" --output openings.json --count 50 --plies 16 --seed 271828182 --max-abs-cp 110
+          sha256sum openings.json > openings.sha256
+      - uses: actions/upload-artifact@v4
+        with: {name: frontier-debt-openings, path: 'openings.*', retention-days: 30}
+
+  screen:
+    needs: openings
+    runs-on: ubuntu-22.04
+    timeout-minutes: 100
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {label: control-cap4, mode: control, debt: 0}
+          - {label: cap5-global, mode: debt, debt: 0}
+          - {label: debt64, mode: debt, debt: 64}
+          - {label: debt128, mode: debt, debt: 128}
+          - {label: debt192, mode: debt, debt: 192}
+    steps:
+      - uses: actions/checkout@v4
+        with: {ref: '${{ github.sha }}', path: lab}
+      - uses: actions/checkout@v4
+        with: {ref: leviathan/fundamentals-ultra-v0, path: cand}
+      - uses: actions/checkout@v4
+        with: {ref: leviathan/fundamentals-ultra-v0, path: base}
+      - uses: actions/download-artifact@v4
+        with: {name: frontier-debt-openings, path: shared}
+      - name: Materialize conditional fifth-capture budget
+        env: {MODE: '${{ matrix.mode }}', DEBT: '${{ matrix.debt }}'}
+        run: |
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+          p=Path('cand/src/search.cpp');s=p.read_text();mode=os.environ['MODE'];debt=int(os.environ['DEBT'])
+          old='if (moveCount > 4 || (moveCount > 2 && leviathanCaptureCeiling < alpha - 48))\n                    continue;'
+          if s.count(old)!=1: raise SystemExit(f'frontier anchor count={s.count(old)}')
+          if mode=='control':
+              new=old
+          else:
+              new=f'''const int leviathanFrontierDebt = std::max(0, int(alpha - futilityBase));
+                const bool leviathanFifthCapture = moveCount == 5 && leviathanFrontierDebt >= {debt};
+                if ((moveCount > 4 && !leviathanFifthCapture)
+                    || (moveCount > 2 && leviathanCaptureCeiling < alpha - 48))
+                    continue;'''
+          p.write_text(s.replace(old,new,1))
+          PY
+          git -C cand diff --check
+          git -C cand diff -- src/search.cpp | tee mutation.patch
+      - name: Build candidate, Ultra-v0, and pinned Stockfish
+        run: |
+          make -C cand/src net && make -C cand/src clean && make -C cand/src -j2 ARCH=x86-64-avx2 build
+          make -C base/src net && make -C base/src clean && make -C base/src -j2 ARCH=x86-64-avx2 build
+          git clone -q https://github.com/official-stockfish/Stockfish.git "$RUNNER_TEMP/sf"
+          git -C "$RUNNER_TEMP/sf" checkout -q 5062aee519a1ba262d472d8ab139851ced56573e
+          make -C "$RUNNER_TEMP/sf/src" -j2 ARCH=x86-64-avx2 build
+          python3 -m pip install --disable-pip-version-check chess==1.11.2
+      - name: 100-game equal-node causal screen
+        run: |
+          mkdir nodes
+          python3 lab/tools/fundamentals_tournament.py --candidate "$PWD/cand/src/stockfish" --opponent "$PWD/base/src/stockfish" --candidate-label '${{ matrix.label }}' --opponent-label Ultra-v0 --candidate-fundamentals --opponent-fundamentals --nodes-per-move 100000 --openings-json "$PWD/shared/openings.json" --max-plies 200 --output-dir nodes | tee nodes/match.log
+      - name: Hardened isolated-oracle replication
+        run: |
+          python3 lab/tools/oracle_regret.py --candidate "$PWD/cand/src/stockfish" --baseline "$PWD/base/src/stockfish" --oracle "$RUNNER_TEMP/sf/src/stockfish" --openings-json "$PWD/shared/openings.json" --candidate-label '${{ matrix.label }}' --candidate-fundamentals --baseline-fundamentals --choice-nodes 120000 --oracle-nodes 800000 --output regret.json | tee regret.log
+          grep -q 'LV_ISOLATED_ROOT_REGRET_V2' regret.json
+          printf 'lab=%s\ncandidate_source=%s\nbase=%s\nstockfish=%s\n' "$(git -C lab rev-parse HEAD)" "$(git -C cand rev-parse HEAD)" "$(git -C base rev-parse HEAD)" "$(git -C "$RUNNER_TEMP/sf" rev-parse HEAD)" > revisions.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: 'frontier-debt-${{ matrix.label }}'
+          path: |
+            nodes
+            regret.json
+            regret.log
+            mutation.patch
+            shared/openings.sha256
+            revisions.txt
+          retention-days: 30
