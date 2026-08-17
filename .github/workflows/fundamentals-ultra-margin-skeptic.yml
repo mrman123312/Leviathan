@@ -1,9 +1,9 @@
 name: Fundamentals Ultra Margin Skeptic
 
+# Legacy high-cost tournament workflow. Kept for provenance/reproduction only.
+# It must never auto-launch from unrelated lab pushes.
 on:
-  push:
-    branches: [leviathan/fundamentals-ultra-lab]
-    paths: ['.github/workflows/fundamentals-ultra-margin-skeptic.yml']
+  workflow_dispatch:
 
 permissions:
   contents: write
