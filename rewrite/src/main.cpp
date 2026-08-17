@@ -9,11 +9,26 @@
 
 using namespace leviathan;
 
-static uint64_t perft(const Position& p,int depth){
+static uint64_t perft_inplace(Position& p,int depth){
     if(depth==0) return 1;
     uint64_t n=0;
-    for(Move m:p.legal_moves()) { Position q=p; q.make_move(m); n += perft(q,depth-1); }
+    const Color us=p.side_to_move();
+    for(Move m:p.pseudo_legal_moves(false)){
+        UndoState undo;
+        if(!p.make_move(m,undo)) continue;
+        if(p.in_check(us)){
+            p.unmake_move(m,undo);
+            continue;
+        }
+        n += perft_inplace(p,depth-1);
+        p.unmake_move(m,undo);
+    }
     return n;
+}
+
+static uint64_t perft(const Position& p,int depth){
+    Position work=p;
+    return perft_inplace(work,depth);
 }
 
 static bool has_move(const Position& p, const char* text){
@@ -139,8 +154,6 @@ static bool selftest(){
         return false;
     }
 
-    // FIDE terminal precedence: a mating position is mate even when rule-50
-    // reaches 100 halfmoves; a non-terminal position at the same clock is draw.
     auto mateAt100=Position::from_fen("7k/6Q1/6K1/8/8/8/8/8 b - - 100 1");
     if(!mateAt100){std::cerr<<"selftest rule50 mate FEN parse failed\n";return false;}
     SearchEngine mateSearch;
