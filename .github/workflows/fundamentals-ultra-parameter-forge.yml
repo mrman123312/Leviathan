@@ -1,0 +1,79 @@
+name: Fundamentals Ultra Parameter Forge
+
+on:
+  push:
+    branches: [leviathan/fundamentals-ultra-lab]
+    paths:
+      - '.github/workflows/fundamentals-ultra-parameter-forge.yml'
+      - 'tools/fundamentals_param_regret.py'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  positions:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+        with: {ref: leviathan/fundamentals-ultra-lab, path: lab}
+      - name: Build current Stockfish and shared holdout
+        run: |
+          git clone -q https://github.com/official-stockfish/Stockfish.git "$RUNNER_TEMP/sf"
+          git -C "$RUNNER_TEMP/sf" checkout -q 5062aee519a1ba262d472d8ab139851ced56573e
+          make -C "$RUNNER_TEMP/sf/src" -j2 ARCH=x86-64-avx2 build
+          python3 -m pip install --disable-pip-version-check chess==1.11.2
+          python3 lab/tools/generate_balanced_openings.py --stockfish "$RUNNER_TEMP/sf/src/stockfish" --output positions.json --count 40 --plies 12 --seed 8675309 --max-abs-cp 100
+          sha256sum positions.json > positions.sha256
+      - uses: actions/upload-artifact@v4
+        with: {name: ultra-param-positions, path: 'positions.*', retention-days: 30}
+
+  regret:
+    needs: positions
+    runs-on: ubuntu-22.04
+    timeout-minutes: 65
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {label: baseline, profile: '{}'}
+          - {label: forcing192, profile: '{"Leviathan Forcing Buyback":192}'}
+          - {label: forcing576, profile: '{"Leviathan Forcing Buyback":576}'}
+          - {label: forcing768, profile: '{"Leviathan Forcing Buyback":768}'}
+          - {label: recap128, profile: '{"Leviathan Recapture Buyback":128}'}
+          - {label: recap384, profile: '{"Leviathan Recapture Buyback":384}'}
+          - {label: recap512, profile: '{"Leviathan Recapture Buyback":512}'}
+          - {label: passer160, profile: '{"Leviathan Passer Buyback":160}'}
+          - {label: passer480, profile: '{"Leviathan Passer Buyback":480}'}
+          - {label: passer640, profile: '{"Leviathan Passer Buyback":640}'}
+          - {label: endgame0, profile: '{"Leviathan Endgame Buyback":0}'}
+          - {label: endgame256, profile: '{"Leviathan Endgame Buyback":256}'}
+          - {label: endgame384, profile: '{"Leviathan Endgame Buyback":384}'}
+          - {label: conservative-half, profile: '{"Leviathan Forcing Buyback":192,"Leviathan Recapture Buyback":128,"Leviathan Passer Buyback":160,"Leviathan Endgame Buyback":64}'}
+          - {label: aggressive-1p5, profile: '{"Leviathan Forcing Buyback":576,"Leviathan Recapture Buyback":384,"Leviathan Passer Buyback":480,"Leviathan Endgame Buyback":192}'}
+          - {label: forcing-passer, profile: '{"Leviathan Forcing Buyback":576,"Leviathan Recapture Buyback":128,"Leviathan Passer Buyback":480,"Leviathan Endgame Buyback":64}'}
+    steps:
+      - uses: actions/checkout@v4
+        with: {ref: leviathan/fundamentals-ultra-lab, path: lab}
+      - uses: actions/checkout@v4
+        with: {ref: leviathan/fundamentals-ultra-v0, path: ultra}
+      - uses: actions/download-artifact@v4
+        with: {name: ultra-param-positions, path: shared}
+      - name: Build Ultra-v0 and current Stockfish
+        run: |
+          make -C ultra/src net && make -C ultra/src clean && make -C ultra/src -j2 ARCH=x86-64-avx2 build
+          git clone -q https://github.com/official-stockfish/Stockfish.git "$RUNNER_TEMP/sf"
+          git -C "$RUNNER_TEMP/sf" checkout -q 5062aee519a1ba262d472d8ab139851ced56573e
+          make -C "$RUNNER_TEMP/sf/src" -j2 ARCH=x86-64-avx2 build
+          python3 -m pip install --disable-pip-version-check chess==1.11.2
+      - name: Paired deep-oracle profile test
+        run: |
+          python3 lab/tools/fundamentals_param_regret.py --engine "$PWD/ultra/src/stockfish" --stockfish "$RUNNER_TEMP/sf/src/stockfish" --openings-json "$PWD/shared/positions.json" --profile-json '${{ matrix.profile }}' --choice-nodes 80000 --oracle-nodes 400000 --output '${{ matrix.label }}.json' | tee '${{ matrix.label }}.log'
+      - uses: actions/upload-artifact@v4
+        with:
+          name: 'ultra-param-${{ matrix.label }}'
+          path: |
+            ${{ matrix.label }}.json
+            ${{ matrix.label }}.log
+            shared/positions.sha256
+          retention-days: 30
