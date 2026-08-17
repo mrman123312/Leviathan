@@ -1,0 +1,142 @@
+name: Fundamentals Ultra Early-Instability Prospective
+
+on:
+  push:
+    branches: [leviathan/fundamentals-ultra-lab]
+    paths: ['.github/workflows/fundamentals-ultra-early-instability-prospective.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  corpus:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+        with: {ref: '${{ github.sha }}', path: lab}
+      - name: Generate 240-position prospective corpus
+        run: |
+          git clone -q https://github.com/official-stockfish/Stockfish.git "$RUNNER_TEMP/sf"
+          git -C "$RUNNER_TEMP/sf" checkout -q 5062aee519a1ba262d472d8ab139851ced56573e
+          make -C "$RUNNER_TEMP/sf/src" -j2 ARCH=x86-64-avx2 build
+          python3 -m pip install --disable-pip-version-check chess==1.11.2
+          python3 lab/tools/generate_balanced_openings.py --stockfish "$RUNNER_TEMP/sf/src/stockfish" --output h18.json --count 80 --plies 18 --seed 314159265 --max-abs-cp 120
+          python3 lab/tools/generate_balanced_openings.py --stockfish "$RUNNER_TEMP/sf/src/stockfish" --output h26.json --count 80 --plies 26 --seed 314159323 --max-abs-cp 120
+          python3 lab/tools/generate_balanced_openings.py --stockfish "$RUNNER_TEMP/sf/src/stockfish" --output h34.json --count 80 --plies 34 --seed 314159381 --max-abs-cp 120
+          python3 - <<'PY'
+          import json
+          hs=[json.load(open(p)) for p in ('h18.json','h26.json','h34.json')]
+          # Six independent 40-position shards, each mixing all horizons.
+          for shard in range(6):
+              out=[]
+              for h in hs:
+                  lo=(shard*80)//6; hi=((shard+1)*80)//6
+                  out.extend(h[lo:hi])
+              open(f'shard{shard}.json','w').write(json.dumps(out,indent=2)+'\n')
+          total=sum(len(json.load(open(f'shard{s}.json'))) for s in range(6))
+          assert total==240,total
+          PY
+          sha256sum shard*.json > corpus.sha256
+      - uses: actions/upload-artifact@v4
+        with:
+          name: early-instability-corpus
+          path: |
+            shard*.json
+            corpus.sha256
+          retention-days: 30
+
+  collect:
+    needs: corpus
+    runs-on: ubuntu-22.04
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix: {shard: [0, 1, 2, 3, 4, 5]}
+    steps:
+      - uses: actions/checkout@v4
+        with: {ref: '${{ github.sha }}', path: lab}
+      - uses: actions/checkout@v4
+        with: {ref: leviathan/fundamentals-ultra-p01-qfrontier, path: candidate}
+      - uses: actions/download-artifact@v4
+        with: {name: early-instability-corpus, path: corpus}
+      - name: Build Ultra-P01 and independent current Stockfish oracle
+        run: |
+          make -C candidate/src net && make -C candidate/src clean && make -C candidate/src -j2 ARCH=x86-64-avx2 build
+          git clone -q https://github.com/official-stockfish/Stockfish.git "$RUNNER_TEMP/sf"
+          git -C "$RUNNER_TEMP/sf" checkout -q 5062aee519a1ba262d472d8ab139851ced56573e
+          make -C "$RUNNER_TEMP/sf/src" -j2 ARCH=x86-64-avx2 build
+          python3 -m pip install --disable-pip-version-check chess==1.11.2
+      - name: Collect predeclared trajectory and oracle labels
+        run: |
+          python3 lab/tools/search_error_atlas.py collect \
+            --candidate "$PWD/candidate/src/stockfish" \
+            --oracle "$RUNNER_TEMP/sf/src/stockfish" \
+            --openings-json "$PWD/corpus/shard${{ matrix.shard }}.json" \
+            --candidate-fundamentals \
+            --nodes1 12000 --nodes2 40000 --nodes3 100000 \
+            --oracle-nodes 700000 \
+            --shard-label 'early-prospective-${{ matrix.shard }}' \
+            --output "rows-${{ matrix.shard }}.json" | tee "collect-${{ matrix.shard }}.log"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: 'early-instability-rows-${{ matrix.shard }}'
+          path: |
+            rows-${{ matrix.shard }}.json
+            collect-${{ matrix.shard }}.log
+          retention-days: 30
+
+  aggregate:
+    needs: collect
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/download-artifact@v4
+        with: {pattern: 'early-instability-rows-*', path: rows}
+      - name: Test predeclared early-instability hypothesis
+        run: |
+          python3 - <<'PY' | tee prospective.log
+          import glob,json,statistics
+          R=[]
+          for p in sorted(glob.glob('rows/**/rows-*.json',recursive=True)):
+              R += json.load(open(p))['rows']
+          assert len(R)==240,len(R)
+          def group(r):
+              f=r['features']; s12=bool(f['stable_12']); s23=bool(f['stable_23'])
+              if s12 and s23:return 'stable'
+              if (not s12) and s23:return 'early_flip_stabilized'
+              if s12 and (not s23):return 'late_fracture'
+              return 'churn'
+          G={k:[] for k in ('stable','early_flip_stabilized','late_fracture','churn')}
+          for r in R:G[group(r)].append(r)
+          stats={}
+          for k,z in G.items():
+              vals=[r['regret_cp'] for r in z]
+              stats[k]={'n':len(z),'mean_regret_cp':statistics.fmean(vals) if vals else None,
+                        'median_regret_cp':statistics.median(vals) if vals else None,
+                        'max_regret_cp':max(vals) if vals else None,
+                        'ge15':sum(v>=15 for v in vals),'ge30':sum(v>=30 for v in vals)}
+          early=G['early_flip_stabilized']; other=[r for r in R if group(r)!='early_flip_stabilized']
+          em=statistics.fmean(r['regret_cp'] for r in early) if early else None
+          om=statistics.fmean(r['regret_cp'] for r in other) if other else None
+          total15=sum(r['regret_cp']>=15 for r in R); early15=sum(r['regret_cp']>=15 for r in early)
+          share=len(early)/len(R); capture=early15/total15 if total15 else None
+          validity=len(early)>=20 and total15>=6
+          passed=bool(validity and em is not None and om is not None and
+                      em>=2.5*max(0.25,om) and share<=0.25 and capture>=0.30)
+          out={'schema':'LV_EARLY_INSTABILITY_PROSPECTIVE_V1','positions':len(R),
+               'group_stats':stats,'early_fraction':share,'total_ge15':total15,
+               'early_ge15_capture_rate':capture,
+               'early_vs_other_mean_ratio':None if em is None or om is None else em/max(0.001,om),
+               'validity_min_early20_and_errors6':validity,'prospective_pass':passed,
+               'rule':'early instability = different root move at 12k vs 40k, then same root move at 40k and 100k; all thresholds fixed before corpus generation'}
+          json.dump(out,open('prospective.json','w'),indent=2,sort_keys=True)
+          print(json.dumps(out,indent=2,sort_keys=True))
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: early-instability-prospective-result
+          path: |
+            prospective.json
+            prospective.log
+          retention-days: 30
