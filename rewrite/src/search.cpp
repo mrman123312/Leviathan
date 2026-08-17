@@ -23,6 +23,18 @@ bool SearchEngine::repeated(uint64_t key) const {
     return false;
 }
 
+bool SearchEngine::has_legal_move(Position& p) const {
+    const Color us=p.side_to_move();
+    for(Move m:p.pseudo_legal_moves(false)){
+        UndoState undo;
+        if(!p.make_move(m,undo)) continue;
+        const bool legal=!p.in_check(us);
+        p.unmake_move(m,undo);
+        if(legal) return true;
+    }
+    return false;
+}
+
 bool SearchEngine::history_sensitive(const Position& p) const {
     if(p.halfmove_clock() >= 80) return true;
     const size_t horizon = std::min<size_t>(history_.size(), static_cast<size_t>(std::max(0, p.halfmove_clock()) + 1));
@@ -76,10 +88,8 @@ void SearchEngine::reward_quiet(Move m,int depth,int ply){
     }
 }
 
-std::vector<Move> SearchEngine::ordered_moves(const Position& p,Move tt_move,int ply,bool captures_only) const {
-    // Search consumes pseudo-legal actions and validates them in-place through
-    // make/unmake. This avoids Position copies inside legal_moves at every node.
-    auto moves=p.pseudo_legal_moves(captures_only);
+MoveList SearchEngine::ordered_moves(const Position& p,Move tt_move,int ply,bool captures_only) const {
+    MoveList moves=p.pseudo_legal_moves(captures_only);
     auto move_score=[&](Move m){
         if(m==tt_move && !tt_move.is_null()) return 1000000;
         int s=0;
@@ -103,9 +113,16 @@ std::vector<Move> SearchEngine::ordered_moves(const Position& p,Move tt_move,int
 
 int SearchEngine::quiescence(Position& p,int alpha,int beta,int ply){
     ++nodes_; if(time_up()) return alpha;
-    if(p.halfmove_clock()>=100 || repeated(p.key())) return 0;
+    const uint64_t boardKey=p.key();
     const Color us=p.side_to_move();
     const bool checked=p.in_check(us);
+    if(repeated(boardKey)) return 0;
+    if(p.halfmove_clock()>=100){
+        // Checkmate ends the game before a 50-move draw can be claimed.
+        if(checked && !has_legal_move(p)) return -MATE+ply;
+        return 0;
+    }
+
     int stand=checked ? -INF : evaluator_->evaluate(p).mean_cp;
     if(!checked){
         if(stand>=beta) return beta;
@@ -136,7 +153,13 @@ int SearchEngine::quiescence(Position& p,int alpha,int beta,int ply){
 int SearchEngine::negamax(Position& p,int depth,int alpha,int beta,int ply){
     ++nodes_; if(time_up()) return alpha;
     const uint64_t boardKey=p.key();
-    if(p.halfmove_clock()>=100 || repeated(boardKey)) return 0;
+    const Color us=p.side_to_move();
+    const bool inCheck=p.in_check(us);
+    if(repeated(boardKey)) return 0;
+    if(p.halfmove_clock()>=100){
+        if(inCheck && !has_legal_move(p)) return -MATE+ply;
+        return 0;
+    }
     if(ply>=MAX_PLY-1) return evaluator_->evaluate(p).mean_cp;
     const uint64_t key=context_key(p);
     if(depth<=0) return quiescence(p,alpha,beta,ply);
@@ -154,9 +177,7 @@ int SearchEngine::negamax(Position& p,int depth,int alpha,int beta,int ply){
         }
     }
 
-    const Color us=p.side_to_move();
-    const bool inCheck=p.in_check(us);
-    auto moves=ordered_moves(p,ttMove,ply,false);
+    MoveList moves=ordered_moves(p,ttMove,ply,false);
 
     int bestScore=-INF;
     Move best{};
