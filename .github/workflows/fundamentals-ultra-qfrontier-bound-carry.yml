@@ -1,0 +1,102 @@
+name: Fundamentals Ultra Q Frontier Bound Carry
+
+on:
+  push:
+    branches: [leviathan/fundamentals-ultra-lab]
+    paths: ['.github/workflows/fundamentals-ultra-qfrontier-bound-carry.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  screen:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 85
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {label: control-cap4, cap: 4, carry: 0}
+          - {label: cap4-bound-carry, cap: 4, carry: 1}
+          - {label: cap3-bound-carry, cap: 3, carry: 1}
+          - {label: cap2-bound-carry, cap: 2, carry: 1}
+    steps:
+      - uses: actions/checkout@v4
+        with: {ref: leviathan/fundamentals-ultra-lab, path: lab}
+      - uses: actions/checkout@v4
+        with: {ref: leviathan/fundamentals-ultra-v0, path: cand}
+      - uses: actions/checkout@v4
+        with: {ref: leviathan/fundamentals-ultra-v0, path: base}
+      - name: Materialize frontier-bound candidate
+        env: {CAP: '${{ matrix.cap }}', CARRY: '${{ matrix.carry }}'}
+        run: |
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+          p=Path('cand/src/search.cpp');s=p.read_text();cap=int(os.environ['CAP']);carry=os.environ['CARRY']=='1'
+          old='''                if (moveCount > 4 || (moveCount > 2 && leviathanCaptureCeiling < alpha - 48))
+                    continue;'''
+          if carry:
+              new=f'''                const bool leviathanFrontierSkipped =
+                  moveCount > {cap} || (moveCount > 2 && leviathanCaptureCeiling < alpha - 48);
+                if (leviathanFrontierSkipped)
+                {{
+                    // Preserve cheap fail-low evidence from a discarded capture.
+                    // This does not search the move and cannot raise alpha; it only
+                    // carries the same futility-floor information Stockfish already
+                    // uses for candidates that survive the earlier frontier gate.
+                    if (leviathanCaptureCeiling <= alpha)
+                        bestValue = std::max(bestValue, leviathanCaptureCeiling);
+                    continue;
+                }}'''
+          else:
+              new=f'''                if (moveCount > {cap} || (moveCount > 2 && leviathanCaptureCeiling < alpha - 48))
+                    continue;'''
+          if s.count(old)!=1: raise SystemExit('frontier anchor')
+          p.write_text(s.replace(old,new,1))
+          PY
+          git -C cand diff --check
+          git -C cand diff -- src/search.cpp | tee mutation.patch
+      - name: Build engines and current Stockfish
+        run: |
+          make -C cand/src net && make -C cand/src clean && make -C cand/src -j2 ARCH=x86-64-avx2 build
+          make -C base/src net && make -C base/src clean && make -C base/src -j2 ARCH=x86-64-avx2 build
+          git clone -q https://github.com/official-stockfish/Stockfish.git "$RUNNER_TEMP/sf"
+          git -C "$RUNNER_TEMP/sf" checkout -q 5062aee519a1ba262d472d8ab139851ced56573e
+          make -C "$RUNNER_TEMP/sf/src" -j2 ARCH=x86-64-avx2 build
+          python3 -m pip install --disable-pip-version-check chess==1.11.2
+      - name: Fresh shared holdout
+        run: python3 lab/tools/generate_balanced_openings.py --stockfish "$RUNNER_TEMP/sf/src/stockfish" --output openings.json --count 40 --plies 14 --seed 161803398 --max-abs-cp 100
+      - name: 80 equal-node games
+        run: |
+          mkdir nodes
+          python3 lab/tools/fundamentals_tournament.py --candidate "$PWD/cand/src/stockfish" --opponent "$PWD/base/src/stockfish" --candidate-label '${{ matrix.label }}' --opponent-label Ultra-v0 --candidate-fundamentals --opponent-fundamentals --nodes-per-move 80000 --openings-json openings.json --max-plies 190 --output-dir nodes | tee nodes/match.log
+      - name: 80 fixed-time games
+        run: |
+          mkdir time
+          python3 lab/tools/fundamentals_tournament.py --candidate "$PWD/cand/src/stockfish" --opponent "$PWD/base/src/stockfish" --candidate-label '${{ matrix.label }}' --opponent-label Ultra-v0 --candidate-fundamentals --opponent-fundamentals --move-time-ms 100 --openings-json openings.json --max-plies 190 --output-dir time | tee time/match.log
+      - name: Deep-oracle regret and tail risk
+        run: |
+          python3 lab/tools/oracle_regret.py --candidate "$PWD/cand/src/stockfish" --baseline "$PWD/base/src/stockfish" --oracle "$RUNNER_TEMP/sf/src/stockfish" --openings-json openings.json --candidate-label '${{ matrix.label }}' --candidate-fundamentals --baseline-fundamentals --choice-nodes 100000 --oracle-nodes 700000 --output regret.json | tee regret.log
+          python3 - <<'PY'
+          import json
+          p='regret.json';x=json.load(open(p));rows=x.get('rows',[])
+          def r(row,prefix): return row.get(prefix+'_regret_cp',row.get(prefix+'_regret',0))
+          if rows:
+            b=[r(z,'baseline') for z in rows];c=[r(z,'candidate') for z in rows]
+            x['tail']={'baseline_ge20':sum(v>=20 for v in b),'candidate_ge20':sum(v>=20 for v in c),'baseline_ge50':sum(v>=50 for v in b),'candidate_ge50':sum(v>=50 for v in c),'baseline_max':max(b),'candidate_max':max(c)}
+            open(p,'w').write(json.dumps(x,indent=2)+'\n')
+            print('TAIL',json.dumps(x['tail'],sort_keys=True))
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: 'qbound-${{ matrix.label }}'
+          path: |
+            nodes
+            time
+            regret.json
+            regret.log
+            openings.json
+            mutation.patch
+          retention-days: 30
