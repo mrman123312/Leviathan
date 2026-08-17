@@ -1,0 +1,62 @@
+name: Fundamentals Ultra Integrate Data Research
+
+on:
+  push:
+    branches: [leviathan/fundamentals-ultra-lab]
+    paths: ['.github/workflows/fundamentals-ultra-integrate-data.yml']
+
+permissions:
+  contents: write
+
+jobs:
+  integrate:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: leviathan/fundamentals-ultra-v1
+          path: ultra
+          fetch-depth: 0
+      - uses: actions/checkout@v4
+        with:
+          ref: leviathan/rewrite-v4-dual-training-data
+          path: donor
+      - name: Copy architecture-independent training research
+        run: |
+          mkdir -p ultra/research/training ultra/research/tools
+          cp donor/rewrite/training/DATASET_REGISTRY.json ultra/research/training/
+          cp donor/rewrite/training/DATA_SOURCE_LOCKS.json ultra/research/training/
+          cp donor/rewrite/training/DUAL_VIEW_SCHEMA.md ultra/research/training/
+          cp donor/rewrite/training/DUAL_VIEW_MODEL_PLAN.md ultra/research/training/
+          cp donor/rewrite/training/LC0_TO_STOCKFISH_BRIDGE.md ultra/research/training/
+          cp donor/rewrite/training/SYZYGY3_LOCK.json ultra/research/training/
+          cp donor/rewrite/training/README.md ultra/research/training/
+          cp donor/rewrite/training/.gitignore ultra/research/training/.gitignore
+          cp donor/rewrite/tools/audit_training_data.py ultra/research/tools/
+          cp donor/rewrite/tools/catalog_lc0_archive.py ultra/research/tools/
+          cp donor/rewrite/tools/fetch_training_data.py ultra/research/tools/
+          cp donor/rewrite/tools/fuse_teacher_views.py ultra/research/tools/
+          cp donor/rewrite/tools/test_training_tools.py ultra/research/tools/
+          cat > ultra/research/TRAINING_INTEGRATION.md <<'EOF'
+          # Fundamentals Ultra training/data integration
+
+          This directory imports only architecture-independent, provenance-verified research from `leviathan/rewrite-v4-dual-training-data`.
+
+          It deliberately does **not** alter the playing engine or evaluator. Public Lc0 native targets and Stockfish-derived teacher/training views stay lineage-linked so one raw position is not double-counted as independent evidence.
+
+          Promotion rule: a future learned evaluator must beat the frozen Stockfish NNUE / Fundamentals controls on grouped fresh holdouts, equal-node deep-oracle regret, equal-time regret, and match gates before it can replace the production evaluator.
+          EOF
+      - name: Run provenance/fusion tests in Fundamentals layout
+        working-directory: ultra
+        run: |
+          python3 research/tools/audit_training_data.py
+          python3 research/tools/test_training_tools.py
+          python3 research/tools/fetch_training_data.py --list
+      - name: Commit to Ultra branch
+        working-directory: ultra
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add research
+          git commit -m 'Ultra: integrate verified Lc0 + Stockfish dual-view research'
+          git push origin HEAD:leviathan/fundamentals-ultra-v1
