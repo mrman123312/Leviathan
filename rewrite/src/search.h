@@ -41,6 +41,8 @@ private:
     TranspositionTable tt_;
     std::array<std::array<int,64>,64> quiet_history_{};
     std::array<std::array<Move,2>,MAX_PLY> killers_{};
+    std::array<uint8_t,MAX_PLY> repetition_count_{};
+    std::array<uint8_t,MAX_PLY> path_has_repeat_{};
     uint64_t nodes_ = 0;
     uint64_t tt_hits_ = 0;
     uint64_t tt_stores_ = 0;
@@ -51,10 +53,11 @@ private:
 
     int negamax(Position& p, int depth, int alpha, int beta, int ply);
     int quiescence(Position& p, int alpha, int beta, int ply);
-    bool repeated(uint64_t key) const;
     bool has_legal_move(Position& p) const;
-    bool history_sensitive(const Position& p) const;
-    uint64_t context_key(const Position& p) const;
+    void initialize_history_state(const Position& root);
+    void push_history_state(const Position& p, int ply);
+    void pop_history_state();
+    uint64_t context_key(const Position& p, int depth, int ply) const;
     bool time_up();
     static int score_to_tt(int score, int ply);
     static int score_from_tt(int score, int ply);
