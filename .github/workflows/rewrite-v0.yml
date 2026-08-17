@@ -26,9 +26,10 @@ jobs:
         run: cmake --build rewrite/build -j2
       - name: Self-test and donor audit
         run: ctest --test-dir rewrite/build --output-on-failure
-      - name: Training-data provenance audit
+      - name: Training-data provenance and fusion audit
         run: |
           python3 rewrite/tools/audit_training_data.py
+          python3 rewrite/tools/test_training_tools.py
           python3 rewrite/tools/fetch_training_data.py --list
       - name: UCI smoke
         shell: bash
