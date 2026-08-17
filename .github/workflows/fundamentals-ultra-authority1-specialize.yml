@@ -1,0 +1,182 @@
+name: Fundamentals Ultra Authority1 Specialize
+
+on:
+  push:
+    branches: [leviathan/fundamentals-ultra-lab]
+    paths: ['.github/workflows/fundamentals-ultra-authority1-specialize.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  speed:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 55
+    steps:
+      - uses: actions/checkout@v4
+        with: {ref: '${{ github.sha }}', path: lab}
+      - uses: actions/checkout@v4
+        with: {ref: leviathan/fundamentals-ultra-p01-qfrontier, path: cand}
+      - uses: actions/checkout@v4
+        with: {ref: leviathan/fundamentals-ultra-p01-qfrontier, path: base}
+
+      - name: Materialize Authority-1-only hot-path helpers
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          h=Path('cand/src/leviathan_fundamentals.h')
+          s=h.read_text()
+          anchor='''struct Counters {\n'''
+          specialized=r'''// Experimental specialization for the exact competitive configuration
+// (Fundamentals enabled, Authority=1). These helpers intentionally keep all
+// Authority-1 tunables/guards dynamic while removing readiness and Authority-2
+// branches that cannot affect this configuration. They are used only by the
+// materialized experiment binary; production still retains the generic API.
+inline bool authority1_protected_scope_move(const Position& pos,
+                                             Move move,
+                                             Square prevSq,
+                                             bool capture,
+                                             bool givesCheck) {
+    return givesCheck || move.type_of() == PROMOTION || advanced_pawn_move(pos, move)
+        || recapture(move, prevSq, capture);
+}
+
+inline bool authority1_rescue_bad_see(const Position& pos,
+                                      Move move,
+                                      Square prevSq,
+                                      bool capture,
+                                      bool givesCheck) {
+    if (!state().sacrificeRescue)
+        return false;
+    if (move.type_of() == PROMOTION)
+        return true;
+    if (recapture(move, prevSq, capture))
+        return pos.see_ge(move, -300);
+    return givesCheck && !pos.see_ge(move, 0);
+}
+
+inline int authority1_lmr_adjustment(const Position& pos,
+                                     Move move,
+                                     Square prevSq,
+                                     int moveCount,
+                                     bool capture,
+                                     bool givesCheck) {
+    int delta = 0;
+    if (givesCheck)
+        delta -= state().forcingBuyback;
+    if (recapture(move, prevSq, capture))
+        delta -= state().recaptureBuyback;
+    if (move.type_of() == PROMOTION || advanced_pawn_move(pos, move))
+        delta -= state().passerBuyback;
+    if (low_material(pos) && (moveCount <= 4 || capture || givesCheck))
+        delta -= state().endgameBuyback;
+    return std::clamp(delta, -2048, 768);
+}
+
+inline int authority1_quiet_ordering_bonus_ready(const Position& pos, Move move) {
+    return pawn_move(pos, move) ? state().rule50PawnBonus : 0;
+}
+
+inline bool authority1_allow_null_move(const Position& pos) {
+    if (!state().zugzwangGuard)
+        return true;
+    return !(pos.count<ALL_PIECES>() <= 9 && non_pawn_count(pos) <= 2);
+}
+
+'''
+          if s.count(anchor)!=1:
+              raise SystemExit(f'Counters anchor count={s.count(anchor)}')
+          h.write_text(s.replace(anchor,specialized+anchor,1))
+
+          p=Path('cand/src/search.cpp')
+          s=p.read_text()
+          replacements=[
+            ('Leviathan::Fundamentals::allow_null_move(pos)',
+             'Leviathan::Fundamentals::authority1_allow_null_move(pos)'),
+            ('Leviathan::Fundamentals::rescue_bad_see(',
+             'Leviathan::Fundamentals::authority1_rescue_bad_see('),
+            ('Leviathan::Fundamentals::protected_scope_move(',
+             'Leviathan::Fundamentals::authority1_protected_scope_move('),
+          ]
+          for a,b in replacements:
+              c=s.count(a)
+              if c!=1:
+                  raise SystemExit(f'search anchor {a!r} count={c}')
+              s=s.replace(a,b,1)
+          old='''        r += Leviathan::Fundamentals::lmr_adjustment(\n          pos, move, prevSq, depth, moveCount, PvNode, capture, givesCheck);'''
+          new='''        r += Leviathan::Fundamentals::authority1_lmr_adjustment(\n          pos, move, prevSq, moveCount, capture, givesCheck);'''
+          if s.count(old)!=1:
+              raise SystemExit(f'lmr call anchor count={s.count(old)}')
+          p.write_text(s.replace(old,new,1))
+
+          m=Path('cand/src/movepick.cpp')
+          s=m.read_text()
+          old='''    const bool leviathanRule50Ready = Type == QUIETS && Leviathan::Fundamentals::ready()\n                                      && Leviathan::Fundamentals::state().rule50Pressure\n                                      && pos.rule50_count() >= 70;'''
+          new='''    const bool leviathanRule50Ready = Type == QUIETS\n                                      && Leviathan::Fundamentals::state().rule50Pressure\n                                      && pos.rule50_count() >= 70;'''
+          if s.count(old)!=1:
+              raise SystemExit(f'rule50 ready anchor count={s.count(old)}')
+          s=s.replace(old,new,1)
+          old='Leviathan::Fundamentals::quiet_ordering_bonus(pos, m)'
+          new='Leviathan::Fundamentals::authority1_quiet_ordering_bonus_ready(pos, m)'
+          if s.count(old)!=1:
+              raise SystemExit(f'rule50 bonus anchor count={s.count(old)}')
+          m.write_text(s.replace(old,new,1))
+          PY
+          git -C cand diff --check
+          git -C cand diff -- src/search.cpp src/movepick.cpp src/leviathan_fundamentals.h | tee authority1.patch
+          test -s authority1.patch
+
+      - name: Build A/A controls and specialized candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          make -C base/src net
+          make -C base/src clean
+          make -C base/src -j2 ARCH=x86-64-avx2 build
+          cp base/src/stockfish base/src/control_a
+          cp base/src/stockfish base/src/control_b
+          cp base/src/nn-ab28990d4ea3.nnue cand/src/
+          make -C cand/src clean
+          make -C cand/src -j2 ARCH=x86-64-avx2 build
+          cat > active.json <<'EOF'
+          {"Threads":1,"Hash":64,"Leviathan Fundamentals":true,"Leviathan Fundamentals Authority":1,"Leviathan Quiet Overdrive":0,"Leviathan Risk":false,"Leviathan Policy":false,"Leviathan MetaSearch":false,"Leviathan Specialist":false,"Leviathan Atlas":false,"Leviathan Search DSL":false}
+          EOF
+
+      - name: Exact-behavior fifteen-round ABBA prototype
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 lab/tools/lossless_pair_benchmark.py \
+            --control-a base/src/control_a \
+            --control-b base/src/control_b \
+            --candidate cand/src/stockfish \
+            --options active.json \
+            --rounds 15 \
+            --output authority1-speed.json | tee authority1-speed.log
+          test -s authority1-speed.json
+
+      - name: Decision
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json
+          d=json.load(open('authority1-speed.json'))
+          # lossless_pair_benchmark owns transcript identity and A/A calibration.
+          c=d.get('candidate',d.get('results',{}).get('candidate',{}))
+          print(json.dumps({'schema':'LV_AUTHORITY1_SPECIALIZE_DECISION_V1','benchmark_candidate':c,'rule':'prototype only; promote to longer lossless timing replication only if transcript identity passes and timing signal is materially positive'},indent=2))
+          PY
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ultra-authority1-specialize
+          path: |
+            authority1.patch
+            active.json
+            authority1-speed.json
+            authority1-speed.log
+          retention-days: 30
