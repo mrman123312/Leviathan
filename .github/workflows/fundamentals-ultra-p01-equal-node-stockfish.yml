@@ -1,0 +1,61 @@
+name: Fundamentals Ultra P01 Equal-Node Stockfish
+
+on:
+  push:
+    branches: [leviathan/fundamentals-ultra-lab]
+    paths: ['.github/workflows/fundamentals-ultra-p01-equal-node-stockfish.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  openings:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+        with: {ref: '${{ github.sha }}', path: lab}
+      - name: Build current Stockfish and generate fresh balanced pairs
+        run: |
+          git clone -q https://github.com/official-stockfish/Stockfish.git "$RUNNER_TEMP/sf"
+          git -C "$RUNNER_TEMP/sf" checkout -q 5062aee519a1ba262d472d8ab139851ced56573e
+          make -C "$RUNNER_TEMP/sf/src" -j2 ARCH=x86-64-avx2 build
+          python3 -m pip install --disable-pip-version-check chess==1.11.2
+          python3 lab/tools/generate_balanced_openings.py --stockfish "$RUNNER_TEMP/sf/src/stockfish" --output openings.json --count 50 --plies 14 --seed 223606797 --max-abs-cp 100
+          sha256sum openings.json > openings.sha256
+      - uses: actions/upload-artifact@v4
+        with: {name: p01-equal-node-sf-openings, path: 'openings.*', retention-days: 30}
+
+  duel:
+    needs: openings
+    runs-on: ubuntu-22.04
+    timeout-minutes: 80
+    steps:
+      - uses: actions/checkout@v4
+        with: {ref: '${{ github.sha }}', path: lab}
+      - uses: actions/checkout@v4
+        with: {ref: leviathan/fundamentals-ultra-p01-qfrontier, path: leviathan}
+      - uses: actions/download-artifact@v4
+        with: {name: p01-equal-node-sf-openings, path: shared}
+      - name: Build P01 and pinned current Stockfish
+        run: |
+          make -C leviathan/src net && make -C leviathan/src clean && make -C leviathan/src -j2 ARCH=x86-64-avx2 build
+          git clone -q https://github.com/official-stockfish/Stockfish.git "$RUNNER_TEMP/sf"
+          git -C "$RUNNER_TEMP/sf" checkout -q 5062aee519a1ba262d472d8ab139851ced56573e
+          make -C "$RUNNER_TEMP/sf/src" -j2 ARCH=x86-64-avx2 build
+          python3 -m pip install --disable-pip-version-check chess==1.11.2
+      - name: 100-game equal-node duel vs current Stockfish
+        run: |
+          mkdir result
+          python3 lab/tools/fundamentals_tournament.py --candidate "$PWD/leviathan/src/stockfish" --opponent "$RUNNER_TEMP/sf/src/stockfish" --candidate-label Ultra-P01 --opponent-label Stockfish-5062aee5 --candidate-fundamentals --nodes-per-move 100000 --openings-json "$PWD/shared/openings.json" --max-plies 200 --output-dir result | tee result/match.log
+      - name: Provenance
+        run: |
+          printf 'lab=%s\nleviathan=%s\nstockfish=%s\nopenings=%s\n' "$(git -C lab rev-parse HEAD)" "$(git -C leviathan rev-parse HEAD)" "$(git -C "$RUNNER_TEMP/sf" rev-parse HEAD)" "$(cut -d' ' -f1 shared/openings.sha256)" > revisions.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ultra-p01-equal-node-stockfish
+          path: |
+            result
+            revisions.txt
+            shared/openings.sha256
+          retention-days: 30
