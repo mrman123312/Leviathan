@@ -1,0 +1,83 @@
+name: P05 Fundamentals Inline State
+
+on:
+  push:
+    branches: [agent/p05-fundamentals-inline-state]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  lossless-speed:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 70
+    steps:
+      - name: Checkout P05 candidate
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: '${{ github.sha }}'
+          path: cand
+          fetch-depth: 5
+
+      - name: Checkout exact P03 control
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: e03466d02cc4214442e2ff82fb1a2f28b2d29186
+          path: base
+          fetch-depth: 1
+
+      - name: Checkout benchmark harness
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: leviathan/fundamentals-ultra-lab
+          path: harness
+          fetch-depth: 1
+
+      - name: Build P03 controls and P05 candidate
+        run: |
+          make -C base/src net
+          make -C base/src clean
+          make -C base/src -j2 ARCH=x86-64-avx2 build
+          cp base/src/stockfish base/src/control_a
+          cp base/src/stockfish base/src/control_b
+          cp base/src/nn-ab28990d4ea3.nnue cand/src/
+          make -C cand/src clean
+          make -C cand/src -j2 ARCH=x86-64-avx2 build
+          cat > active.json <<'EOF'
+          {"Threads":1,"Hash":64,"Leviathan Fundamentals":true,"Leviathan Fundamentals Authority":1,"Leviathan Quiet Overdrive":0,"Leviathan Risk":false,"Leviathan Policy":false,"Leviathan MetaSearch":false,"Leviathan Specialist":false,"Leviathan Atlas":false,"Leviathan Search DSL":false}
+          EOF
+
+      - name: Exact behavior and calibrated speed replication
+        run: |
+          python3 harness/tools/lossless_pair_benchmark.py \
+            --control-a base/src/control_a \
+            --control-b base/src/control_b \
+            --candidate cand/src/stockfish \
+            --options active.json \
+            --rounds 25 \
+            --output p05-inline-state.json | tee p05-inline-state.log
+
+      - name: Summarize
+        run: |
+          python3 - <<'PY'
+          import json
+          d=json.load(open('p05-inline-state.json')); sig=d['signatures']; r=d['results']; exact=True
+          for case in ('default','depth11','nodes50k'):
+              a=sig['control_a'][case]; c=sig['candidate'][case]
+              exact &= a['nodes']==c['nodes'] and a['behavior_sha256']==c['behavior_sha256']
+          c=r['candidate']; a=r['control_b']
+          out={'exact_behavior':exact,'aa_median':a['median_speedup'],'aa_ci':a['bootstrap_median_95pct_ci'],'candidate_median':c['median_speedup'],'candidate_geo':c['geometric_mean_speedup'],'candidate_ci':c['bootstrap_median_95pct_ci'],'faster_rounds':c['faster_rounds'],'rounds':c['rounds']}
+          open('p05-summary.json','w').write(json.dumps(out,indent=2)+'\n'); print(json.dumps(out,indent=2))
+          if not exact: raise SystemExit('BEHAVIOR_MISMATCH')
+          PY
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: p05-inline-state-${{ github.sha }}
+          path: |
+            p05-inline-state.json
+            p05-inline-state.log
+            p05-summary.json
+          retention-days: 30
