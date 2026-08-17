@@ -1,3 +1,4 @@
+# Rerun marker: pipefail-safe chunk selection
 name: Rewrite v4 Lc0 to Stockfish Bridge Smoke
 
 on:
@@ -24,7 +25,9 @@ jobs:
           set -euo pipefail
           tarfile="$RUNNER_TEMP/leviathan-training/lc0-small-real-shard-2020-07-13-0822/training-run3--20200713-0822.tar"
           mkdir -p "$RUNNER_TEMP/lc0-input"
-          tar -tf "$tarfile" | grep -E '\.gz$' | head -n 3 > "$RUNNER_TEMP/chunks.txt"
+          tar -tf "$tarfile" > "$RUNNER_TEMP/all-entries.txt"
+          grep -E '\.gz$' "$RUNNER_TEMP/all-entries.txt" > "$RUNNER_TEMP/gz-entries.txt"
+          sed -n '1,3p' "$RUNNER_TEMP/gz-entries.txt" > "$RUNNER_TEMP/chunks.txt"
           test "$(wc -l < "$RUNNER_TEMP/chunks.txt")" -eq 3
           while IFS= read -r f; do tar -xf "$tarfile" -C "$RUNNER_TEMP/lc0-input" "$f"; done < "$RUNNER_TEMP/chunks.txt"
           find "$RUNNER_TEMP/lc0-input" -type f -name '*.gz' -printf '%P %s bytes\n'
@@ -67,7 +70,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          rescorer=$(find "$RUNNER_TEMP/lc0/build" -type f -executable \( -name 'rescorer' -o -name '*rescore*' \) | head -n 1)
+          rescorer=$(find "$RUNNER_TEMP/lc0/build" -type f -executable \( -name 'rescorer' -o -name '*rescore*' \) -print -quit)
           test -n "$rescorer"
           mkdir -p "$RUNNER_TEMP/bridge"
           "$rescorer" rescore \
