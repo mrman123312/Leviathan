@@ -1,0 +1,100 @@
+name: Fundamentals Ultra P2 Shared Move Facts
+
+on:
+  push:
+    branches: [leviathan/fundamentals-ultra-lab]
+    paths: ['.github/workflows/fundamentals-ultra-p2-shared-move-facts.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  speed:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@v4
+        with: {ref: '${{ github.sha }}', path: lab}
+      - uses: actions/checkout@v4
+        with: {ref: leviathan/fundamentals-ultra-p01-qfrontier, path: cand}
+      - uses: actions/checkout@v4
+        with: {ref: leviathan/fundamentals-ultra-p01-qfrontier, path: base}
+
+      - name: Share immutable Fundamentals move facts across pruning and LMR
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          h=Path('cand/src/leviathan_fundamentals.h'); s=h.read_text()
+          anchor='''inline bool protected_scope_move(const Position& pos,\n                                 Move move,\n                                 Square prevSq,\n                                 bool capture,\n                                 bool givesCheck) {\n    if (!ready())\n        return false;\n\n    return givesCheck || move.type_of() == PROMOTION || advanced_pawn_move(pos, move)\n        || recapture(move, prevSq, capture);\n}\n'''
+          repl='''struct MoveFacts {\n    bool promotion;\n    bool advancedPawn;\n    bool recapture;\n};\n\ninline MoveFacts classify_move(const Position& pos, Move move, Square prevSq, bool capture) {\n    const bool promotion = move.type_of() == PROMOTION;\n    return {promotion, advanced_pawn_move(pos, move), recapture(move, prevSq, capture)};\n}\n\ninline bool protected_scope_move(const MoveFacts& facts, bool givesCheck) {\n    if (!ready())\n        return false;\n    return givesCheck || facts.promotion || facts.advancedPawn || facts.recapture;\n}\n'''
+          if s.count(anchor)!=1: raise SystemExit(f'protected_scope anchor count={s.count(anchor)}')
+          s=s.replace(anchor,repl,1)
+          old='''inline int lmr_adjustment(const Position& pos,\n                          Move move,\n                          Square prevSq,\n                          Depth depth,\n                          int moveCount,\n                          bool pvNode,\n                          bool capture,\n                          bool givesCheck) {'''
+          new='''inline int lmr_adjustment(const Position& pos,\n                          Move move,\n                          const MoveFacts& facts,\n                          Depth depth,\n                          int moveCount,\n                          bool pvNode,\n                          bool capture,\n                          bool givesCheck) {'''
+          if s.count(old)!=1: raise SystemExit('lmr signature anchor')
+          s=s.replace(old,new,1)
+          replacements={
+            'if (recapture(move, prevSq, capture))':'if (facts.recapture)',
+            'if (move.type_of() == PROMOTION || advanced_pawn_move(pos, move))':'if (facts.promotion || facts.advancedPawn)',
+            '&& !givesCheck && move.type_of() != PROMOTION && !advanced_pawn_move(pos, move)':'&& !givesCheck && !facts.promotion && !facts.advancedPawn'
+          }
+          for a,b in replacements.items():
+              c=s.count(a)
+              if c<1: raise SystemExit(f'missing lmr anchor {a!r}')
+              # First two strings also occur outside lmr; limit replacement to lmr block only below.
+          start=s.index('inline int lmr_adjustment('); end=s.index('\ninline int quiet_ordering_bonus',start)
+          f=s[start:end]
+          if f.count('if (recapture(move, prevSq, capture))')!=1: raise SystemExit('lmr recapture count')
+          f=f.replace('if (recapture(move, prevSq, capture))','if (facts.recapture)',1)
+          if f.count('if (move.type_of() == PROMOTION || advanced_pawn_move(pos, move))')!=1: raise SystemExit('lmr advanced count')
+          f=f.replace('if (move.type_of() == PROMOTION || advanced_pawn_move(pos, move))','if (facts.promotion || facts.advancedPawn)',1)
+          q='&& !givesCheck && move.type_of() != PROMOTION && !advanced_pawn_move(pos, move)'
+          if f.count(q)!=1: raise SystemExit('lmr quiet-overdrive fact count')
+          f=f.replace(q,'&& !givesCheck && !facts.promotion && !facts.advancedPawn',1)
+          s=s[:start]+f+s[end:]
+          h.write_text(s)
+
+          p=Path('cand/src/search.cpp'); s=p.read_text()
+          old='''        extension  = 0;\n        capture    = pos.capture_stage(move);\n        movedPiece = pos.moved_piece(move);\n        givesCheck = pos.gives_check(move);\n'''
+          new='''        extension  = 0;\n        capture    = pos.capture_stage(move);\n        movedPiece = pos.moved_piece(move);\n        givesCheck = pos.gives_check(move);\n\n        bool leviathanMoveFactsReady = false;\n        Leviathan::Fundamentals::MoveFacts leviathanMoveFacts{};\n'''
+          if s.count(old)!=1: raise SystemExit('move setup anchor')
+          s=s.replace(old,new,1)
+          old='''                const bool leviathanScopeProtected =\n                  Leviathan::Fundamentals::protected_scope_move(\n                    pos, move, prevSq, capture, givesCheck);'''
+          new='''                leviathanMoveFacts =\n                  Leviathan::Fundamentals::classify_move(pos, move, prevSq, capture);\n                leviathanMoveFactsReady = true;\n                const bool leviathanScopeProtected =\n                  Leviathan::Fundamentals::protected_scope_move(leviathanMoveFacts, givesCheck);'''
+          if s.count(old)!=1: raise SystemExit('scope call anchor')
+          s=s.replace(old,new,1)
+          old='''        r += Leviathan::Fundamentals::lmr_adjustment(\n          pos, move, prevSq, depth, moveCount, PvNode, capture, givesCheck);'''
+          new='''        if (!leviathanMoveFactsReady)\n            leviathanMoveFacts =\n              Leviathan::Fundamentals::classify_move(pos, move, prevSq, capture);\n        r += Leviathan::Fundamentals::lmr_adjustment(\n          pos, move, leviathanMoveFacts, depth, moveCount, PvNode, capture, givesCheck);'''
+          if s.count(old)!=1: raise SystemExit('lmr call anchor')
+          s=s.replace(old,new,1)
+          p.write_text(s)
+          PY
+          git -C cand diff --check
+          git -C cand diff -- src/search.cpp src/leviathan_fundamentals.h | tee p2.patch
+
+      - name: Build A/A controls and candidate
+        run: |
+          make -C base/src net && make -C base/src clean && make -C base/src -j2 ARCH=x86-64-avx2 build
+          cp base/src/stockfish base/src/control_a
+          cp base/src/stockfish base/src/control_b
+          cp base/src/nn-ab28990d4ea3.nnue cand/src/
+          make -C cand/src clean && make -C cand/src -j2 ARCH=x86-64-avx2 build
+          cat > active.json <<'EOF'
+          {"Threads":1,"Hash":64,"Leviathan Fundamentals":true,"Leviathan Fundamentals Authority":1,"Leviathan Quiet Overdrive":0,"Leviathan Risk":false,"Leviathan Policy":false,"Leviathan MetaSearch":false,"Leviathan Specialist":false,"Leviathan Atlas":false,"Leviathan Search DSL":false}
+          EOF
+
+      - name: Exact-behavior 31-round ABBA speed replication
+        run: |
+          python3 lab/tools/lossless_pair_benchmark.py --control-a base/src/control_a --control-b base/src/control_b --candidate cand/src/stockfish --options active.json --rounds 31 --output p2-speed.json | tee p2-speed.log
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ultra-p2-shared-move-facts
+          path: |
+            p2-speed.json
+            p2-speed.log
+            p2.patch
+          retention-days: 30
