@@ -1,0 +1,173 @@
+name: Fundamentals Ultra Search-Policy Router Dataset
+
+on:
+  push:
+    branches: [leviathan/fundamentals-ultra-lab]
+    paths: ['.github/workflows/fundamentals-ultra-search-policy-router-dataset.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  corpus:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with: {ref: '${{ github.sha }}', path: lab}
+      - name: Build current Stockfish and generate 480 mixed-horizon positions
+        run: |
+          git clone -q https://github.com/official-stockfish/Stockfish.git "$RUNNER_TEMP/sf"
+          git -C "$RUNNER_TEMP/sf" checkout -q 5062aee519a1ba262d472d8ab139851ced56573e
+          make -C "$RUNNER_TEMP/sf/src" -j2 ARCH=x86-64-avx2 build
+          python3 -m pip install --disable-pip-version-check chess==1.11.2
+          python3 lab/tools/generate_balanced_openings.py --stockfish "$RUNNER_TEMP/sf/src/stockfish" --output p12.json --count 160 --plies 12 --seed 1123581321 --max-abs-cp 140
+          python3 lab/tools/generate_balanced_openings.py --stockfish "$RUNNER_TEMP/sf/src/stockfish" --output p20.json --count 160 --plies 20 --seed 1123581481 --max-abs-cp 140
+          python3 lab/tools/generate_balanced_openings.py --stockfish "$RUNNER_TEMP/sf/src/stockfish" --output p28.json --count 160 --plies 28 --seed 1123581641 --max-abs-cp 140
+          python3 - <<'PY'
+          import json
+          pools=[json.load(open(x)) for x in ('p12.json','p20.json','p28.json')]
+          rows=[]
+          for horizon,pool in zip((12,20,28),pools):
+              for x in pool:
+                  x=dict(x);x['router_horizon']=horizon;rows.append(x)
+          assert len(rows)==480
+          # Deterministic interleaving then eight independent 60-position shards.
+          rows=sorted(rows,key=lambda x:(x['router_horizon'],x['final_fen']))
+          mixed=[]
+          for i in range(160):
+              mixed += [rows[i],rows[160+i],rows[320+i]]
+          for s in range(8):
+              part=mixed[s*60:(s+1)*60]
+              assert len(part)==60
+              open(f'shard{s}.json','w').write(json.dumps(part,indent=2)+'\n')
+          PY
+          sha256sum shard*.json > corpus.sha256
+      - uses: actions/upload-artifact@v4
+        with:
+          name: policy-router-corpus
+          path: |
+            shard*.json
+            corpus.sha256
+          retention-days: 30
+
+  label:
+    needs: corpus
+    runs-on: ubuntu-22.04
+    timeout-minutes: 150
+    strategy:
+      fail-fast: false
+      matrix: {shard: [0,1,2,3,4,5,6,7]}
+    steps:
+      - uses: actions/checkout@v4
+        with: {ref: '${{ github.sha }}', path: lab}
+      - uses: actions/checkout@v4
+        with: {ref: leviathan/fundamentals-ultra-p01-qfrontier, path: p01}
+      - uses: actions/download-artifact@v4
+        with: {name: policy-router-corpus, path: corpus}
+      - name: Build P01 and pinned Stockfish baseline/oracle
+        run: |
+          make -C p01/src net && make -C p01/src clean && make -C p01/src -j2 ARCH=x86-64-avx2 build
+          git clone -q https://github.com/official-stockfish/Stockfish.git "$RUNNER_TEMP/sf"
+          git -C "$RUNNER_TEMP/sf" checkout -q 5062aee519a1ba262d472d8ab139851ced56573e
+          make -C "$RUNNER_TEMP/sf/src" -j2 ARCH=x86-64-avx2 build
+          python3 -m pip install --disable-pip-version-check chess==1.11.2
+      - name: Label relative P01-vs-baseline search-policy errors
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY' | tee label.log
+          import chess,chess.engine,json,os,statistics
+          shard=${{ matrix.shard }}
+          rows=json.load(open(f'corpus/shard{shard}.json'))
+          KOPT={'Threads':1,'Hash':64,'Leviathan Fundamentals':True,'Leviathan Fundamentals Authority':1,'Leviathan Quiet Overdrive':0}
+          SOPT={'Threads':1,'Hash':64}
+          def eng(path,opt):
+              e=chess.engine.SimpleEngine.popen_uci(path); e.configure(opt); return e
+          # Independent processes prevent TT/history contamination between grades.
+          K12=eng('p01/src/stockfish',KOPT);K40=eng('p01/src/stockfish',KOPT);K80=eng('p01/src/stockfish',KOPT)
+          B80=eng(os.environ['RUNNER_TEMP']+'/sf/src/stockfish',SOPT)
+          OB=eng(os.environ['RUNNER_TEMP']+'/sf/src/stockfish',SOPT);OP=eng(os.environ['RUNNER_TEMP']+'/sf/src/stockfish',SOPT);OS=eng(os.environ['RUNNER_TEMP']+'/sf/src/stockfish',SOPT)
+          out=[]
+          try:
+            for i,x in enumerate(rows):
+              b=chess.Board(x['final_fen']); tok=(shard,i,b.fen())
+              infos=[]
+              for E,n,tag in ((K12,12000,'12'),(K40,40000,'40'),(K80,80000,'80')):
+                  z=E.analyse(b,chess.engine.Limit(nodes=n),game=(tag,tok)); infos.append(z)
+              m12,m40,m80=[z['pv'][0] for z in infos]
+              s12,s40,s80=[int(z['score'].pov(b.turn).score(mate_score=100000) or 0) for z in infos]
+              bz=B80.analyse(b,chess.engine.Limit(nodes=80000),game=('b80',tok)); bm=bz['pv'][0]
+              # Only pay deep grading when the policies disagree; identical move => relative delta 0.
+              if bm==m80:
+                  oracle_move=m80; pscore=bscore=0; relative=0; oracle_score=0
+              else:
+                  oz=OB.analyse(b,chess.engine.Limit(nodes=800000),game=('ob',tok));oracle_move=oz['pv'][0];oracle_score=int(oz['score'].pov(b.turn).score(mate_score=100000) or 0)
+                  pz=OP.analyse(b,chess.engine.Limit(nodes=800000),root_moves=[m80],game=('op',tok));pscore=int(pz['score'].pov(b.turn).score(mate_score=100000) or 0)
+                  sz=OS.analyse(b,chess.engine.Limit(nodes=800000),root_moves=[bm],game=('os',tok));bscore=int(sz['score'].pov(b.turn).score(mate_score=100000) or 0)
+                  relative=bscore-pscore # >0 means baseline policy produced better move.
+              # Cheap features available after P01's normal trajectory, no baseline-search features.
+              piece_count=len(b.piece_map()); pawns=len(b.pieces(chess.PAWN,chess.WHITE))+len(b.pieces(chess.PAWN,chess.BLACK))
+              nonpawn=sum(len(b.pieces(pt,c))*{2:3,3:3,4:5,5:9,6:0}[pt] for c in (chess.WHITE,chess.BLACK) for pt in range(2,7))
+              legal=b.legal_moves.count(); rights=sum(bool(b.has_kingside_castling_rights(c))+bool(b.has_queenside_castling_rights(c)) for c in (chess.WHITE,chess.BLACK))
+              feat={'horizon':x['router_horizon'],'piece_count':piece_count,'pawns':pawns,'nonpawn_material':nonpawn,'legal_moves':legal,'in_check':int(b.is_check()),'castling_rights':rights,'halfmove':b.halfmove_clock,
+                    'score12':s12,'score40':s40,'score80':s80,'abs_score80':abs(s80),'drift_12_40':abs(s40-s12),'drift_40_80':abs(s80-s40),'stable12_40':int(m12==m40),'stable40_80':int(m40==m80),'stable_all':int(m12==m40==m80)}
+              r={'shard':shard,'i':i,'fen':b.fen(),'p01_12':m12.uci(),'p01_40':m40.uci(),'p01_80':m80.uci(),'baseline_80':bm.uci(),'oracle_move':oracle_move.uci(),'relative_cp_baseline_minus_p01':relative,'baseline_better_ge8':int(relative>=8),'p01_better_ge8':int(relative<=-8),'features':feat}
+              out.append(r); print(f"s{shard} {i+1:02d}/60 disagree={bm!=m80} rel={relative:+d} {m80.uci()} vs {bm.uci()}",flush=True)
+          finally:
+            for E in (K12,K40,K80,B80,OB,OP,OS):E.quit()
+          json.dump({'schema':'LV_POLICY_ROUTER_LABELS_V1','rows':out},open(f'labels-{shard}.json','w'),indent=2)
+          PY
+          test -s labels-${{ matrix.shard }}.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: 'policy-router-labels-${{ matrix.shard }}'
+          path: |
+            labels-${{ matrix.shard }}.json
+            label.log
+          retention-days: 30
+
+  fit:
+    needs: label
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/download-artifact@v4
+        with: {pattern: 'policy-router-labels-*', path: labels}
+      - name: Out-of-fold router falsification
+        run: |
+          python3 -m pip install --disable-pip-version-check numpy scikit-learn
+          python3 - <<'PY' | tee router-fit.log
+          import glob,json,numpy as np
+          from sklearn.preprocessing import StandardScaler
+          from sklearn.linear_model import LogisticRegression
+          from sklearn.pipeline import make_pipeline
+          from sklearn.metrics import roc_auc_score
+          R=[]
+          for p in glob.glob('labels/**/labels-*.json',recursive=True):R+=json.load(open(p))['rows']
+          assert len(R)==480,len(R)
+          keys=['horizon','piece_count','pawns','nonpawn_material','legal_moves','in_check','castling_rights','halfmove','score12','score40','score80','abs_score80','drift_12_40','drift_40_80','stable12_40','stable40_80','stable_all']
+          X=np.array([[r['features'][k] for k in keys] for r in R],float); y=np.array([r['baseline_better_ge8'] for r in R],int)
+          # Leave-one-shard-out: prediction must transfer to unseen generated shard.
+          prob=np.zeros(len(R));
+          for s in range(8):
+              te=np.array([r['shard']==s for r in R]); tr=~te
+              if len(set(y[tr]))<2: continue
+              m=make_pipeline(StandardScaler(),LogisticRegression(C=.3,max_iter=300,class_weight='balanced',random_state=8910));m.fit(X[tr],y[tr]);prob[te]=m.predict_proba(X[te])[:,1]
+          positives=int(y.sum()); auc=roc_auc_score(y,prob) if positives and positives<len(y) else None
+          order=np.argsort(-prob); top20=order[:int(.2*len(R))]; capture=float(y[top20].sum()/positives) if positives else None
+          # Counterfactual upper bound: if we could route top20% perfectly to baseline policy using labels, how much relative cp would be recovered?
+          rel=np.array([r['relative_cp_baseline_minus_p01'] for r in R],float)
+          top_gain=float(np.maximum(rel[top20],0).sum()/len(R)); top_harm=float(np.maximum(-rel[top20],0).sum()/len(R))
+          validity=positives>=20
+          passed=bool(validity and auc is not None and auc>=.65 and capture>=.50 and top_gain>=2*max(.01,top_harm))
+          out={'schema':'LV_POLICY_ROUTER_FIT_V1','positions':len(R),'feature_keys':keys,'baseline_better_ge8':positives,'p01_better_ge8':sum(r['p01_better_ge8'] for r in R),'disagreements':sum(r['p01_80']!=r['baseline_80'] for r in R),'oof_auc':auc,'top20_positive_capture':capture,'top20_oracle_gain_cp_per_all_positions':top_gain,'top20_oracle_harm_cp_per_all_positions':top_harm,'validity_min20_positive':validity,'router_screen_pass':passed,'rule':'all thresholds fixed before labels; leave-one-shard-out; no baseline-search features in model'}
+          json.dump(out,open('router-fit.json','w'),indent=2);print(json.dumps(out,indent=2))
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: policy-router-fit
+          path: |
+            router-fit.json
+            router-fit.log
+          retention-days: 30
