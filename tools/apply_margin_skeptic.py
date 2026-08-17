@@ -1,22 +1,16 @@
 #!/usr/bin/env python3
 from pathlib import Path
 
-# Backport only the factual helper predicates required by Margin Skeptic.
+# Phase-fix already has moving_piece(). Add only the factual post-move tension
+# predicate needed by Margin Skeptic; do not import the cumulative v5 header.
 h=Path('src/leviathan_fundamentals.h');s=h.read_text()
 anchor='''inline bool zeroing_quiet(const Position& pos, Move move, bool capture) {
-    return capture || (move.is_ok() && type_of(pos.moved_piece(move)) == PAWN);
+    return capture || pawn_move(pos, move);
 }
 
 inline bool protected_scope_move'''
 repl='''inline bool zeroing_quiet(const Position& pos, Move move, bool capture) {
-    return capture || (move.is_ok() && type_of(pos.moved_piece(move)) == PAWN);
-}
-
-inline Piece margin_moving_piece(const Position& pos, Move move) {
-    if (!move.is_ok())
-        return NO_PIECE;
-    Piece pc = pos.piece_on(move.from_sq());
-    return pc != NO_PIECE ? pc : pos.piece_on(move.to_sq());
+    return capture || pawn_move(pos, move);
 }
 
 inline bool quiet_tactical_tension(const Position& pos,
@@ -25,7 +19,7 @@ inline bool quiet_tactical_tension(const Position& pos,
                                    bool givesCheck) {
     if (capture || givesCheck)
         return false;
-    Piece pc = margin_moving_piece(pos, move);
+    Piece pc = moving_piece(pos, move);
     if (pc == NO_PIECE || type_of(pc) == PAWN || type_of(pc) == KING)
         return false;
     Color us = color_of(pc);
@@ -69,4 +63,4 @@ repl='''                // Post LMR continuation history updates
 if s.count(anchor)!=1:
     raise SystemExit(f'search anchor count={s.count(anchor)}')
 p.write_text(s.replace(anchor,repl,1))
-print('Margin Skeptic + minimal helper dependencies applied')
+print('Margin Skeptic + minimal phase-fix helper applied')
