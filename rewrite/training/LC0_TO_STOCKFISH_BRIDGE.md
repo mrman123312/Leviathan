@@ -9,11 +9,18 @@ The bridge must not destroy the original Lc0 policy/value/search metadata and mu
 ## Pinned components
 
 - Lc0 training-data parser/tooling: `LeelaChessZero/lczero-training@7c5d756ea6bb3531fb14a9b4df231577b1aa1081`
-- Lc0 tablebase rescorer: `Tilps/lc0@a69c7fb1f2aefce9a8f22e6fa867e466c1d3687e` (`rescore_tb` lineage, GPL-3.0)
+- preferred current Lc0 rescorer: `LeelaChessZero/lc0@d8ce48258c39d331c119f8c8729374ceb3df8409` (GPL-3.0-or-later)
+- historical rescorer lineage: `Tilps/lc0@a69c7fb1f2aefce9a8f22e6fa867e466c1d3687e` (GPL-3.0)
 - Stockfish training-data converter: `official-stockfish/Stockfish@9a4c7cf4e311f8d9526b79295b80c4d0464c07cf` (`tools` lineage, GPL-3.0)
 - NNUE trainer/reader/writer: `official-stockfish/nnue-pytorch@9f72946529c4187d3679014036cd22c3be419716` (GPL-3.0)
 
 The unlicensed `linrock/lc0-data-converter` repository is used only as a methodology reference. Its scripts are **not** imported. It documents a practical sequence built from the GPL tools above.
+
+## Native parse path
+
+The official `lczero-training` repository builds a `dump_chunk` executable. Leviathan uses this as the first independent proof that a downloaded archive contains valid native training records before any transformation occurs.
+
+The native source view keeps the upstream training information rather than immediately crushing it into Stockfish centipawns.
 
 ## Data path
 
@@ -24,7 +31,7 @@ Lc0 ODbL/DbCL tar shard
         │                policy / WDL / best-Q / moves-left / search metadata
         │
         ▼
-pinned Lc0 rescorer
+pinned official Lc0 rescorer
         │
         ▼
 Stockfish NNUE .plain
@@ -43,6 +50,14 @@ pinned nnue-pytorch loader/trainer
 
 The original source identity follows the record through every transformation.
 
+## Rescorer dependency discovered during integration
+
+The current official Lc0 rescorer is not a generic format-only converter. Its `RunRescorer()` startup contract requires Syzygy initialization to succeed with at least 3-piece coverage before it processes files, even if NNUE `.plain` output is the desired artifact.
+
+Leviathan therefore does **not** bypass or patch out this upstream requirement merely to make a smoke test pass. Before the full `.plain` conversion gate is promoted, the exact minimal Syzygy dependency must itself be pinned and provenance-verified.
+
+This is separate from native Lc0 parsing, which does not require tablebases.
+
 ## Reference conversion contract
 
 The pinned Stockfish tools documentation defines:
@@ -53,7 +68,7 @@ stockfish convert from_path to_path [append] [validate]
 
 and supports `.plain`, `.bin`, and `.binpack` as input/output formats. Leviathan should always use `validate` on new converted shards.
 
-The public conversion methodology uses Lc0's rescorer to export NNUE `.plain` with best-move and best-score information, optionally tablebase-rescoring/deblundering, then filters unusable records and asks Stockfish to convert/validate the result.
+The historical public conversion methodology uses an Lc0 rescorer to export NNUE `.plain` with best-move and best-score information, optionally tablebase-rescoring/deblundering, then filters unusable records and asks Stockfish to convert/validate the result.
 
 ## Leviathan modifications to the historical workflow
 
@@ -64,7 +79,7 @@ Each converted shard must record:
 - source tar SHA-256;
 - source archive/chunk/game or sequence identity where available;
 - rescorer commit;
-- Syzygy set/hash or explicit `none`;
+- Syzygy set/hash;
 - deblunder configuration;
 - filter implementation + commit + parameters;
 - Stockfish converter commit;
@@ -119,11 +134,12 @@ A shard is eligible for training only if:
 1. source hash matches `DATA_SOURCE_LOCKS.json`;
 2. extraction is deterministic;
 3. native Lc0 parse succeeds;
-4. conversion completes with Stockfish `validate`;
-5. output hash/count/provenance are recorded;
-6. train/validation/test split group was assigned from source ancestry **before** relabeling;
-7. no source group appears in more than one split;
-8. a sample decode confirms the resulting positions agree with the native source position representation;
-9. license notices/ODbL attribution are preserved.
+4. required Syzygy files are pinned and verified;
+5. conversion completes with Stockfish `validate`;
+6. output hash/count/provenance are recorded;
+7. train/validation/test split group was assigned from source ancestry **before** relabeling;
+8. no source group appears in more than one split;
+9. a sample decode confirms the resulting positions agree with the native source position representation;
+10. license notices/ODbL attribution are preserved.
 
 Only after those gates should the shard enter model experiments.
