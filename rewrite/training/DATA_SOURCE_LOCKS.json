@@ -2,7 +2,25 @@
   "schema_version": 1,
   "sources": [
     {
-      "id": "lc0-hourly-sample-2020-07-11-2017",
+      "id": "lc0-small-real-shard-2020-07-13-0822",
+      "dataset_id": "lc0-public-selfplay-archive",
+      "kind": "archive_shard",
+      "fetch_url": "https://storage.lczero.org/files/training_data/training-run3--20200713-0822.tar",
+      "source_base": "https://storage.lczero.org/files/training_data/",
+      "documented_by": {
+        "repository": "LeelaChessZero/lczero-training",
+        "revision": "7c5d756ea6bb3531fb14a9b4df231577b1aa1081",
+        "path": "README.md + official storage index"
+      },
+      "license": "ODbL-1.0; individual database contents DbCL-1.0",
+      "expected_bytes": 15452160,
+      "expected_sha256": null,
+      "default_max_bytes": 33554432,
+      "verification": "Verify official-index byte length, record SHA-256 on materialization, then promote SHA-256 into this lock.",
+      "purpose": "Small real Lc0 training-data shard for format, extraction and dual-view pipeline validation."
+    },
+    {
+      "id": "lc0-upstream-readme-shard-2020-07-11-2017",
       "dataset_id": "lc0-public-selfplay-archive",
       "kind": "archive_shard",
       "fetch_url": "https://storage.lczero.org/files/training_data/training-run1--20200711-2017.tar",
@@ -12,12 +30,12 @@
         "revision": "7c5d756ea6bb3531fb14a9b4df231577b1aa1081",
         "path": "README.md"
       },
-      "license": "ODbL-1.0; individual database contents DbCL-1.0 per Lc0 open-data notice",
-      "expected_bytes": null,
+      "license": "ODbL-1.0; individual database contents DbCL-1.0",
+      "expected_bytes": 351375360,
       "expected_sha256": null,
       "default_max_bytes": 536870912,
-      "verification": "Record HTTP metadata and SHA-256 on first materialization; promote observed hash into a future immutable shard lock before production training.",
-      "purpose": "Official Lc0 hourly training-data sample named in upstream README."
+      "verification": "Official README names this shard and official index reports its byte length. Record SHA-256 before production use.",
+      "purpose": "Upstream-documented reference shard; not needed for the first smoke materialization."
     },
     {
       "id": "stockfish-nnue-pytorch-small-binpack",
