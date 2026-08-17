@@ -12,7 +12,7 @@ Evidence at freeze:
 - 100-game fixed-time vs current official Stockfish `5062aee519a1ba262d472d8ab139851ced56573e`: 50.0% (7/86/7).
 - 100-game equal-node vs Fundamentals v2.1: 50.0% (4/92/4).
 - 100-game fixed-time vs Fundamentals v2.1: 50.5% (7/87/6).
-- 50-position old deep-oracle panel: 0.54cp mean regret / 78% oracle move agreement vs 1.02cp / 66% for v2.1.
+- 50-position old deep-oracle panel: 0.54cp mean regret / 78% oracle move agreement vs 1.02cp / 66% for v2.1. This historical oracle result is now provisional because the older grader reused oracle state.
 
 This is a parity launchpad, not proof of superiority.
 
@@ -30,6 +30,17 @@ Promotion normally requires:
 7. direct current-Stockfish confirmation for production strength claims;
 8. 1/2/4-thread check for a promoted playing stack;
 9. rollback to the protected baseline on regression.
+
+## Measurement integrity
+
+`tools/oracle_regret.py` now emits `LV_ISOLATED_ROOT_REGRET_V2` and uses separate oracle processes for root selection, best-move grading, candidate grading, and baseline grading with root-move restriction.
+
+Reason: the earlier grader reused one Stockfish oracle across selection and grading, allowing TT/history state and search order to contaminate nominally independent grades.
+
+Policy:
+- game results remain valid;
+- old regret numbers are historical/provisional unless reproduced under V2;
+- new promotion claims must use the isolated grader or an equivalently strict replacement.
 
 ## Strong negatives — do not silently resurrect
 
@@ -55,6 +66,15 @@ Historical screen: 41.25% equal-node / 47.5% fixed-time.
 Status: REJECTED AS IMPLEMENTED.
 Threat Sentinel's 52.5% fixed-time screen was contradicted by 43.75% equal-node. Threat-LMR remained below parity and expanded nodes heavily.
 Lesson: a flashy fixed-time result without pure-search support is not promotion evidence.
+
+### Broad LMP visibility / history exemptions
+Status: REJECTED AS A PROMOTION FAMILY.
+Fresh 60-game screens vs Ultra-v0:
+- scope-visible: 45.83% equal-node, 52.5% fixed-time;
+- history4k: 51.67% equal-node, 49.17% fixed-time;
+- history16k: 47.5% equal-node, 47.5% fixed-time; isolated-oracle mean improvement only +0.07cp with mixed tails.
+Lesson: merely keeping more quiets visible because they are in a hand-written scope or have high history is not reliable evidence. The scope-visible fixed-time flash reproduces the same compute-path/noise failure signature seen in Threat Sentinel.
+Harvest: protected quiets need calibrated error evidence, not generic exemptions.
 
 ### Alpha-beta root committees / portfolios
 Status: REJECTED.
@@ -101,25 +121,48 @@ By position horizon:
 - 14-ply: 9-6, -0.44cp mean, 1 rescue >=20 / 3 harms >=20.
 - 22-ply: 8-2, +16.5cp mean, 5 rescues >=20 / 0 harms >=20.
 
-Interpretation: universal cap5 is not proven. Frontier width appears to interact with position maturity / irreversible tactical state. Active experiments test phase-conditioned and q-depth-conditioned frontiers.
+Interpretation: universal cap5 is not proven. Frontier width appears to interact with position maturity / irreversible tactical state. Active experiments test phase-conditioned, evidence-conditioned, frontier-debt, and q-depth-conditioned frontiers.
+
+### Evidence96 uncapped frontier
+Status: PROVISIONAL; FRESH HARDENED CONFIRMATION ACTIVE.
+Original 60-game screen vs Ultra-v0:
+- 51.67% equal-node (3/56/1)
+- 51.67% fixed-time (7/48/5)
+- old-oracle delta was only +0.07cp and is not promotion evidence.
+Mechanism: after the first four qsearch captures, additional captures are admitted only when their crude capture ceiling remains at least `alpha + 96`, replacing the hard ordinal frontier with an evidence-conditioned frontier.
+Lesson so far: unlike several rejected families, the signal was symmetric across equal-node and fixed-time; magnitude is too small to promote without fresh isolated-oracle replication.
 
 ### Preserved adversarial witness
 `experiments/regressions/qsearch_frontier_tail.json`
 
 QF-T01 remains a provisional witness until regraded by the hardened isolated oracle. It is failure memory even if cap5 itself is rejected.
 
-## Surviving lossless-speed lane
+## Promoted lossless-speed lane
 
 ### P0+P1 dead-organ fast paths
-Status: ACTIVE CONFIRMATION.
-Historical strict replication of parent composition showed ~+3.9% median speed with exact behavior transcripts and calibrated A/A. P3's incremental effect was only ~+0.2% and did not earn complexity.
+Status: PROMOTED AS LOSSLESS INFRASTRUCTURE, NOT AS A PER-NODE CHESS CLAIM.
 
-Current Ultra-kernel run has already passed:
-- compile;
-- three normalized exact-behavior gates;
-- 100-game equal-node identity stage;
-- 100-game fixed-time stage.
-Direct current-Stockfish and regret confirmation remain gating evidence.
+Materialized successor branch: `leviathan/fundamentals-ultra-p01-qfrontier@3404fa2ea9b4fe75236e2584be9da3416e646ec2`.
+Source delta: `ae6f326512bd418c30c7bf9919f9546866619a57`.
+
+Exact-behavior gates against Ultra-v0 all match:
+- default: 3,130,023 nodes and identical normalized transcript hash;
+- depth11: 790,195 nodes and identical normalized transcript hash;
+- nodes50k: 2,451,456 nodes and identical normalized transcript hash.
+
+30-block ABBA speed replication on Ultra-v0:
+- identical 1,767,725-node search behavior and transcript hash in every block;
+- candidate faster in 30/30 blocks;
+- geometric mean speedup +3.9308%;
+- approximate 95% interval +3.4142% to +4.4499%;
+- worst block still +1.26%.
+
+Fresh 100-game confirmation:
+- equal-node vs Ultra-v0: 50.0% (7/86/7); every opening pair netted exactly 0.5 because search behavior is identical;
+- fixed-time vs Ultra-v0: 53.0% (12/82/6), naive +20.9 Elo; pair-bootstrap score interval approximately 49.5%-56.5%, so the Elo magnitude is not treated as proven;
+- fixed-time vs current Stockfish: 49.5% (4/91/5).
+
+Causal conclusion: P0+P1 buys more of the same chess per second. The speed claim is strong; the 53% game sample is supporting transfer evidence, not a standalone Elo proof.
 
 ### Active Fundamentals classification fast path
 Status: TESTING.
@@ -132,7 +175,9 @@ Ultra-v0 vs same-thread current Stockfish, 60 games / 150ms per move:
 - T2: 47.5% (1/55/4)
 - T4: 50.0% (3/54/3)
 
-No convincing strength scaling regression from this small sample, but Ultra searched consistently fewer nodes than Stockfish at the same wall time (~7-8% deficit across T1/T2/T4). This is an active throughput problem and motivates lossless-speed work.
+No convincing strength scaling regression from this small sample, but Ultra-v0 searched consistently fewer nodes than Stockfish at the same wall time (~7-8% deficit across T1/T2/T4).
+
+The promoted P0+P1 lane recovers about half of that measured throughput deficit without changing search decisions. A direct 100k-node Ultra-P01 vs current Stockfish duel is active to separate remaining per-node search quality from throughput.
 
 ## Representation frontier
 
@@ -150,14 +195,29 @@ Question: can a one-node independent policy proposal identify deep-oracle moves 
 If no, kill the route before expensive training.
 If yes, next prototype is not full Lc0-in-search; it is a cheap auxiliary policy/search-error head that changes node allocation while preserving Stockfish's scalar NNUE as the value backbone.
 
+### Search Error Atlas v0
+Status: PROVISIONAL MOONSHOT / DATA EXPERIMENT; NO PLAYING-STRENGTH CLAIM.
+
+Hypothesis: Stockfish-style search contains observable pre-error telemetry. If shallow search trajectories can prospectively predict where a 100k-node move has >=15cp or >=30cp deep-oracle regret, a future controller could move verification budget toward likely prediction errors instead of globally widening search.
+
+Screen features intentionally use information obtainable from search trajectory / board state: move stability across 12k/40k/100k nodes, score drift, early top-two gap, depth/seldepth, branching, game ply, material, check state, and position complexity proxies.
+
+The screen uses out-of-fold logistic predictions and compares them against simple one-feature baselines. A pass requires AUC >=0.70, >=0.05 AUC lift over the best simple baseline, >=60% of positive errors concentrated in the top-risk quartile, and at least 2x mean regret in that quartile. A pass earns only a fully fresh prospective holdout; it does not earn integration.
+
+Long-range generator if validated: each expensive heuristic shortcut should either return a proof or leave behind calibrated evidence about its own prediction error. This could unify qsearch frontier, LMP/LMR, null move, and ProbCut under a learned verification-budget controller rather than independent hand-tuned patches.
+
 ## Active structural experiments
 
-- phase-conditioned qsearch frontier (cap4 early, cap5 only in mature states)
+- phase-conditioned qsearch frontier (clean predeclared holdout plus separate exploratory grid; the grid currently has materializer failures and receives no evidence credit)
+- frontier-debt-conditioned fifth capture
 - restored qsearch local depth (`qPly`) as a lost selectivity variable
-- uncapped evidence-only frontier
+- uncapped evidence-only frontier / Evidence96 hardened confirmation
 - cheap skipped-frontier bound carry
-- LMP protected-scope visibility / history-conditioned LMP
+- ProbCut paid-evidence near-miss memory
+- failed-null tempo-fragility memory
 - Q-frontier cap5 fresh finalists
+- Lc0 policy complementarity
+- Search Error Atlas v0
 
 Do not hybridize these merely because they are live. Only survivors may compose.
 
