@@ -12,8 +12,6 @@ void SearchEngine::clear(){
 
 bool SearchEngine::time_up(){
     if(!use_deadline_) return false;
-    // Check often enough that a time-bounded search cannot substantially
-    // overshoot its UCI contract, while avoiding a clock read at every node.
     if((nodes_ & 255ULL) != 0) return false;
     if(std::chrono::steady_clock::now() >= deadline_){ stopped_=true; return true; }
     return false;
@@ -25,16 +23,33 @@ bool SearchEngine::repeated(uint64_t key) const {
     return false;
 }
 
+bool SearchEngine::history_sensitive(const Position& p) const {
+    // Ordinary positions should share TT work by board identity. We only pay for
+    // a trajectory shadow when the current board already occurred in the
+    // reversible window, or when the 50-move boundary is close enough to matter.
+    if(p.halfmove_clock() >= 80) return true;
+    const size_t horizon = std::min<size_t>(history_.size(), static_cast<size_t>(std::max(0, p.halfmove_clock()) + 1));
+    const size_t begin = history_.size() - horizon;
+    const uint64_t key = p.key();
+    int seen=0;
+    for(size_t i=begin;i<history_.size();++i)
+        if(history_[i]==key && ++seen>=2) return true;
+    return false;
+}
+
 uint64_t SearchEngine::context_key(const Position& p) const {
-    uint64_t h = p.key() ^ 0x9E3779B97F4A7C15ULL ^ (uint64_t(p.halfmove_clock()) * 0xD6E8FEB86659FD93ULL);
+    const uint64_t base = p.key();
+    if(!history_sensitive(p)) return base;
+
+    uint64_t h = base ^ 0x9E3779B97F4A7C15ULL ^ (uint64_t(p.halfmove_clock()) * 0xD6E8FEB86659FD93ULL);
     const size_t horizon = std::min<size_t>(history_.size(), static_cast<size_t>(std::max(0, p.halfmove_clock()) + 1));
     const size_t begin = history_.size() - horizon;
     for(size_t i=begin;i<history_.size();++i){
-        uint64_t x=history_[i] + 0x9E3779B97F4A7C15ULL + (uint64_t(i-begin)<<1);
-        x ^= x >> 30; x *= 0xBF58476D1CE4E5B9ULL;
-        x ^= x >> 27; x *= 0x94D049BB133111EBULL;
-        x ^= x >> 31;
-        h ^= x + (h<<6) + (h>>2);
+        uint64_t x=history_[i]+0x9E3779B97F4A7C15ULL+(uint64_t(i-begin)<<1);
+        x^=x>>30; x*=0xBF58476D1CE4E5B9ULL;
+        x^=x>>27; x*=0x94D049BB133111EBULL;
+        x^=x>>31;
+        h^=x+(h<<6)+(h>>2);
     }
     return h;
 }
@@ -128,15 +143,14 @@ int SearchEngine::negamax(const Position& p,int depth,int alpha,int beta,int ply
 
     const int originalAlpha=alpha;
     Move ttMove{};
-    auto it=tt_.find(key);
-    if(it!=tt_.end() && it->second.key==key){
-        const TTEntry& e=it->second;
-        ttMove=e.best;
-        const int ttScore=score_from_tt(e.score,ply);
-        if(e.depth>=depth){
-            if(e.bound==Bound::Exact) return ttScore;
-            if(e.bound==Bound::Lower && ttScore>=beta) return ttScore;
-            if(e.bound==Bound::Upper && ttScore<=alpha) return ttScore;
+    if(const TTEntry* e=tt_.probe(key)){
+        ++tt_hits_;
+        ttMove=e->best;
+        const int ttScore=score_from_tt(e->score,ply);
+        if(e->depth>=depth){
+            if(e->bound==Bound::Exact) return ttScore;
+            if(e->bound==Bound::Lower && ttScore>=beta) return ttScore;
+            if(e->bound==Bound::Upper && ttScore<=alpha) return ttScore;
         }
     }
 
@@ -183,16 +197,28 @@ int SearchEngine::negamax(const Position& p,int depth,int alpha,int beta,int ply
     Bound b=Bound::Exact;
     if(bestScore<=originalAlpha) b=Bound::Upper;
     else if(bestScore>=beta) b=Bound::Lower;
-    tt_[key]=TTEntry{key,depth,score_to_tt(bestScore,ply),b,best,0,0};
+    TTEntry out{};
+    out.key=key;
+    out.score=score_to_tt(bestScore,ply);
+    out.depth=static_cast<int16_t>(depth);
+    out.bound=b;
+    out.best=best;
+    tt_.store(out);
+    ++tt_stores_;
     return bestScore;
 }
 
 std::vector<Move> SearchEngine::extract_pv(Position p,int max_len,std::vector<uint64_t> history) const {
     std::vector<Move> pv;
     auto contextual=[&](const Position& pos){
-        uint64_t h=pos.key() ^ 0x9E3779B97F4A7C15ULL ^ (uint64_t(pos.halfmove_clock()) * 0xD6E8FEB86659FD93ULL);
+        const uint64_t base=pos.key();
         const size_t horizon=std::min<size_t>(history.size(), static_cast<size_t>(std::max(0,pos.halfmove_clock())+1));
         const size_t begin=history.size()-horizon;
+        int seen=0;
+        for(size_t j=begin;j<history.size();++j) if(history[j]==base) ++seen;
+        const bool sensitive=pos.halfmove_clock()>=80 || seen>=2;
+        if(!sensitive) return base;
+        uint64_t h=base^0x9E3779B97F4A7C15ULL^(uint64_t(pos.halfmove_clock())*0xD6E8FEB86659FD93ULL);
         for(size_t j=begin;j<history.size();++j){
             uint64_t x=history[j]+0x9E3779B97F4A7C15ULL+(uint64_t(j-begin)<<1);
             x^=x>>30; x*=0xBF58476D1CE4E5B9ULL; x^=x>>27; x*=0x94D049BB133111EBULL; x^=x>>31;
@@ -201,9 +227,9 @@ std::vector<Move> SearchEngine::extract_pv(Position p,int max_len,std::vector<ui
         return h;
     };
     for(int i=0;i<max_len;++i){
-        auto it=tt_.find(contextual(p));
-        if(it==tt_.end()||it->second.best.is_null()) break;
-        Move m=it->second.best;
+        const TTEntry* e=tt_.probe(contextual(p));
+        if(!e || e->best.is_null()) break;
+        Move m=e->best;
         bool legal=false;
         for(Move x:p.legal_moves()) if(x==m){legal=true;break;}
         if(!legal) break;
@@ -216,6 +242,8 @@ std::vector<Move> SearchEngine::extract_pv(Position p,int max_len,std::vector<ui
 
 SearchReport SearchEngine::search(const Position& root,const SearchLimits& limits,const std::vector<uint64_t>& game_history){
     nodes_=0;
+    tt_hits_=0;
+    tt_stores_=0;
     stopped_=false;
     history_=game_history;
     if(history_.empty() || history_.back()!=root.key()) history_.push_back(root.key());
@@ -256,11 +284,12 @@ SearchReport SearchEngine::search(const Position& root,const SearchLimits& limit
         if(stopped_) break;
 
         previousScore=score;
-        auto it=tt_.find(context_key(root));
-        if(it!=tt_.end()) report.best=it->second.best;
+        if(const TTEntry* e=tt_.probe(context_key(root))) report.best=e->best;
         report.score=score;
         report.completed_depth=depth;
         report.nodes=nodes_;
+        report.tt_hits=tt_hits_;
+        report.tt_stores=tt_stores_;
         report.pv=extract_pv(root,depth,history_);
     }
     if(report.best.is_null()){
@@ -268,6 +297,8 @@ SearchReport SearchEngine::search(const Position& root,const SearchLimits& limit
         if(!moves.empty()) report.best=moves.front();
     }
     report.nodes=nodes_;
+    report.tt_hits=tt_hits_;
+    report.tt_stores=tt_stores_;
     return report;
 }
 
