@@ -26,9 +26,9 @@ def load_openings(path):
         out.append((name,moves))
     return out
 
-def configure(e,fundamentals):
+def configure(e,fundamentals,threads=1,hash_mb=64):
     opts={}
-    for n,v in [("Threads",1),("Hash",64)]:
+    for n,v in [("Threads",threads),("Hash",hash_mb)]:
         if n in e.options:opts[n]=v
     if fundamentals:
         for n,v in [("Leviathan Fundamentals",True),("Leviathan Fundamentals Authority",1),("Leviathan Quiet Overdrive",0)]:
@@ -68,10 +68,12 @@ def play_one(cand,opp,name,moves,color,move_ms,nodes,max_plies,idx):
     return g,{"game":idx,"opening":name,"candidate_color":"white" if color else "black","result":r,"candidate_score":rscore(r,color),"termination":term,"error":err,"plies_after_seed":len(b.move_stack)-len(moves),"candidate_mean_ms":mean(ct),"opponent_mean_ms":mean(ot),"candidate_mean_depth":mean(cd),"opponent_mean_depth":mean(od),"candidate_mean_nodes":mean(cn),"opponent_mean_nodes":mean(on),"final_fen":b.fen()}
 
 def main():
-    ap=argparse.ArgumentParser();ap.add_argument("--candidate",required=True);ap.add_argument("--opponent",required=True);ap.add_argument("--candidate-label",required=True);ap.add_argument("--opponent-label",default="Stockfish");ap.add_argument("--candidate-fundamentals",action="store_true");ap.add_argument("--opponent-fundamentals",action="store_true");ap.add_argument("--move-time-ms",type=int,default=50);ap.add_argument("--nodes-per-move",type=int,default=0);ap.add_argument("--max-plies",type=int,default=180);ap.add_argument("--openings-json");ap.add_argument("--output-dir",required=True);a=ap.parse_args()
+    ap=argparse.ArgumentParser();ap.add_argument("--candidate",required=True);ap.add_argument("--opponent",required=True);ap.add_argument("--candidate-label",required=True);ap.add_argument("--opponent-label",default="Stockfish");ap.add_argument("--candidate-fundamentals",action="store_true");ap.add_argument("--opponent-fundamentals",action="store_true");ap.add_argument("--candidate-threads",type=int,default=1);ap.add_argument("--opponent-threads",type=int,default=1);ap.add_argument("--candidate-hash",type=int,default=64);ap.add_argument("--opponent-hash",type=int,default=64);ap.add_argument("--move-time-ms",type=int,default=50);ap.add_argument("--nodes-per-move",type=int,default=0);ap.add_argument("--max-plies",type=int,default=180);ap.add_argument("--openings-json");ap.add_argument("--output-dir",required=True);a=ap.parse_args()
+    if a.candidate_threads<1 or a.opponent_threads<1:raise SystemExit("thread counts must be >= 1")
+    if a.candidate_hash<1 or a.opponent_hash<1:raise SystemExit("hash sizes must be >= 1 MB")
     openings=load_openings(a.openings_json);out=Path(a.output_dir);out.mkdir(parents=True,exist_ok=True);cand=chess.engine.SimpleEngine.popen_uci(a.candidate,timeout=30);opp=chess.engine.SimpleEngine.popen_uci(a.opponent,timeout=30);recs=[];games=[]
     try:
-        co=configure(cand,a.candidate_fundamentals);oo=configure(opp,a.opponent_fundamentals);idx=0
+        co=configure(cand,a.candidate_fundamentals,a.candidate_threads,a.candidate_hash);oo=configure(opp,a.opponent_fundamentals,a.opponent_threads,a.opponent_hash);idx=0
         for name,moves in openings:
             for color in (chess.WHITE,chess.BLACK):
                 idx+=1;g,r=play_one(cand,opp,name,moves,color,a.move_time_ms,a.nodes_per_move,a.max_plies,idx);g.headers["White"]=a.candidate_label if color else a.opponent_label;g.headers["Black"]=a.candidate_label if not color else a.opponent_label;games.append(g);recs.append(r);print(json.dumps(r,sort_keys=True),flush=True)
