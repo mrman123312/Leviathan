@@ -60,7 +60,10 @@ inline void set_zugzwang_guard(bool v) { state().zugzwangGuard = v; }
 inline void set_sacrifice_rescue(bool v) { state().sacrificeRescue = v; }
 inline void set_rule50_pressure(bool v) { state().rule50Pressure = v; }
 
-inline bool ready() { return state().enabled && state().authority > 0; }
+inline bool ready() {
+    const State& cfg = state();
+    return cfg.enabled && cfg.authority > 0;
+}
 
 inline int non_pawn_count(const Position& pos) {
     return pos.count<KNIGHT>() + pos.count<BISHOP>() + pos.count<ROOK>() + pos.count<QUEEN>();
@@ -71,7 +74,8 @@ inline bool low_material(const Position& pos) {
 }
 
 inline bool zugzwang_risk(const Position& pos) {
-    if (!ready() || !state().zugzwangGuard)
+    const State& cfg = state();
+    if (!cfg.enabled || cfg.authority <= 0 || !cfg.zugzwangGuard)
         return false;
 
     // Conservative detector: sparse positions with very little non-pawn
@@ -153,47 +157,54 @@ inline int lmr_adjustment(const Position& pos,
                           bool pvNode,
                           bool capture,
                           bool givesCheck) {
-    if (!ready())
+    const State& cfg = state();
+    if (!cfg.enabled || cfg.authority <= 0)
         return 0;
+
+    const bool isRecapture   = recapture(move, prevSq, capture);
+    const bool isPromotion   = move.type_of() == PROMOTION;
+    const bool isAdvancedPawn = advanced_pawn_move(pos, move);
+    const bool isLowMaterial = low_material(pos);
 
     int delta = 0;
 
     if (givesCheck)
-        delta -= state().forcingBuyback;
-    if (recapture(move, prevSq, capture))
-        delta -= state().recaptureBuyback;
-    if (move.type_of() == PROMOTION || advanced_pawn_move(pos, move))
-        delta -= state().passerBuyback;
+        delta -= cfg.forcingBuyback;
+    if (isRecapture)
+        delta -= cfg.recaptureBuyback;
+    if (isPromotion || isAdvancedPawn)
+        delta -= cfg.passerBuyback;
 
     // v2.1: blanket endgame buyback made every sparse branch expensive. Keep
     // the extra protection concentrated on early candidates and forcing moves.
-    if (low_material(pos) && (moveCount <= 4 || capture || givesCheck))
-        delta -= state().endgameBuyback;
+    if (isLowMaterial && (moveCount <= 4 || capture || givesCheck))
+        delta -= cfg.endgameBuyback;
 
     // Authority 2 is the funding mechanism. v2.1 deliberately avoids
     // overdriving pawn moves: even a quiet pawn move irreversibly changes the
     // position and is a poor place to buy generic speed. We also start one move
     // later and one ply deeper than v2 to concentrate the extra reduction on
     // genuinely late, stable-looking branches.
-    if (state().authority >= 2 && depth >= 5 && moveCount >= 6 && !pvNode && !capture
-        && !givesCheck && move.type_of() != PROMOTION && !advanced_pawn_move(pos, move)
-        && !zeroing_quiet(pos, move, capture) && pos.rule50_count() < 70 && !low_material(pos))
+    if (cfg.authority >= 2 && depth >= 5 && moveCount >= 6 && !pvNode && !capture
+        && !givesCheck && !isPromotion && !isAdvancedPawn
+        && !zeroing_quiet(pos, move, capture) && pos.rule50_count() < 70 && !isLowMaterial)
     {
         const int lateness   = std::min(moveCount - 5, 8);
         const int depthScale = std::min(int(depth), 10) + 2;
-        delta += state().quietOverdrive * lateness * depthScale / 48;
+        delta += cfg.quietOverdrive * lateness * depthScale / 48;
     }
 
     return std::clamp(delta, -2048, 768);
 }
 
 inline int quiet_ordering_bonus(const Position& pos, Move move) {
-    if (!ready() || !state().rule50Pressure || pos.rule50_count() < 70)
+    const State& cfg = state();
+    if (!cfg.enabled || cfg.authority <= 0 || !cfg.rule50Pressure || pos.rule50_count() < 70)
         return 0;
 
     // Captures are scored in another MovePicker stage. Push pawn moves upward
     // when the fifty-move counter is dangerous because they reset it.
-    return pawn_move(pos, move) ? state().rule50PawnBonus : 0;
+    return pawn_move(pos, move) ? cfg.rule50PawnBonus : 0;
 }
 
 inline bool allow_null_move(const Position& pos) {
