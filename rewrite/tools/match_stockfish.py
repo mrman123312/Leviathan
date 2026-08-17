@@ -84,7 +84,7 @@ def play_game(
         key = "leviathan_ms" if board.turn == leviathan_color else "stockfish_ms"
         started = time.perf_counter()
         try:
-            response = engine.play(board, chess.engine.Limit(time=move_time))
+            response = engine.play(board, chess.engine.Limit(time=move_time), game=game_index)
         except Exception as exc:  # preserve crash/timeout as match evidence
             error = f"{type(exc).__name__}: {exc}"
             termination = "engine-error"
@@ -102,7 +102,6 @@ def play_game(
 
     outcome = board.outcome(claim_draw=True)
     if error:
-        # Engine that failed loses. Since we know whose turn it was, assign result directly.
         failed_is_leviathan = board.turn == leviathan_color
         result = "0-1" if (failed_is_leviathan and leviathan_color == chess.WHITE) or (not failed_is_leviathan and leviathan_color == chess.BLACK) else "1-0"
     elif outcome is not None:
@@ -152,7 +151,6 @@ def main() -> int:
     leviathan = chess.engine.SimpleEngine.popen_uci(args.leviathan, timeout=20.0)
     stockfish = chess.engine.SimpleEngine.popen_uci(args.stockfish, timeout=20.0)
     try:
-        # Equal single-thread CPU conditions where options exist.
         sf_opts = {}
         if "Threads" in stockfish.options:
             sf_opts["Threads"] = 1
@@ -172,9 +170,6 @@ def main() -> int:
                 games.append(game)
                 records.append(record)
                 print(json.dumps(record, sort_keys=True), flush=True)
-                # Clear persistent engine state between games.
-                leviathan.ucinewgame()
-                stockfish.ucinewgame()
     finally:
         leviathan.quit()
         stockfish.quit()
