@@ -43,10 +43,10 @@ struct State {
     }
 };
 
-inline State& state() {
-    static State s;
-    return s;
-}
+// C++17 inline storage preserves one program-wide Fundamentals state while
+// removing the function-local-static guard branch from every hot-path state() call.
+inline State sharedState;
+inline State& state() { return sharedState; }
 
 inline void set_enabled(bool v) { state().enabled = v; }
 inline void set_authority(int v) { state().authority = std::clamp(v, 0, 2); }
@@ -161,10 +161,10 @@ inline int lmr_adjustment(const Position& pos,
     if (!cfg.enabled || cfg.authority <= 0)
         return 0;
 
-    const bool isRecapture   = recapture(move, prevSq, capture);
-    const bool isPromotion   = move.type_of() == PROMOTION;
+    const bool isRecapture    = recapture(move, prevSq, capture);
+    const bool isPromotion    = move.type_of() == PROMOTION;
     const bool isAdvancedPawn = advanced_pawn_move(pos, move);
-    const bool isLowMaterial = low_material(pos);
+    const bool isLowMaterial  = low_material(pos);
 
     int delta = 0;
 
