@@ -100,8 +100,37 @@ Position::Position() {
     recompute_key();
 }
 
+int Position::canonical_ep_square() const {
+    if(ep_square_ < 0 || ep_square_ >= 64) return -1;
+    if(board_[ep_square_] != Piece::Empty) return -1;
+
+    const Color us = side_;
+    const int dir = us == Color::White ? 8 : -8;
+    const int capturedSq = ep_square_ - dir;
+    if(capturedSq < 0 || capturedSq >= 64) return -1;
+    if(board_[capturedSq] != make_piece(opposite(us), PieceType::Pawn)) return -1;
+
+    const Piece ownPawn = make_piece(us, PieceType::Pawn);
+    const int targetFile = ep_square_ & 7;
+    for(int df : {-1, 1}) {
+        const int from = ep_square_ - dir + df;
+        if(from < 0 || from >= 64) continue;
+        if(std::abs((from & 7) - targetFile) != 1) continue;
+        if(board_[from] != ownPawn) continue;
+
+        // FIDE repetition identity includes an en-passant right only when the
+        // capture is actually legal, not merely present as raw FEN metadata.
+        Position q = *this;
+        q.board_[from] = Piece::Empty;
+        q.board_[capturedSq] = Piece::Empty;
+        q.board_[ep_square_] = ownPawn;
+        if(!q.in_check(us)) return ep_square_;
+    }
+    return -1;
+}
+
 void Position::recompute_key() {
-    uint64_t h = castling_key(castling_) ^ ep_key(ep_square_);
+    uint64_t h = castling_key(castling_) ^ ep_key(canonical_ep_square());
     if(side_ == Color::Black) h ^= side_key();
     for(int sq=0;sq<64;++sq) h ^= piece_key(board_[sq],sq);
     key_ = h;
@@ -233,10 +262,13 @@ std::vector<Move> Position::pseudo_legal_moves(bool captures_only) const {
         if(pt==PieceType::Pawn){
             int dir=us==Color::White?8:-8, start=us==Color::White?1:6, promo=us==Color::White?6:1;
             int one=sq+dir;
-            if(!captures_only && one>=0&&one<64&&board_[one]==Piece::Empty){
-                if(r==promo) add_promotions(out,sq,one,0); else out.push_back(Move{(uint8_t)sq,(uint8_t)one,0,0});
-                int two=sq+2*dir;
-                if(r==start&&board_[two]==Piece::Empty) out.push_back(Move{(uint8_t)sq,(uint8_t)two,0,Move::DoublePush});
+            if(one>=0&&one<64&&board_[one]==Piece::Empty){
+                if(r==promo) add_promotions(out,sq,one,0);
+                else if(!captures_only){
+                    out.push_back(Move{(uint8_t)sq,(uint8_t)one,0,0});
+                    int two=sq+2*dir;
+                    if(r==start&&board_[two]==Piece::Empty) out.push_back(Move{(uint8_t)sq,(uint8_t)two,0,Move::DoublePush});
+                }
             }
             for(int df: {-1,1}){
                 int nf=f+df; if(nf<0||nf>7) continue;
@@ -307,7 +339,8 @@ bool Position::make_move(Move m, UndoState& undo) {
     undo.black_king=king_sq_[1];
     undo.key=key_;
 
-    key_ ^= castling_key(castling_) ^ ep_key(ep_square_);
+    const int oldCanonicalEp=canonical_ep_square();
+    key_ ^= castling_key(castling_) ^ ep_key(oldCanonicalEp);
 
     const bool pawn=type_of(pc)==PieceType::Pawn;
     halfmove_ = (pawn || undo.captured_on_to!=Piece::Empty || (m.flags&Move::EnPassant)) ? 0 : halfmove_+1;
@@ -347,7 +380,7 @@ bool Position::make_move(Move m, UndoState& undo) {
     if(us==Color::Black) ++fullmove_;
     side_=opposite(side_);
     key_ ^= side_key();
-    key_ ^= castling_key(castling_) ^ ep_key(ep_square_);
+    key_ ^= castling_key(castling_) ^ ep_key(canonical_ep_square());
     return true;
 }
 
