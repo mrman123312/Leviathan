@@ -1,0 +1,72 @@
+name: Finite Compute Error Miner
+
+on:
+  push:
+    branches: [leviathan/finite-compute-error-miner]
+    paths:
+      - '.github/workflows/finite-compute-error-miner.yml'
+      - 'tools/stockfish_error_miner.py'
+      - 'tools/assemble_error_miner_corpus.py'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  mine:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build pinned Stockfish
+        shell: bash
+        run: |
+          set -euo pipefail
+          git clone -q https://github.com/official-stockfish/Stockfish.git sf
+          git -C sf checkout -q 5062aee519a1ba262d472d8ab139851ced56573e
+          make -C sf/src -j2 ARCH=x86-64-avx2 build
+          python3 -m pip install --disable-pip-version-check chess==1.11.2
+
+      - name: Generate 48 balanced positions at three horizons
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 tools/generate_balanced_openings.py --stockfish sf/src/stockfish --output h12.json --count 16 --plies 12 --seed 891001 --max-abs-cp 110
+          python3 tools/generate_balanced_openings.py --stockfish sf/src/stockfish --output h24.json --count 16 --plies 24 --seed 891002 --max-abs-cp 110
+          python3 tools/generate_balanced_openings.py --stockfish sf/src/stockfish --output h40.json --count 16 --plies 40 --seed 891003 --max-abs-cp 110
+          python3 tools/assemble_error_miner_corpus.py --part 12 h12.json --part 24 h24.json --part 40 h40.json --output corpus.json
+          sha256sum corpus.json > corpus.sha256
+
+      - name: Mine fast-to-deep Stockfish reversals
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 tools/stockfish_error_miner.py \
+            --engine sf/src/stockfish \
+            --input corpus.json \
+            --output rows.json \
+            --summary summary.json \
+            --fast-nodes 50000 \
+            --deep-nodes 1600000 \
+            --verify-nodes 3200000 \
+            --regret-threshold-cp 25 | tee miner.log
+          test -s rows.json
+          test -s summary.json
+
+      - name: Print decision summary
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -c "import json; d=json.load(open('summary.json')); print(json.dumps(d, indent=2)); print('NEXT=' + ('TARGETED_SAMPLER' if d['verified_errors'] < 3 else 'TRAINABLE_SIGNAL'))"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: finite-compute-error-miner-48
+          path: |
+            corpus.json
+            corpus.sha256
+            rows.json
+            summary.json
+            miner.log
+          retention-days: 30
