@@ -1,0 +1,112 @@
+name: Fundamentals Ultra Phase-Gated Cap5
+
+on:
+  push:
+    branches: [leviathan/fundamentals-ultra-lab]
+    paths: ['.github/workflows/fundamentals-ultra-phase-gated-cap5.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  openings:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+        with: {ref: '${{ github.sha }}', path: lab}
+      - name: Build pinned Stockfish and generate mixed-horizon holdout
+        run: |
+          git clone -q https://github.com/official-stockfish/Stockfish.git "$RUNNER_TEMP/sf"
+          git -C "$RUNNER_TEMP/sf" checkout -q 5062aee519a1ba262d472d8ab139851ced56573e
+          make -C "$RUNNER_TEMP/sf/src" -j2 ARCH=x86-64-avx2 build
+          python3 -m pip install --disable-pip-version-check chess==1.11.2
+          python3 lab/tools/generate_balanced_openings.py --stockfish "$RUNNER_TEMP/sf/src/stockfish" --output h10.json --count 20 --plies 10 --seed 314159265 --max-abs-cp 110
+          python3 lab/tools/generate_balanced_openings.py --stockfish "$RUNNER_TEMP/sf/src/stockfish" --output h18.json --count 20 --plies 18 --seed 314159271 --max-abs-cp 110
+          python3 lab/tools/generate_balanced_openings.py --stockfish "$RUNNER_TEMP/sf/src/stockfish" --output h26.json --count 20 --plies 26 --seed 314159279 --max-abs-cp 110
+          python3 - <<'PY'
+          import json
+          out=[]
+          for p in ('h10.json','h18.json','h26.json'): out += json.load(open(p))
+          open('openings.json','w').write(json.dumps(out,indent=2)+'\n')
+          PY
+          sha256sum openings.json > openings.sha256
+      - uses: actions/upload-artifact@v4
+        with: {name: phase-cap5-openings, path: 'openings.*', retention-days: 30}
+
+  oracle:
+    needs: openings
+    runs-on: ubuntu-22.04
+    timeout-minutes: 100
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {label: cap5-global, gate: 0}
+          - {label: cap5-ply16, gate: 16}
+    steps:
+      - uses: actions/checkout@v4
+        with: {ref: '${{ github.sha }}', path: lab}
+      - uses: actions/checkout@v4
+        with: {ref: leviathan/fundamentals-ultra-v0, path: cand}
+      - uses: actions/checkout@v4
+        with: {ref: leviathan/fundamentals-ultra-v0, path: base}
+      - uses: actions/download-artifact@v4
+        with: {name: phase-cap5-openings, path: shared}
+      - name: Materialize cap5 policy
+        env: {GATE: '${{ matrix.gate }}'}
+        run: |
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+          p=Path('cand/src/search.cpp');s=p.read_text();gate=int(os.environ['GATE'])
+          old='if (moveCount > 4 || (moveCount > 2 && leviathanCaptureCeiling < alpha - 48))\n                    continue;'
+          if s.count(old)!=1: raise SystemExit(f'frontier anchor count={s.count(old)}')
+          if gate == 0:
+              new='if (moveCount > 5 || (moveCount > 2 && leviathanCaptureCeiling < alpha - 48))\n                    continue;'
+          else:
+              new=f'''const bool leviathanFifthCapture = moveCount == 5 && pos.game_ply() >= {gate};
+                if ((moveCount > 4 && !leviathanFifthCapture)
+                    || (moveCount > 2 && leviathanCaptureCeiling < alpha - 48))
+                    continue;'''
+          p.write_text(s.replace(old,new,1))
+          PY
+          git -C cand diff --check
+          git -C cand diff -- src/search.cpp | tee mutation.patch
+      - name: Build candidate, baseline and pinned Stockfish
+        run: |
+          make -C cand/src net && make -C cand/src clean && make -C cand/src -j2 ARCH=x86-64-avx2 build
+          make -C base/src net && make -C base/src clean && make -C base/src -j2 ARCH=x86-64-avx2 build
+          git clone -q https://github.com/official-stockfish/Stockfish.git "$RUNNER_TEMP/sf"
+          git -C "$RUNNER_TEMP/sf" checkout -q 5062aee519a1ba262d472d8ab139851ced56573e
+          make -C "$RUNNER_TEMP/sf/src" -j2 ARCH=x86-64-avx2 build
+          python3 -m pip install --disable-pip-version-check chess==1.11.2
+      - name: Hardened prospective oracle screen
+        run: |
+          python3 lab/tools/oracle_regret.py --candidate "$PWD/cand/src/stockfish" --baseline "$PWD/base/src/stockfish" --oracle "$RUNNER_TEMP/sf/src/stockfish" --openings-json "$PWD/shared/openings.json" --candidate-label '${{ matrix.label }}' --candidate-fundamentals --baseline-fundamentals --choice-nodes 100000 --oracle-nodes 800000 --output regret.json | tee regret.log
+          grep -q 'LV_ISOLATED_ROOT_REGRET_V2' regret.json
+          python3 - <<'PY'
+          import json,statistics
+          p='regret.json';x=json.load(open(p));rows=x['rows'];bins={}
+          for lo,hi in ((0,15),(16,23),(24,999)):
+            z=[]
+            for r in rows:
+              gp=int(r['fen'].split()[-2]) if False else None
+            # opening generator names preserve no ply metadata in regret output; report contiguous generation thirds.
+            start=0 if lo==0 else 20 if lo==16 else 40
+            end=start+20
+            q=rows[start:end]
+            bins[f'{start//20}']={'positions':len(q),'candidate_mean_regret':statistics.fmean(r['candidate_regret_cp'] for r in q),'baseline_mean_regret':statistics.fmean(r['baseline_regret_cp'] for r in q),'delta':statistics.fmean(r['candidate_regret_cp']-r['baseline_regret_cp'] for r in q),'candidate_agreement':sum(r['candidate_matches_oracle'] for r in q)/len(q),'baseline_agreement':sum(r['baseline_matches_oracle'] for r in q)/len(q)}
+          x['mixed_horizon_bins_ordered_10_18_26']=bins
+          open(p,'w').write(json.dumps(x,indent=2,sort_keys=True)+'\n')
+          print('BINS',json.dumps(bins,sort_keys=True))
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: 'phase-cap5-${{ matrix.label }}'
+          path: |
+            regret.json
+            regret.log
+            mutation.patch
+            shared/openings.sha256
+          retention-days: 30
