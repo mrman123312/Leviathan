@@ -1,0 +1,88 @@
+name: Fundamentals Ultra P01 Fixed-Time Replication
+
+on:
+  push:
+    branches: [leviathan/fundamentals-ultra-lab]
+    paths: ['.github/workflows/fundamentals-ultra-p01-fixed-time-replication.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  shard:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix: {shard: [0, 1, 2, 3]}
+    steps:
+      - uses: actions/checkout@v4
+        with: {ref: '${{ github.sha }}', path: lab}
+      - uses: actions/checkout@v4
+        with: {ref: leviathan/fundamentals-ultra-p01-qfrontier, path: p01}
+      - name: Build P01 and current Stockfish
+        run: |
+          make -C p01/src net && make -C p01/src clean && make -C p01/src -j2 ARCH=x86-64-avx2 build
+          git clone -q https://github.com/official-stockfish/Stockfish.git "$RUNNER_TEMP/sf"
+          git -C "$RUNNER_TEMP/sf" checkout -q 5062aee519a1ba262d472d8ab139851ced56573e
+          make -C "$RUNNER_TEMP/sf/src" -j2 ARCH=x86-64-avx2 build
+          python3 -m pip install --disable-pip-version-check chess==1.11.2
+      - name: Generate 50 fresh balanced opening pairs
+        run: |
+          seed=$((424242420 + ${{ matrix.shard }} * 100003))
+          python3 lab/tools/generate_balanced_openings.py --stockfish "$RUNNER_TEMP/sf/src/stockfish" --output openings.json --count 50 --plies 18 --seed "$seed" --max-abs-cp 100
+          sha256sum openings.json > openings.sha256
+      - name: 100-game fixed-time shard
+        run: |
+          mkdir -p match
+          python3 lab/tools/fundamentals_tournament.py --candidate "$PWD/p01/src/stockfish" --opponent "$RUNNER_TEMP/sf/src/stockfish" --candidate-label Ultra-P01 --opponent-label Stockfish-5062aee5 --candidate-fundamentals --movetime-ms 100 --openings-json "$PWD/openings.json" --max-plies 200 --output-dir match | tee match/match.log
+      - name: Provenance
+        run: |
+          printf 'p01=%s\nstockfish=%s\nshard=${{ matrix.shard }}\n' "$(git -C p01 rev-parse HEAD)" "$(git -C "$RUNNER_TEMP/sf" rev-parse HEAD)" > revisions.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: 'p01-fixed-time-${{ matrix.shard }}'
+          path: |
+            match
+            openings.json
+            openings.sha256
+            revisions.txt
+          retention-days: 30
+
+  aggregate:
+    needs: shard
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/download-artifact@v4
+        with: {pattern: 'p01-fixed-time-*', path: shards}
+      - name: Aggregate paired results
+        run: |
+          python3 - <<'PY'
+          import glob,json,math,random,statistics
+          W=D=L=0; pairs=[]; shard_stats=[]
+          for p in sorted(glob.glob('shards/**/summary.json',recursive=True)):
+              d=json.load(open(p)); w=d['candidate']['wins']; dr=d['draws']; l=d['candidate']['losses']; W+=w;D+=dr;L+=l
+              shard_stats.append({'path':p,'wins':w,'draws':dr,'losses':l,'score':(w+.5*dr)/(w+dr+l)})
+              games=json.load(open(p.replace('summary.json','games.json')))
+              by={}
+              for g in games: by.setdefault(g['opening_index'],[]).append(g)
+              for _,gg in sorted(by.items()):
+                  s=0
+                  for g in gg:
+                      r=g['result']; cand_white=g['candidate_color']=='white'
+                      s += .5 if r=='1/2-1/2' else (1 if (r=='1-0')==cand_white else 0)
+                  pairs.append(s/len(gg))
+          n=W+D+L; score=(W+.5*D)/n
+          rng=random.Random(8910); boots=[]
+          for _ in range(20000): boots.append(statistics.fmean(rng.choice(pairs) for __ in pairs))
+          boots.sort(); ci=[boots[int(.025*len(boots))],boots[int(.975*len(boots))-1]]
+          elo=400*math.log10(score/(1-score)) if 0<score<1 else None
+          out={'games':n,'pairs':len(pairs),'wins':W,'draws':D,'losses':L,'score':score,'naive_elo':elo,'pair_bootstrap_95_score':ci,'shards':shard_stats}
+          json.dump(out,open('aggregate.json','w'),indent=2);print(json.dumps(out,indent=2))
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ultra-p01-fixed-time-aggregate
+          path: aggregate.json
+          retention-days: 30
