@@ -46,4 +46,9 @@ if(Python3_Interpreter_FOUND)
                 ${CMAKE_CURRENT_SOURCE_DIR}/donors/DONOR_REGISTRY.json
                 ${CMAKE_CURRENT_SOURCE_DIR}/imports
     )
+    add_test(
+        NAME dataset_provenance_audit
+        COMMAND ${Python3_EXECUTABLE}
+                ${CMAKE_CURRENT_SOURCE_DIR}/tools/audit_datasets.py
+    )
 endif()
