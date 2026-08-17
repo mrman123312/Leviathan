@@ -1,0 +1,121 @@
+name: Fundamentals Ultra QDepth Frontier
+
+on:
+  push:
+    branches: [leviathan/fundamentals-ultra-lab]
+    paths: ['.github/workflows/fundamentals-ultra-qdepth-frontier.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  screen:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 95
+    strategy:
+      fail-fast: false
+      matrix:
+        mode: [fixed4, historical, modern46, modern35]
+    steps:
+      - uses: actions/checkout@v4
+        with: {ref: leviathan/fundamentals-ultra-lab, path: lab}
+      - uses: actions/checkout@v4
+        with: {ref: leviathan/fundamentals-ultra-v0, path: cand}
+      - uses: actions/checkout@v4
+        with: {ref: leviathan/fundamentals-ultra-v0, path: base}
+
+      - name: Restore qPly state and materialize adaptive frontier
+        if: matrix.mode != 'fixed4'
+        env: {MODE: '${{ matrix.mode }}'}
+        run: |
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+          mode=os.environ['MODE']
+          h=Path('cand/src/search.h');s=h.read_text()
+          old='Value qsearch(Position& pos, Stack* ss, Value alpha, Value beta);'
+          new='Value qsearch(Position& pos, Stack* ss, Value alpha, Value beta, int qPly);'
+          if s.count(old)!=1: raise SystemExit('header qsearch anchor')
+          h.write_text(s.replace(old,new,1))
+
+          p=Path('cand/src/search.cpp');s=p.read_text()
+          old='return qsearch<PvNode ? PV : NonPV>(pos, ss, alpha, beta);'
+          new='return qsearch<PvNode ? PV : NonPV>(pos, ss, alpha, beta, 0);'
+          if s.count(old)!=1: raise SystemExit('entry anchor')
+          s=s.replace(old,new,1)
+          old='Value Search::Worker::qsearch(Position& pos, Stack* ss, Value alpha, Value beta) {'
+          new='Value Search::Worker::qsearch(Position& pos, Stack* ss, Value alpha, Value beta, int qPly) {'
+          if s.count(old)!=1: raise SystemExit('definition anchor')
+          s=s.replace(old,new,1)
+          old='value = -qsearch<nodeType>(pos, ss + 1, -beta, -alpha);'
+          new='value = -qsearch<nodeType>(pos, ss + 1, -beta, -alpha, qPly + 1);'
+          if s.count(old)!=1: raise SystemExit('recursive anchor')
+          s=s.replace(old,new,1)
+
+          frontier='''                if (moveCount > 4 || (moveCount > 2 && leviathanCaptureCeiling < alpha - 48))
+                    continue;'''
+          if mode=='historical':
+              repl='''                // Restore the original 2020 information shape: tactical distance
+                // is part of the movecount frontier. Bound growth to avoid runaway qsearch.
+                const int leviathanQCap = 2 + std::min(qPly, 4);
+                if (moveCount > leviathanQCap
+                    || (moveCount > 2 && leviathanCaptureCeiling < alpha - 48))
+                    continue;'''
+          elif mode=='modern46':
+              repl='''                // Preserve Ultra-v0's cap4 at horizon, but allow one extra
+                // candidate per tactical ply up to cap6.
+                const int leviathanQCap = 4 + std::min(qPly, 2);
+                if (moveCount > leviathanQCap
+                    || (moveCount > 2 && leviathanCaptureCeiling < alpha - 48))
+                    continue;'''
+          elif mode=='modern35':
+              repl='''                // More selective modern reconstruction: cap3 at horizon,
+                // widening to cap5 only after tactical continuation proves itself.
+                const int leviathanQCap = 3 + std::min(qPly, 2);
+                if (moveCount > leviathanQCap
+                    || (moveCount > 2 && leviathanCaptureCeiling < alpha - 48))
+                    continue;'''
+          else: raise SystemExit(mode)
+          if s.count(frontier)!=1: raise SystemExit('frontier anchor')
+          p.write_text(s.replace(frontier,repl,1))
+          PY
+          git -C cand diff --check
+          git -C cand diff -- src/search.cpp src/search.h | tee mutation.patch
+
+      - name: Build candidate, baseline, and current Stockfish
+        run: |
+          make -C cand/src net && make -C cand/src clean && make -C cand/src -j2 ARCH=x86-64-avx2 build
+          make -C base/src net && make -C base/src clean && make -C base/src -j2 ARCH=x86-64-avx2 build
+          git clone -q https://github.com/official-stockfish/Stockfish.git "$RUNNER_TEMP/sf"
+          git -C "$RUNNER_TEMP/sf" checkout -q 5062aee519a1ba262d472d8ab139851ced56573e
+          make -C "$RUNNER_TEMP/sf/src" -j2 ARCH=x86-64-avx2 build
+          python3 -m pip install --disable-pip-version-check chess==1.11.2
+
+      - name: Fresh 40-position holdout
+        run: python3 lab/tools/generate_balanced_openings.py --stockfish "$RUNNER_TEMP/sf/src/stockfish" --output openings.json --count 40 --plies 14 --seed 141421356 --max-abs-cp 110
+
+      - name: 80 equal-node games
+        run: |
+          mkdir nodes
+          python3 lab/tools/fundamentals_tournament.py --candidate "$PWD/cand/src/stockfish" --opponent "$PWD/base/src/stockfish" --candidate-label '${{ matrix.mode }}' --opponent-label Ultra-v0 --candidate-fundamentals --opponent-fundamentals --nodes-per-move 90000 --openings-json openings.json --max-plies 190 --output-dir nodes | tee nodes/match.log
+
+      - name: 80 fixed-time games
+        run: |
+          mkdir time
+          python3 lab/tools/fundamentals_tournament.py --candidate "$PWD/cand/src/stockfish" --opponent "$PWD/base/src/stockfish" --candidate-label '${{ matrix.mode }}' --opponent-label Ultra-v0 --candidate-fundamentals --opponent-fundamentals --move-time-ms 120 --openings-json openings.json --max-plies 190 --output-dir time | tee time/match.log
+
+      - name: Hardened isolated deep-oracle regret
+        run: python3 lab/tools/oracle_regret.py --candidate "$PWD/cand/src/stockfish" --baseline "$PWD/base/src/stockfish" --oracle "$RUNNER_TEMP/sf/src/stockfish" --openings-json openings.json --candidate-label '${{ matrix.mode }}' --candidate-fundamentals --baseline-fundamentals --choice-nodes 120000 --oracle-nodes 800000 --output regret.json | tee regret.log
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: 'qdepth-${{ matrix.mode }}'
+          path: |
+            nodes
+            time
+            regret.json
+            regret.log
+            openings.json
+            mutation.patch
+          retention-days: 30
