@@ -31,18 +31,20 @@ jobs:
           end=s.index('\ninline int quiet_ordering_bonus', start)
           f=s[start:end]
           f=f.replace('    if (!ready())\n        return 0;','    const State& cfg = state();\n    if (!cfg.enabled || cfg.authority <= 0)\n        return 0;',1)
-          f=f.replace('    int delta = 0;','    const bool isRecapture = recapture(move, prevSq, capture);\n    const bool isPromotion = move.type_of() == PROMOTION;\n    const bool isAdvancedPawn = advanced_pawn_move(pos, move);\n    const bool isLowMaterial = low_material(pos);\n\n    int delta = 0;',1)
           f=f.replace('state().forcingBuyback','cfg.forcingBuyback')
-          f=f.replace('recapture(move, prevSq, capture)','isRecapture')
+          f=f.replace('if (recapture(move, prevSq, capture))','if (isRecapture)',1)
           f=f.replace('state().recaptureBuyback','cfg.recaptureBuyback')
-          f=f.replace('move.type_of() == PROMOTION || advanced_pawn_move(pos, move)','isPromotion || isAdvancedPawn')
+          f=f.replace('if (move.type_of() == PROMOTION || advanced_pawn_move(pos, move))','if (isPromotion || isAdvancedPawn)',1)
           f=f.replace('state().passerBuyback','cfg.passerBuyback')
-          f=f.replace('low_material(pos)','isLowMaterial')
+          f=f.replace('if (low_material(pos) &&','if (isLowMaterial &&',1)
           f=f.replace('state().endgameBuyback','cfg.endgameBuyback')
           f=f.replace('state().authority >= 2','cfg.authority >= 2')
-          f=f.replace('move.type_of() != PROMOTION && !advanced_pawn_move(pos, move)','!isPromotion && !isAdvancedPawn')
-          f=f.replace('!low_material(pos)','!isLowMaterial')
+          f=f.replace('move.type_of() != PROMOTION && !advanced_pawn_move(pos, move)','!isPromotion && !isAdvancedPawn',1)
+          f=f.replace('!low_material(pos)','!isLowMaterial',1)
           f=f.replace('state().quietOverdrive','cfg.quietOverdrive')
+          f=f.replace('    int delta = 0;','    const bool isRecapture = recapture(move, prevSq, capture);\n    const bool isPromotion = move.type_of() == PROMOTION;\n    const bool isAdvancedPawn = advanced_pawn_move(pos, move);\n    const bool isLowMaterial = low_material(pos);\n\n    int delta = 0;',1)
+          if 'const bool isRecapture = isRecapture' in f or 'const bool isLowMaterial = isLowMaterial' in f:
+              raise SystemExit('self-reference introduced')
           s=s[:start]+f+s[end:]
           s=s.replace('inline bool ready() { return state().enabled && state().authority > 0; }','inline bool ready() {\n    const State& cfg = state();\n    return cfg.enabled && cfg.authority > 0;\n}',1)
           old='inline bool zugzwang_risk(const Position& pos) {\n    if (!ready() || !state().zugzwangGuard)\n        return false;'
