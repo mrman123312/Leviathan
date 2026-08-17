@@ -54,13 +54,21 @@ jobs:
         run: |
           python3 lab/tools/generate_balanced_openings.py --stockfish "$RUNNER_TEMP/sf/src/stockfish" --output openings.json --count 60 --plies 16 --seed $((271828182 + ${{ matrix.num }})) --max-abs-cp 100
       - name: 120-game equal-node A/B
+        shell: bash
         run: |
+          set -euo pipefail
           mkdir -p nodes
           python3 lab/tools/fundamentals_tournament.py --candidate "$PWD/cand/src/stockfish" --opponent "$PWD/base/src/stockfish" --candidate-label '${{ matrix.label }}' --opponent-label P01 --candidate-fundamentals --opponent-fundamentals --nodes-per-move 100000 --openings-json "$PWD/openings.json" --max-plies 200 --output-dir nodes | tee nodes/match.log
+          test -s nodes/summary.json
+          test -s nodes/games.jsonl
       - name: 120-game fixed-time A/B
+        shell: bash
         run: |
+          set -euo pipefail
           mkdir -p time
-          python3 lab/tools/fundamentals_tournament.py --candidate "$PWD/cand/src/stockfish" --opponent "$PWD/base/src/stockfish" --candidate-label '${{ matrix.label }}' --opponent-label P01 --candidate-fundamentals --opponent-fundamentals --movetime-ms 100 --openings-json "$PWD/openings.json" --max-plies 200 --output-dir time | tee time/match.log
+          python3 lab/tools/fundamentals_tournament.py --candidate "$PWD/cand/src/stockfish" --opponent "$PWD/base/src/stockfish" --candidate-label '${{ matrix.label }}' --opponent-label P01 --candidate-fundamentals --opponent-fundamentals --move-time-ms 100 --openings-json "$PWD/openings.json" --max-plies 200 --output-dir time | tee time/match.log
+          test -s time/summary.json
+          test -s time/games.jsonl
       - name: Provenance
         run: |
           printf 'candidate_base=%s\nbaseline=%s\ncaissa_donor=22c867064adfdb6c7b33630fb7475f1056f66096\nretention=${{ matrix.num }}/1024\n' "$(git -C cand rev-parse HEAD)" "$(git -C base rev-parse HEAD)" > revisions.txt
