@@ -20,7 +20,9 @@ The unlicensed `linrock/lc0-data-converter` repository is used only as a methodo
 
 The official `lczero-training` repository builds a `dump_chunk` executable. Leviathan uses this as the first independent proof that a downloaded archive contains valid native training records before any transformation occurs.
 
-The native source view keeps the upstream training information rather than immediately crushing it into Stockfish centipawns.
+A real hash-locked shard was decoded successfully by the pinned official dumper. The sampled historical record uses `INPUT_CLASSICAL_112_PLANE`; the native representation contains the 1858-way policy and the value/moves-left fields supported by that data generation. Newer v6-only fields must only be used when actually present rather than synthesized into older records.
+
+The native source view is retained rather than immediately crushed into Stockfish centipawns.
 
 ## Data path
 
@@ -54,7 +56,7 @@ The original source identity follows the record through every transformation.
 
 The current official Lc0 rescorer is not a generic format-only converter. Its `RunRescorer()` startup contract requires Syzygy initialization to succeed with at least 3-piece coverage before it processes files, even if NNUE `.plain` output is the desired artifact.
 
-Leviathan therefore does **not** bypass or patch out this upstream requirement merely to make a smoke test pass. Before the full `.plain` conversion gate is promoted, the exact minimal Syzygy dependency must itself be pinned and provenance-verified.
+Leviathan did **not** bypass or patch out this upstream requirement. The minimal ten-file 3-piece WDL/DTZ dependency is pinned in `SYZYGY3_LOCK.json` with SHA-256 hashes; the successful bridge used 5 WDL + 5 DTZ files totaling 25,824 bytes.
 
 This is separate from native Lc0 parsing, which does not require tablebases.
 
@@ -66,15 +68,63 @@ The pinned Stockfish tools documentation defines:
 stockfish convert from_path to_path [append] [validate]
 ```
 
-and supports `.plain`, `.bin`, and `.binpack` as input/output formats. Leviathan should always use `validate` on new converted shards.
+and supports `.plain`, `.bin`, and `.binpack` as input/output formats. Leviathan uses `validate` on newly converted shards.
 
 The historical public conversion methodology uses an Lc0 rescorer to export NNUE `.plain` with best-move and best-score information, optionally tablebase-rescoring/deblundering, then filters unusable records and asks Stockfish to convert/validate the result.
+
+## Proven real-data smoke
+
+GitHub Actions run `31989106200` exercised the complete bridge on real Lc0 data rather than synthetic fixtures.
+
+### Source
+
+- parent shard: `training-run3--20200713-0822.tar`
+- parent bytes: `15,452,160`
+- parent SHA-256: `dfaf79680b92e317a05b343f3c11c52c8ca98957a48c3fcc86b992e3762b1c7a`
+- parent archive contains 948 gzipped training chunks
+- bounded bridge sample used three unmodified chunk byte streams:
+  - `training.686023.gz` — 15,963 bytes
+  - `training.686057.gz` — 10,889 bytes
+  - `training.685571.gz` — 13,043 bytes
+
+The chunks were flattened only at the filesystem-path layer because the official rescorer enumerates files directly in its input directory. Their compressed record bytes were not rewritten before parsing.
+
+### Official Lc0 export
+
+Pinned Lc0 rescorer `d8ce48258c39d331c119f8c8729374ceb3df8409` reported:
+
+- 3 games processed
+- 219 positions processed
+- 0 tablebase outcome rescores in this tiny sample
+- 0 deblunder changes
+- original outcomes: 0 losses / 1 draw / 2 wins
+- post-processing outcomes: 0 losses / 1 draw / 2 wins
+
+It produced `lc0-stockfish.plain`:
+
+- 1,296 text lines
+- 22,618 bytes
+- SHA-256 `e724a48ecf560ddd71c99145476ebf52a5fbf71dc1a715b0b96a32a0e2f950f8`
+
+### Stockfish conversion/validation
+
+Pinned Stockfish training-tools commit `9a4c7cf4e311f8d9526b79295b80c4d0464c07cf` then ran the supported `convert ... validate` path.
+
+Result:
+
+- **216 validated training positions converted**
+- output `lc0-stockfish.binpack`: 544 bytes
+- SHA-256 `9a7990a9bf65ffd1216018c107f2fbaf1d05abc06cc60cd9c6bc51590b266ef8`
+
+The 219 rescorer positions and 216 emitted Stockfish training entries are intentionally recorded as different stage counts rather than silently forced to match. The bridge acceptance criterion is the converter's own successful validation of the emitted training records, not a guessed one-to-one frame mapping.
+
+Bridge artifact SHA-256: `1ed35ef9f9d3ad76650e0412ef5e7c3ba14db8cc3cab3fd287915c5f9ae36afb`.
 
 ## Leviathan modifications to the historical workflow
 
 We should **not** blindly reproduce every old filter/deblunder choice. Those are experimental policies, not immutable truths.
 
-Each converted shard must record:
+Each production converted shard must record:
 
 - source tar SHA-256;
 - source archive/chunk/game or sequence identity where available;
@@ -102,7 +152,7 @@ source_position
 │   ├── winner WDL
 │   ├── best-Q WDL
 │   ├── plies-left
-│   └── other native search metadata
+│   └── other native search metadata when present
 └── stockfish_view
     ├── best move / MultiPV
     ├── CP or mate score
