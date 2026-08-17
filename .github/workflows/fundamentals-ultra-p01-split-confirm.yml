@@ -1,0 +1,116 @@
+name: Fundamentals Ultra P01 Split Confirmation
+
+on:
+  push:
+    branches: [leviathan/fundamentals-ultra-lab]
+    paths: ['.github/workflows/fundamentals-ultra-p01-split-confirm.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  openings:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+        with: {ref: leviathan/fundamentals-ultra-lab, path: lab}
+      - name: Build current Stockfish and one fresh corpus
+        run: |
+          git clone -q https://github.com/official-stockfish/Stockfish.git "$RUNNER_TEMP/sf"
+          git -C "$RUNNER_TEMP/sf" checkout -q 5062aee519a1ba262d472d8ab139851ced56573e
+          make -C "$RUNNER_TEMP/sf/src" -j2 ARCH=x86-64-avx2 build
+          python3 -m pip install --disable-pip-version-check chess==1.11.2
+          python3 lab/tools/generate_balanced_openings.py --stockfish "$RUNNER_TEMP/sf/src/stockfish" --output openings.json --count 40 --plies 14 --seed 70710678 --max-abs-cp 100
+          sha256sum openings.json > openings.sha256
+      - uses: actions/upload-artifact@v4
+        with: {name: p01-split-openings, path: 'openings.*', retention-days: 30}
+
+  gate:
+    needs: openings
+    runs-on: ubuntu-22.04
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        gate: [equal-node, fixed-time, stockfish, oracle]
+    steps:
+      - uses: actions/checkout@v4
+        with: {ref: leviathan/fundamentals-ultra-lab, path: lab}
+      - uses: actions/checkout@v4
+        with: {ref: leviathan/fundamentals-ultra-v0, path: cand, fetch-depth: 0}
+      - uses: actions/checkout@v4
+        with: {ref: leviathan/fundamentals-ultra-v0, path: base}
+      - uses: actions/download-artifact@v4
+        with: {name: p01-split-openings, path: shared}
+
+      - name: Materialize P0+P1 on Ultra-v0
+        working-directory: cand
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git cherry-pick ae6f326512bd418c30c7bf9919f9546866619a57
+          git diff HEAD^ --check
+
+      - name: Build candidate, baseline, and current Stockfish
+        run: |
+          make -C cand/src net && make -C cand/src clean && make -C cand/src -j2 ARCH=x86-64-avx2 build
+          make -C base/src net && make -C base/src clean && make -C base/src -j2 ARCH=x86-64-avx2 build
+          git clone -q https://github.com/official-stockfish/Stockfish.git "$RUNNER_TEMP/sf"
+          git -C "$RUNNER_TEMP/sf" checkout -q 5062aee519a1ba262d472d8ab139851ced56573e
+          make -C "$RUNNER_TEMP/sf/src" -j2 ARCH=x86-64-avx2 build
+          python3 -m pip install --disable-pip-version-check chess==1.11.2
+          printf 'gate=%s\ncandidate=%s\nbase=%s\nstockfish=%s\n' '${{ matrix.gate }}' "$(git -C cand rev-parse HEAD)" "$(git -C base rev-parse HEAD)" "$(git -C "$RUNNER_TEMP/sf" rev-parse HEAD)" > revisions.txt
+
+      - name: Exact behavior sanity gate
+        run: |
+          python3 - <<'PY'
+          import subprocess,re,hashlib
+          opts='setoption name Threads value 1\nsetoption name Hash value 64\nsetoption name Leviathan Fundamentals value true\nsetoption name Leviathan Fundamentals Authority value 1\nsetoption name Leviathan Quiet Overdrive value 0\n'
+          def run(p):
+            x=subprocess.run([p],input=opts+'bench\nquit\n',text=True,capture_output=True,check=True);o=x.stdout+x.stderr;n=[]
+            for raw in o.splitlines():
+              line=raw.strip()
+              if line.startswith('Position:') or line.startswith('bestmove '): n.append(line)
+              elif line.startswith('info ') and not line.startswith('info string '):
+                line=re.sub(r'\s+nps\s+\d+','',line);line=re.sub(r'\s+time\s+\d+','',line);n.append(line)
+            return int(re.findall(r'Nodes searched\s*:\s*(\d+)',o)[-1]),hashlib.sha256('\n'.join(n).encode()).hexdigest()
+          a=run('base/src/stockfish');b=run('cand/src/stockfish')
+          print('base',a,'candidate',b)
+          if a!=b: raise SystemExit('P01 no longer exact-behavior equivalent on Ultra-v0')
+          PY
+
+      - name: Equal-node paired gate
+        if: matrix.gate == 'equal-node'
+        run: |
+          mkdir result
+          python3 lab/tools/fundamentals_tournament.py --candidate "$PWD/cand/src/stockfish" --opponent "$PWD/base/src/stockfish" --candidate-label P01 --opponent-label Ultra-v0 --candidate-fundamentals --opponent-fundamentals --nodes-per-move 100000 --openings-json "$PWD/shared/openings.json" --max-plies 200 --output-dir result | tee result/match.log
+
+      - name: Fixed-time paired gate
+        if: matrix.gate == 'fixed-time'
+        run: |
+          mkdir result
+          python3 lab/tools/fundamentals_tournament.py --candidate "$PWD/cand/src/stockfish" --opponent "$PWD/base/src/stockfish" --candidate-label P01 --opponent-label Ultra-v0 --candidate-fundamentals --opponent-fundamentals --move-time-ms 150 --openings-json "$PWD/shared/openings.json" --max-plies 200 --output-dir result | tee result/match.log
+
+      - name: Current Stockfish gate
+        if: matrix.gate == 'stockfish'
+        run: |
+          mkdir result
+          python3 lab/tools/fundamentals_tournament.py --candidate "$PWD/cand/src/stockfish" --opponent "$RUNNER_TEMP/sf/src/stockfish" --candidate-label P01 --opponent-label Stockfish-current --candidate-fundamentals --move-time-ms 150 --openings-json "$PWD/shared/openings.json" --max-plies 200 --output-dir result | tee result/match.log
+
+      - name: Hardened isolated oracle gate
+        if: matrix.gate == 'oracle'
+        run: |
+          python3 lab/tools/oracle_regret.py --candidate "$PWD/cand/src/stockfish" --baseline "$PWD/base/src/stockfish" --oracle "$RUNNER_TEMP/sf/src/stockfish" --openings-json "$PWD/shared/openings.json" --candidate-label P01 --candidate-fundamentals --baseline-fundamentals --choice-nodes 120000 --oracle-nodes 700000 --output regret.json | tee regret.log
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: 'p01-split-${{ matrix.gate }}'
+          path: |
+            result
+            regret.json
+            regret.log
+            revisions.txt
+            shared/openings.sha256
+          retention-days: 30
