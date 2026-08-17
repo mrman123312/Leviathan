@@ -41,7 +41,9 @@ jobs:
 
           p=Path('cand/src/search.cpp');s=p.read_text()
           pairs=[
-            ('return qsearch<PvNode ? PV : NonPV>(pos, ss, alpha, beta);','return qsearch<PvNode ? PV : NonPV>(pos, ss, alpha, beta, 0);','entry'),
+            ('return qsearch<PvNode ? PV : NonPV>(pos, ss, alpha, beta);','return qsearch<PvNode ? PV : NonPV>(pos, ss, alpha, beta, 0);','depth-entry'),
+            ('return qsearch<NonPV>(pos, ss, alpha, beta);','return qsearch<NonPV>(pos, ss, alpha, beta, 0);','razor-entry'),
+            ('value = -qsearch<NonPV>(pos, ss + 1, -probCutBeta, -probCutBeta + 1);','value = -qsearch<NonPV>(pos, ss + 1, -probCutBeta, -probCutBeta + 1, 0);','probcut-entry'),
             ('Value Search::Worker::qsearch(Position& pos, Stack* ss, Value alpha, Value beta) {','Value Search::Worker::qsearch(Position& pos, Stack* ss, Value alpha, Value beta, int qPly) {','definition'),
             ('value = -qsearch<nodeType>(pos, ss + 1, -beta, -alpha);','value = -qsearch<nodeType>(pos, ss + 1, -beta, -alpha, qPly + 1);','recursive')]
           for old,new,label in pairs:
@@ -54,8 +56,8 @@ jobs:
           I=m.group(1)
           if mode=='historical':
             body=[
-              '// Restore the original information shape: tactical distance is',
-              '// a pruning variable again, with bounded growth for modern qsearch.',
+              '// Restore tactical distance as a pruning variable.',
+              '// Growth is bounded to avoid runaway qsearch.',
               'const int leviathanQCap = 2 + std::min(qPly, 4);']
           elif mode=='modern46':
             body=[
