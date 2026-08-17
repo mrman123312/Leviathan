@@ -1,0 +1,101 @@
+name: Fundamentals Ultra Lossless A-B-A+B
+
+on:
+  push:
+    branches: [leviathan/fundamentals-ultra-lab]
+    paths:
+      - '.github/workflows/fundamentals-ultra-lossless-abab.yml'
+      - 'tools/materialize_active_fundamentals_fastpath.py'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  panel:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 55
+    steps:
+      - uses: actions/checkout@v4
+        with: {ref: '${{ github.sha }}', path: lab}
+      - uses: actions/checkout@v4
+        with: {ref: leviathan/fundamentals-ultra-v0, path: base}
+      - uses: actions/checkout@v4
+        with: {ref: leviathan/fundamentals-ultra-p01-qfrontier, path: p01}
+      - uses: actions/checkout@v4
+        with: {ref: leviathan/fundamentals-ultra-v0, path: active}
+      - uses: actions/checkout@v4
+        with: {ref: leviathan/fundamentals-ultra-p01-qfrontier, path: combo}
+
+      - name: Materialize active-cache B and P01+B
+        run: |
+          python3 lab/tools/materialize_active_fundamentals_fastpath.py active
+          python3 lab/tools/materialize_active_fundamentals_fastpath.py combo
+          git -C active diff --check
+          git -C combo diff --check
+          git -C active diff -- src/leviathan_fundamentals.h > active.patch
+          git -C combo diff -- src/leviathan_fundamentals.h > combo-active.patch
+
+      - name: Build all four identical-architecture targets
+        run: |
+          for d in base p01 active combo; do
+            make -C "$d/src" net
+            make -C "$d/src" clean
+            make -C "$d/src" -j2 ARCH=x86-64-avx2 build
+          done
+          cat > active.json <<'EOF'
+          {"Threads":1,"Hash":64,"Leviathan Fundamentals":true,"Leviathan Fundamentals Authority":1,"Leviathan Quiet Overdrive":0,"Leviathan Risk":false,"Leviathan Policy":false,"Leviathan MetaSearch":false,"Leviathan Specialist":false,"Leviathan Atlas":false,"Leviathan Search DSL":false}
+          EOF
+
+      - name: Exact behavior gate plus balanced A-B-A+B timing panel
+        run: |
+          python3 - <<'PY' | tee panel.log
+          import hashlib,json,math,re,statistics,subprocess,time
+          from pathlib import Path
+          E={'base':'base/src/stockfish','p01':'p01/src/stockfish','active':'active/src/stockfish','combo':'combo/src/stockfish'}
+          opts='setoption name Threads value 1\nsetoption name Hash value 64\nsetoption name Leviathan Fundamentals value true\nsetoption name Leviathan Fundamentals Authority value 1\nsetoption name Leviathan Quiet Overdrive value 0\n'
+          gates={'default':'bench 16 1 13 default depth','depth11':'bench 16 1 11 default depth','nodes50k':'bench 16 1 50000 default nodes'}
+          def run(path,cmd):
+            t=time.perf_counter();p=subprocess.run([path],input=opts+cmd+'\nquit\n',text=True,capture_output=True,check=True);wall=time.perf_counter()-t;o=p.stdout+p.stderr
+            nodes=int(re.findall(r'Nodes searched\s*:\s*(\d+)',o)[-1]);lines=[]
+            for raw in o.splitlines():
+              q=raw.strip()
+              if q.startswith('Position:') or q.startswith('bestmove '): lines.append(q)
+              elif q.startswith('info ') and not q.startswith('info string '):
+                q=re.sub(r'\s+nps\s+\d+','',q);q=re.sub(r'\s+time\s+\d+','',q);lines.append(q)
+            return wall,nodes,hashlib.sha256('\n'.join(lines).encode()).hexdigest()
+          signatures={}
+          for g,cmd in gates.items():
+            signatures[g]={k:run(v,cmd)[1:] for k,v in E.items()}
+            if len(set(signatures[g].values()))!=1: raise SystemExit(f'behavior mismatch {g}: {signatures[g]}')
+          for _ in range(2):
+            for p in E.values(): run(p,'bench 16 1 12 default depth')
+          orders=[['base','p01','active','combo'],['combo','active','p01','base'],['p01','combo','base','active'],['active','base','combo','p01']]
+          rows=[]
+          for i in range(20):
+            order=orders[i%4];seq=order+list(reversed(order));rec=[]
+            for k in seq:
+              wall,nodes,sig=run(E[k],'bench 16 1 12 default depth');rec.append({'engine':k,'wall_s':wall,'nodes':nodes,'sig':sig})
+            by={k:statistics.fmean(r['wall_s'] for r in rec if r['engine']==k) for k in E}
+            node_sig={(r['nodes'],r['sig']) for r in rec}
+            if len(node_sig)!=1: raise SystemExit(f'behavior mismatch block {i}')
+            row={'block':i,'times':by,'speed_vs_base':{k:by['base']/by[k] for k in ('p01','active','combo')}};rows.append(row);print(json.dumps(row),flush=True)
+          def summarize(key):
+            vals=[math.log(r['speed_vs_base'][key]) for r in rows];m=statistics.fmean(vals);se=statistics.stdev(vals)/math.sqrt(len(vals));gm=math.exp(m);lo=math.exp(m-1.96*se);hi=math.exp(m+1.96*se)
+            return {'geomean_ratio':gm,'speedup_pct':(gm-1)*100,'approx_95pct_ratio':[lo,hi],'approx_95pct_speedup_pct':[(lo-1)*100,(hi-1)*100],'faster_blocks':sum(r['speed_vs_base'][key]>1 for r in rows)}
+          s={k:summarize(k) for k in ('p01','active','combo')}
+          expected=s['p01']['geomean_ratio']*s['active']['geomean_ratio'];observed=s['combo']['geomean_ratio']
+          s['interaction']={'multiplicative_expected_combo_ratio':expected,'observed_combo_ratio':observed,'synergy_ratio_observed_over_expected':observed/expected,'combo_increment_vs_p01_pct':(observed/s['p01']['geomean_ratio']-1)*100,'combo_increment_vs_active_pct':(observed/s['active']['geomean_ratio']-1)*100}
+          out={'schema':'LV_LOSSLESS_ABAB_V1','all_behavior_identical':True,'signatures':signatures,'summary':s,'rows':rows}
+          Path('lossless-abab.json').write_text(json.dumps(out,indent=2)+'\n');print('SUMMARY',json.dumps(s,sort_keys=True))
+          PY
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: fundamentals-ultra-lossless-abab
+          path: |
+            lossless-abab.json
+            panel.log
+            active.patch
+            combo-active.patch
+          retention-days: 30
