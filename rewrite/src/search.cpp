@@ -140,10 +140,7 @@ int SearchEngine::quiescence(Position& p,int alpha,int beta,int ply){
     }
     int stand=checked?-INF:evaluator_->evaluate(p).mean_cp;
     if(!checked){
-        if(stand>=beta){
-            if(!has_legal_move(p)) return 0;
-            return beta;
-        }
+        if(stand>=beta) return beta;
         if(stand>alpha) alpha=stand;
     }
     int legalCount=0;
@@ -161,7 +158,6 @@ int SearchEngine::quiescence(Position& p,int alpha,int beta,int ply){
         if(score>alpha) alpha=score;
     }
     if(checked&&legalCount==0) return -MATE+ply;
-    if(!checked&&legalCount==0&&!has_legal_move(p)) return 0;
     return alpha;
 }
 
