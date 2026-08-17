@@ -1,0 +1,135 @@
+name: P10B En Passant Full Accounting
+
+on:
+  push:
+    branches: [agent/p10b-en-passant-full-accounting]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  ep-screen:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 70
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with: {ref: e03466d02cc4214442e2ff82fb1a2f28b2d29186, path: cand, fetch-depth: 1}
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with: {ref: e03466d02cc4214442e2ff82fb1a2f28b2d29186, path: base, fetch-depth: 1}
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with: {repository: official-stockfish/Stockfish, ref: 5062aee519a1ba262d472d8ab139851ced56573e, path: oracle, fetch-depth: 1}
+
+      - name: Materialize full EP accounting
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path('cand/src/search.cpp'); s=p.read_text()
+          old='''                Piece capturedPiece = pos.piece_on(move.to_sq());'''
+          new='''                Piece capturedPiece = move.type_of() == EN_PASSANT
+                                      ? make_piece(~us, PAWN)
+                                      : pos.piece_on(move.to_sq());'''
+          if s.count(old)!=1: raise SystemExit(f'main capturedPiece count={s.count(old)}')
+          s=s.replace(old,new,1)
+          old='''                const Value leviathanCaptureCeiling =
+                  futilityBase + PieceValue[pos.piece_on(move.to_sq())];'''
+          new='''                const Value leviathanCapturedValue = move.type_of() == EN_PASSANT
+                  ? PawnValue : PieceValue[pos.piece_on(move.to_sq())];
+                const Value leviathanCaptureCeiling = futilityBase + leviathanCapturedValue;'''
+          if s.count(old)!=1: raise SystemExit(f'qsearch ceiling count={s.count(old)}')
+          s=s.replace(old,new,1)
+          old='''        capturedPiece = type_of(pos.piece_on(bestMove.to_sq()));'''
+          new='''        capturedPiece = bestMove.type_of() == EN_PASSANT
+                          ? PAWN : type_of(pos.piece_on(bestMove.to_sq()));'''
+          if s.count(old)!=1: raise SystemExit(f'best history count={s.count(old)}')
+          s=s.replace(old,new,1)
+          old='''        capturedPiece = type_of(pos.piece_on(move.to_sq()));'''
+          new='''        capturedPiece = move.type_of() == EN_PASSANT
+                          ? PAWN : type_of(pos.piece_on(move.to_sq()));'''
+          if s.count(old)!=1: raise SystemExit(f'searched history count={s.count(old)}')
+          p.write_text(s)
+
+          p=Path('cand/src/movepick.cpp'); s=p.read_text()
+          old='''        const Piece     capturedPiece = pos.piece_on(to);'''
+          new='''        const Piece     capturedPiece = m.type_of() == EN_PASSANT
+                                          ? make_piece(~us, PAWN) : pos.piece_on(to);'''
+          if s.count(old)!=1: raise SystemExit(f'movepick victim count={s.count(old)}')
+          p.write_text(s.replace(old,new,1))
+          PY
+          git -C cand diff --check
+          git -C cand diff -- src/search.cpp src/movepick.cpp
+
+      - name: Build
+        run: |
+          for d in base cand oracle; do
+            make -C "$d/src" net
+            make -C "$d/src" clean
+            make -C "$d/src" -j2 ARCH=x86-64-avx2 build
+          done
+          python3 -m pip install --disable-pip-version-check 'python-chess>=1.999,<2'
+
+      - name: Same adversarial EP development corpus
+        run: |
+          mkdir result
+          cat > result/test.py <<'PY'
+          import json,statistics
+          from pathlib import Path
+          import chess,chess.engine
+          FENS='''r1bqk2r/p2nbpp1/1pp1pn2/3p2Pp/P2P4/2NBP2P/2PBQP2/R3K1NR w KQkq h6 0 15
+rnbqkb1r/3n2pp/2ppp3/pp2Pp2/3P4/P1NB1NP1/1PP2P1P/R1BQK2R w KQkq f6 0 9
+rnbqk2r/3nb1pp/2ppp3/pp2Pp2/3P3P/P1NB1NP1/1PP2P2/R1BQK2R w KQkq f6 0 10
+rnbqkb1r/pp2pp1p/5np1/2pP4/8/4P3/PP1PBPPP/RNBQK1NR w KQkq c6 0 5
+rnbqkb1r/ppp2p1p/5np1/3Pp3/8/4P3/PP1PBPPP/RNBQK1NR w KQkq e6 0 5
+rnbqkb1r/1p2pp1p/p4np1/2pP4/8/4P2P/PP1PBPP1/RNBQK1NR w KQkq c6 0 6
+rnbqkb1r/1pp2p1p/p4np1/3Pp3/8/4P2P/PP1PBPP1/RNBQK1NR w KQkq e6 0 6
+r1bqkb1r/1pp1pppp/2n2n2/3p4/pPPP4/5NP1/P2NPP1P/R1BQKB1R b KQkq b3 0 6
+r2qkb1r/1pp1pppp/2n2n2/3p4/pPPP2b1/4PNP1/P2N1P1P/R1BQKB1R b KQkq b3 0 7
+rnbqkb1r/p3pppp/3p1n2/1pP5/2P5/5N2/PP2PPPP/RNBQKB1R w KQkq b6 0 5
+rnb1kb1r/p2qpppp/3p1n2/1pP5/2P5/1P3N2/P1Q1PPPP/RNB1KB1R w KQkq b6 0 8
+rnb1kb1r/p2q1ppp/3ppn2/1pP5/2P5/1P3NP1/P1Q1PP1P/RNB1KB1R w KQkq b6 0 9
+r1bqkb1r/pppp1ppp/5n2/3Pp3/1nP1P3/8/PP3PPP/RNBQKBNR w KQkq e6 0 5
+r1bqkb1r/pp1ppppp/5n2/2pP4/1nP1P3/8/PP3PPP/RNBQKBNR w KQkq c6 0 5
+r1bqkb1r/pppp1ppp/8/3Pp3/1nP1n3/P7/1P3PPP/RNBQKBNR w KQkq e6 0 6
+rnbqkbnr/pp3ppp/2p5/3p4/3PpP2/2N5/PPP1P1PP/R1BQKBNR b KQkq f3 0 5
+rnbqkb1r/pp3ppp/2p2n2/3p4/3PpP2/2N3P1/PPP1P2P/R1BQKBNR b KQkq f3 0 6
+rnbqkb1r/1p3ppp/2p2n2/p2p4/3PpP2/2N3P1/PPP1P1BP/R1BQK1NR b KQkq f3 0 7
+r1bqkbnr/pp1n1p1p/3p2p1/2pPp3/2P5/P5P1/1P2PP1P/RNBQKBNR w KQkq e6 0 6
+r1bqk1nr/pp1n1pbp/3p2p1/2pPp3/2P5/P4NP1/1P2PP1P/RNBQKB1R w KQkq e6 0 7
+r1bqk1nr/1p1n1pbp/p2p2p1/2pPp3/2P1P3/P4NP1/1P3P1P/RNBQKB1R w KQkq e6 0 8
+r1bqk2r/1p1n1pbp/p2p1np1/2pPp3/2P1P3/P4NP1/1P1N1P1P/R1BQKB1R w KQkq e6 0 9
+r1b1k2r/1pqn1pbp/p2p1np1/2pPp3/2P1P3/P4NP1/1P1N1P1P/1RBQKB1R w Kkq e6 0 10
+rn1qk2r/ppp1p1bp/4b3/5p2/2PpN3/5P2/PP1P2PP/R1BQKBNR b KQkq c3 0 8'''.splitlines()
+          def cfg(e):
+              o={'Threads':1,'Hash':64}
+              if 'Leviathan Fundamentals' in e.options:o['Leviathan Fundamentals']=True
+              if 'Leviathan Fundamentals Authority' in e.options:o['Leviathan Fundamentals Authority']=1
+              if 'Leviathan Quiet Overdrive' in e.options:o['Leviathan Quiet Overdrive']=0
+              for n in ['Leviathan Risk','Leviathan Policy','Leviathan MetaSearch','Leviathan Specialist','Leviathan Atlas','Leviathan Search DSL']:
+                  if n in e.options:o[n]=False
+              e.configure({k:v for k,v in o.items() if k in e.options})
+          def cp(i,c):
+              s=i.get('score'); return None if s is None else s.pov(c).score(mate_score=100000)
+          base=chess.engine.SimpleEngine.popen_uci('base/src/stockfish'); cand=chess.engine.SimpleEngine.popen_uci('cand/src/stockfish')
+          ob=chess.engine.SimpleEngine.popen_uci('oracle/src/stockfish'); gb=chess.engine.SimpleEngine.popen_uci('oracle/src/stockfish'); gc=chess.engine.SimpleEngine.popen_uci('oracle/src/stockfish')
+          cfg(base);cfg(cand)
+          for e in (ob,gb,gc):e.configure({'Threads':1,'Hash':64})
+          rows=[]
+          try:
+              for i,fen in enumerate(FENS):
+                  b=chess.Board(fen); col=b.turn; eps=[m.uci() for m in b.legal_moves if b.is_en_passant(m)]
+                  oi=ob.analyse(b,chess.engine.Limit(nodes=1000000),game=('o',i)); os=cp(oi,col)
+                  br=base.play(b,chess.engine.Limit(nodes=100000),info=chess.engine.INFO_ALL,game=('b',i)); cr=cand.play(b,chess.engine.Limit(nodes=100000),info=chess.engine.INFO_ALL,game=('c',i))
+                  bg=cp(gb.analyse(b,chess.engine.Limit(nodes=300000),root_moves=[br.move],game=('gb',i)),col); cg=cp(gc.analyse(b,chess.engine.Limit(nodes=300000),root_moves=[cr.move],game=('gc',i)),col)
+                  reg=lambda g:max(0,os-g)
+                  d=reg(bg)-reg(cg); rows.append({'fen':fen,'ep':eps,'base_move':br.move.uci(),'cand_move':cr.move.uci(),'base_regret':reg(bg),'cand_regret':reg(cg),'delta':d})
+                  print(i+1,br.move,cr.move,d,flush=True)
+          finally:
+              for e in (base,cand,ob,gb,gc):e.quit()
+          ds=[r['delta'] for r in rows]; out={'positions':len(rows),'changed':sum(r['base_move']!=r['cand_move'] for r in rows),'base_mean_regret':statistics.mean(r['base_regret'] for r in rows),'cand_mean_regret':statistics.mean(r['cand_regret'] for r in rows),'mean_improvement':statistics.mean(ds),'better':sum(x>0 for x in ds),'tie':sum(x==0 for x in ds),'worse':sum(x<0 for x in ds),'max_rescue':max(ds),'max_harm':min(ds),'base_ep_choices':sum(r['base_move'] in r['ep'] for r in rows),'cand_ep_choices':sum(r['cand_move'] in r['ep'] for r in rows)}
+          Path('result/rows.json').write_text(json.dumps(rows,indent=2));Path('result/summary.json').write_text(json.dumps(out,indent=2));print(json.dumps(out,indent=2))
+          PY
+          python3 result/test.py
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with: {name: 'p10b-full-ep-${{ github.sha }}', path: result/, retention-days: 30}
