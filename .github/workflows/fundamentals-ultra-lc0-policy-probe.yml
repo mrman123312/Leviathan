@@ -52,7 +52,9 @@ jobs:
           sha256sum positions.json | tee positions.sha256
 
       - name: Compare policy-head proposals to 80k kernel under deep oracle
+        shell: bash
         run: |
+          set -euo pipefail
           python3 - <<'PY' | tee policy-probe.log
           import chess,chess.engine,json,time,statistics,os
           KOPT={'Threads':1,'Hash':64,'Leviathan Fundamentals':True,'Leviathan Fundamentals Authority':1,'Leviathan Quiet Overdrive':0}
@@ -67,7 +69,9 @@ jobs:
             for i,x in enumerate(json.load(open('positions.json')),1):
               b=chess.Board(x['final_fen']); tok=('p',i,x['final_fen'])
               ki=K.analyse(b,chess.engine.Limit(nodes=80000),game=('k',tok));km=ki['pv'][0]
-              t=time.perf_counter();li=L.analyse(b,chess.engine.Limit(nodes=1),game=('l',tok));lms=(time.perf_counter()-t)*1000;lm=li['pv'][0]
+              t=time.perf_counter();lp=L.play(b,chess.engine.Limit(nodes=1),game=('l',tok));lms=(time.perf_counter()-t)*1000;lm=lp.move
+              if lm is None or lm not in b.legal_moves:
+                raise RuntimeError(f'Lc0 policyhead returned no legal bestmove at position {i}: {lm}')
               oi=OB.analyse(b,chess.engine.Limit(nodes=500000),game=('ob',tok));om=oi['pv'][0];os=int(oi['score'].pov(b.turn).score(mate_score=100000) or 0)
               ksi=OK.analyse(b,chess.engine.Limit(nodes=500000),root_moves=[km],game=('ok',tok));ks=int(ksi['score'].pov(b.turn).score(mate_score=100000) or 0)
               lsi=OL.analyse(b,chess.engine.Limit(nodes=500000),root_moves=[lm],game=('ol',tok));ls=int(lsi['score'].pov(b.turn).score(mate_score=100000) or 0)
@@ -75,11 +79,12 @@ jobs:
               rows.append({'i':i,'fen':b.fen(),'kernel':km.uci(),'policy':lm.uci(),'oracle':om.uci(),'kernel_regret':kr,'policy_regret':lr,'policy_ms':lms,'disagree':km!=lm})
               print(f'{i:02d}/40 K={km} r={kr} L={lm} r={lr} O={om} policy_ms={lms:.2f}',flush=True)
           finally:
-            for e in [K,L,OB,OK,OL]:e.quit()
+            for e in [K,L,OB,OK,OL]: e.quit()
           dis=[r for r in rows if r['disagree']]
           out={'positions':len(rows),'disagreements':len(dis),'policy_latency_ms':{'mean':statistics.fmean(r['policy_ms'] for r in rows),'median':statistics.median(r['policy_ms'] for r in rows)},'kernel':{'mean_regret':statistics.fmean(r['kernel_regret'] for r in rows),'oracle_agreement':sum(r['kernel']==r['oracle'] for r in rows)/len(rows)},'policy':{'mean_regret':statistics.fmean(r['policy_regret'] for r in rows),'oracle_agreement':sum(r['policy']==r['oracle'] for r in rows)/len(rows)},'on_disagreement':{'count':len(dis),'policy_better':sum(r['policy_regret']<r['kernel_regret'] for r in dis),'kernel_better':sum(r['kernel_regret']<r['policy_regret'] for r in dis),'same_regret':sum(r['kernel_regret']==r['policy_regret'] for r in dis)},'rows':rows}
           open('policy-probe.json','w').write(json.dumps(out,indent=2)+'\n');print(json.dumps({k:v for k,v in out.items() if k!='rows'},indent=2))
           PY
+          test -s policy-probe.json
 
       - name: Provenance
         run: |
