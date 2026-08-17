@@ -45,6 +45,11 @@ inline State& state() {
     return s;
 }
 
+inline bool ready() {
+    const auto& s = state();
+    return s.samplePermille > 0 && !s.file.empty();
+}
+
 inline void set_file(const std::string& path) {
     auto& s = state();
     std::lock_guard<std::mutex> lock(s.mutex);
