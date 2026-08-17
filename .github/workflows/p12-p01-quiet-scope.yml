@@ -1,0 +1,61 @@
+name: P12 P01 Quiet Scope
+on:
+  push:
+    branches: [agent/p12-p01-quiet-scope]
+    paths: ['.github/workflows/p12-p01-quiet-scope.yml']
+  workflow_dispatch:
+permissions: {contents: write}
+jobs:
+  validate:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with: {ref: agent/p12-p01-quiet-scope, path: cand, fetch-depth: 5, persist-credentials: true}
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with: {ref: 3404fa2ea9b4fe75236e2584be9da3416e646ec2, path: base, fetch-depth: 1}
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with: {ref: leviathan/fundamentals-ultra-lab, path: harness, fetch-depth: 1}
+      - name: Apply quiet-scope specialization
+        working-directory: cand
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path('src/search.cpp');s=p.read_text()
+          a="    const bool leviathanRiskReady  = Leviathan::Control::risk_ready();\n    const bool leviathanDslReady   = Leviathan::DSL::ready();\n    const bool leviathanTraceReady = Leviathan::Trace::ready();"
+          b="    const bool leviathanRiskReady         = Leviathan::Control::risk_ready();\n    const bool leviathanDslReady          = Leviathan::DSL::ready();\n    const bool leviathanTraceReady        = Leviathan::Trace::ready();\n    const bool leviathanFundamentalsReady = Leviathan::Fundamentals::ready();"
+          if s.count(a)!=1:raise SystemExit('ready anchor')
+          s=s.replace(a,b,1)
+          a="                const bool leviathanScopeProtected =\n                  Leviathan::Fundamentals::protected_scope_move(\n                    pos, move, prevSq, capture, givesCheck);"
+          b="                const bool leviathanScopeProtected = leviathanFundamentalsReady\n                  && (move.type_of() == PROMOTION\n                      || (type_of(movedPiece) == PAWN\n                          && relative_rank(color_of(movedPiece), move.to_sq()) >= RANK_6));"
+          if s.count(a)!=1:raise SystemExit('scope anchor')
+          p.write_text(s.replace(a,b,1))
+          PY
+          git diff --check
+      - name: Build
+        run: |
+          make -C base/src net && make -C base/src clean && make -C base/src -j2 ARCH=x86-64-avx2 build
+          cp base/src/stockfish base/src/control_a; cp base/src/stockfish base/src/control_b
+          cp base/src/nn-ab28990d4ea3.nnue cand/src/
+          make -C cand/src clean && make -C cand/src -j2 ARCH=x86-64-avx2 build
+          echo '{"Threads":1,"Hash":64,"Leviathan Fundamentals":true,"Leviathan Fundamentals Authority":1,"Leviathan Quiet Overdrive":0,"Leviathan Risk":false,"Leviathan Policy":false,"Leviathan MetaSearch":false,"Leviathan Specialist":false,"Leviathan Atlas":false,"Leviathan Search DSL":false}' > active.json
+      - name: Benchmark
+        run: python3 harness/tools/lossless_pair_benchmark.py --control-a base/src/control_a --control-b base/src/control_b --candidate cand/src/stockfish --options active.json --rounds 31 --output p12.json | tee p12.log
+      - name: Gate
+        run: |
+          python3 - <<'PY'
+          import json
+          d=json.load(open('p12.json'));s=d['signatures'];r=d['results'];exact=True
+          for c in ('default','depth11','nodes50k'):
+            exact &= s['control_a'][c]['nodes']==s['candidate'][c]['nodes'] and s['control_a'][c]['behavior_sha256']==s['candidate'][c]['behavior_sha256']
+          x=r['candidate'];a=r['control_b'];o={'exact':exact,'aa_median':a['median_speedup'],'aa_ci':a['bootstrap_median_95pct_ci'],'median':x['median_speedup'],'geo':x['geometric_mean_speedup'],'ci':x['bootstrap_median_95pct_ci'],'faster':x['faster_rounds'],'rounds':x['rounds']};open('p12-summary.json','w').write(json.dumps(o,indent=2));print(json.dumps(o,indent=2))
+          if not exact or x['bootstrap_median_95pct_ci'][0] <= 1.0:raise SystemExit('P12_GATE_FAIL')
+          PY
+      - name: Materialize source
+        working-directory: cand
+        run: |
+          git config user.name 'Leviathan Research Bot'; git config user.email '154391238+mrman123312@users.noreply.github.com'
+          git add src/search.cpp && git commit -m 'P12: materialize quiet-scope lossless fast path [skip ci]' && git push origin HEAD:agent/p12-p01-quiet-scope
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with: {name: 'p12-${{ github.sha }}', path: 'p12*', retention-days: 30}
