@@ -1,0 +1,107 @@
+name: Fundamentals Ultra Evidence96 Confirmation
+
+on:
+  push:
+    branches: [leviathan/fundamentals-ultra-lab]
+    paths: ['.github/workflows/fundamentals-ultra-evidence96-confirm.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  openings:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+        with: {ref: leviathan/fundamentals-ultra-lab, path: lab}
+      - name: Build current Stockfish and fresh mixed-horizon corpus
+        run: |
+          git clone -q https://github.com/official-stockfish/Stockfish.git "$RUNNER_TEMP/sf"
+          git -C "$RUNNER_TEMP/sf" checkout -q 5062aee519a1ba262d472d8ab139851ced56573e
+          make -C "$RUNNER_TEMP/sf/src" -j2 ARCH=x86-64-avx2 build
+          python3 -m pip install --disable-pip-version-check chess==1.11.2
+          python3 lab/tools/generate_balanced_openings.py --stockfish "$RUNNER_TEMP/sf/src/stockfish" --output p10.json --count 25 --plies 10 --seed 22360679 --max-abs-cp 110
+          python3 lab/tools/generate_balanced_openings.py --stockfish "$RUNNER_TEMP/sf/src/stockfish" --output p22.json --count 25 --plies 22 --seed 22360731 --max-abs-cp 110
+          python3 - <<'PY'
+          import json
+          out=json.load(open('p10.json'))+json.load(open('p22.json'))
+          open('openings.json','w').write(json.dumps(out,indent=2)+'\n')
+          PY
+          sha256sum openings.json > openings.sha256
+      - uses: actions/upload-artifact@v4
+        with: {name: evidence96-openings, path: 'openings.*', retention-days: 30}
+
+  gate:
+    needs: openings
+    runs-on: ubuntu-22.04
+    timeout-minutes: 75
+    strategy:
+      fail-fast: false
+      matrix:
+        gate: [equal-node, fixed-time, stockfish, oracle]
+    steps:
+      - uses: actions/checkout@v4
+        with: {ref: leviathan/fundamentals-ultra-lab, path: lab}
+      - uses: actions/checkout@v4
+        with: {ref: leviathan/fundamentals-ultra-v0, path: cand}
+      - uses: actions/checkout@v4
+        with: {ref: leviathan/fundamentals-ultra-v0, path: base}
+      - uses: actions/download-artifact@v4
+        with: {name: evidence96-openings, path: shared}
+      - name: Materialize evidence-conditioned uncapped frontier
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path('cand/src/search.cpp');s=p.read_text()
+          old='''                if (moveCount > 4 || (moveCount > 2 && leviathanCaptureCeiling < alpha - 48))
+                    continue;'''
+          new='''                // No universal upper capture-count cap. After the first four
+                // candidates, demand substantially stronger cheap evidence before
+                // paying SEE/search cost. The candidate is then judged by the same
+                // futility and SEE machinery as earlier captures.
+                if ((moveCount > 2 && leviathanCaptureCeiling < alpha - 48)
+                    || (moveCount > 4 && leviathanCaptureCeiling < alpha + 96))
+                    continue;'''
+          if s.count(old)!=1:raise SystemExit('frontier anchor')
+          p.write_text(s.replace(old,new,1))
+          PY
+          git -C cand diff --check
+          git -C cand diff -- src/search.cpp > mutation.patch
+      - name: Build candidate, Ultra-v0, current Stockfish
+        run: |
+          make -C cand/src net && make -C cand/src clean && make -C cand/src -j2 ARCH=x86-64-avx2 build
+          make -C base/src net && make -C base/src clean && make -C base/src -j2 ARCH=x86-64-avx2 build
+          git clone -q https://github.com/official-stockfish/Stockfish.git "$RUNNER_TEMP/sf"
+          git -C "$RUNNER_TEMP/sf" checkout -q 5062aee519a1ba262d472d8ab139851ced56573e
+          make -C "$RUNNER_TEMP/sf/src" -j2 ARCH=x86-64-avx2 build
+          python3 -m pip install --disable-pip-version-check chess==1.11.2
+      - name: Equal-node vs Ultra-v0
+        if: matrix.gate == 'equal-node'
+        run: |
+          mkdir result
+          python3 lab/tools/fundamentals_tournament.py --candidate "$PWD/cand/src/stockfish" --opponent "$PWD/base/src/stockfish" --candidate-label evidence96 --opponent-label Ultra-v0 --candidate-fundamentals --opponent-fundamentals --nodes-per-move 120000 --openings-json "$PWD/shared/openings.json" --max-plies 200 --output-dir result | tee result/match.log
+      - name: Fixed-time vs Ultra-v0
+        if: matrix.gate == 'fixed-time'
+        run: |
+          mkdir result
+          python3 lab/tools/fundamentals_tournament.py --candidate "$PWD/cand/src/stockfish" --opponent "$PWD/base/src/stockfish" --candidate-label evidence96 --opponent-label Ultra-v0 --candidate-fundamentals --opponent-fundamentals --move-time-ms 150 --openings-json "$PWD/shared/openings.json" --max-plies 200 --output-dir result | tee result/match.log
+      - name: Fixed-time vs current Stockfish
+        if: matrix.gate == 'stockfish'
+        run: |
+          mkdir result
+          python3 lab/tools/fundamentals_tournament.py --candidate "$PWD/cand/src/stockfish" --opponent "$RUNNER_TEMP/sf/src/stockfish" --candidate-label evidence96 --opponent-label Stockfish-current --candidate-fundamentals --move-time-ms 150 --openings-json "$PWD/shared/openings.json" --max-plies 200 --output-dir result | tee result/match.log
+      - name: Hardened isolated oracle
+        if: matrix.gate == 'oracle'
+        run: python3 lab/tools/oracle_regret.py --candidate "$PWD/cand/src/stockfish" --baseline "$PWD/base/src/stockfish" --oracle "$RUNNER_TEMP/sf/src/stockfish" --openings-json "$PWD/shared/openings.json" --candidate-label evidence96 --candidate-fundamentals --baseline-fundamentals --choice-nodes 140000 --oracle-nodes 900000 --output regret.json | tee regret.log
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: 'evidence96-${{ matrix.gate }}'
+          path: |
+            result
+            regret.json
+            regret.log
+            mutation.patch
+            shared/openings.sha256
+          retention-days: 30
