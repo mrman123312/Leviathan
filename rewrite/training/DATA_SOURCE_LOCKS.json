@@ -72,12 +72,21 @@
       "license_note": "Respect file/submodule licensing separately; data licensing is recorded independently as ODbL/DbCL."
     },
     {
-      "id": "lc0-rescore-tb",
+      "id": "lc0-official-rescorer",
+      "repository": "LeelaChessZero/lc0",
+      "revision": "d8ce48258c39d331c119f8c8729374ceb3df8409",
+      "license": "GPL-3.0-or-later",
+      "role": ["lc0_chunk_rescore", "nnue_plain_export", "bestmove_and_score_export"],
+      "build_contract": "meson setup build --buildtype release -Drescorer=true -Dlc0=false -Dgtest=false -Ddefault_library=static",
+      "notes": "Preferred active rescorer: modern official Lc0 now builds the rescorer directly from the main codebase."
+    },
+    {
+      "id": "lc0-rescore-tb-historical",
       "repository": "Tilps/lc0",
       "revision": "a69c7fb1f2aefce9a8f22e6fa867e466c1d3687e",
       "license": "GPL-3.0",
-      "role": ["lc0_chunk_rescore", "nnue_plain_export", "bestmove_and_score_export"],
-      "notes": "Pinned rescore_tb implementation used by the public Lc0-to-Stockfish conversion workflow."
+      "role": ["historical_lc0_chunk_rescore", "historical_nnue_plain_export"],
+      "notes": "Historical rescore_tb implementation used by the older public Lc0-to-Stockfish conversion workflow; retained for reproducibility, not preferred for new conversions."
     },
     {
       "id": "stockfish-training-tools",
