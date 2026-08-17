@@ -1,0 +1,189 @@
+name: Fundamentals Ultra Research Screen
+
+on:
+  push:
+    branches:
+      - leviathan/fundamentals-ultra-lab
+    paths:
+      - '.github/workflows/fundamentals-ultra-screen.yml'
+      - 'tools/fundamentals_tournament.py'
+
+permissions:
+  contents: read
+
+jobs:
+  aa-calibration:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: leviathan/fundamentals-ultra-lab
+          path: lab
+      - uses: actions/checkout@v4
+        with:
+          ref: leviathan/fundamentals-v2.1
+          path: engine
+      - name: Build Fundamentals v2.1
+        run: |
+          make -C engine/src net
+          make -C engine/src clean
+          make -C engine/src -j2 ARCH=x86-64-avx2 build
+      - name: Install controller
+        run: python3 -m pip install --disable-pip-version-check chess==1.11.2
+      - name: A/A paired calibration
+        run: |
+          mkdir -p "$RUNNER_TEMP/aa"
+          python3 lab/tools/fundamentals_tournament.py \
+            --candidate "$PWD/engine/src/stockfish" \
+            --opponent "$PWD/engine/src/stockfish" \
+            --candidate-label fundamentals-v2.1-A \
+            --opponent-label fundamentals-v2.1-B \
+            --candidate-fundamentals --opponent-fundamentals \
+            --move-time-ms 50 --max-plies 180 \
+            --output-dir "$RUNNER_TEMP/aa"
+          cat "$RUNNER_TEMP/aa/summary.json"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: fundamentals-ultra-aa-calibration
+          path: ${{ runner.temp }}/aa
+          retention-days: 30
+
+  screen:
+    runs-on: ubuntu-22.04
+    strategy:
+      fail-fast: false
+      max-parallel: 12
+      matrix:
+        include:
+          - label: fundamentals-v2.1
+            ref: leviathan/fundamentals-v2.1
+          - label: fundamentals-v2.1.1-phasefix
+            ref: leviathan/fundamentals-v2.1.1-phasefix
+          - label: fundamentals-v2.1.2-critical-pawn
+            ref: leviathan/fundamentals-v2.1.2-critical-pawn
+          - label: fundamentals-v2.1.3-imminent-pawn
+            ref: leviathan/fundamentals-v2.1.3-imminent-pawn
+          - label: fundamentals-v2.2
+            ref: leviathan/fundamentals-v2.2
+          - label: fundamentals-v2.5-uncertainty
+            ref: leviathan/fundamentals-v2.5-uncertainty
+          - label: fundamentals-v2.6-threat-pressure
+            ref: leviathan/fundamentals-v2.6-threat-pressure
+          - label: fundamentals-v2.7-qfrontier
+            ref: leviathan/fundamentals-v2.7-qfrontier
+          - label: fundamentals-v2.8-pressure-intersection
+            ref: leviathan/fundamentals-v2.8-pressure-intersection
+          - label: fundamentals-v2.9-history-context
+            ref: leviathan/fundamentals-v2.9-history-context
+          - label: strength-v3-rar-pv
+            ref: leviathan/strength-v3-rar-pv
+          - label: strength-v5-margin-skeptic
+            ref: leviathan/strength-v5-margin-skeptic
+          - label: strength-v6-proof-obligation
+            ref: leviathan/strength-v6-proof-obligation
+          - label: strength-v7-persistent-proof
+            ref: leviathan/strength-v7-persistent-proof
+          - label: strength-v8-evidence-lattice
+            ref: leviathan/strength-v8-evidence-lattice
+          - label: strength-v8-4-causal-minimal
+            ref: leviathan/strength-v8-4-causal-minimal
+          - label: strength-v8-5-lmr-receipt
+            ref: leviathan/strength-v8-5-lmr-receipt
+          - label: strength-v8-5a-witness-hygiene
+            ref: leviathan/strength-v8-5a-witness-hygiene
+          - label: strength-v8-5b-lmr-receipt-only
+            ref: leviathan/strength-v8-5b-lmr-receipt-only
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: leviathan/fundamentals-ultra-lab
+          path: lab
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ matrix.ref }}
+          path: candidate
+      - name: Build candidate ${{ matrix.label }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          make -C candidate/src net
+          make -C candidate/src clean
+          make -C candidate/src -j2 ARCH=x86-64-avx2 build
+          candidate/src/stockfish bench 16 1 8 default depth > "$RUNNER_TEMP/candidate-bench.txt" 2>&1
+          tail -n 8 "$RUNNER_TEMP/candidate-bench.txt"
+      - name: Build pinned Stockfish control
+        shell: bash
+        run: |
+          set -euo pipefail
+          git clone https://github.com/official-stockfish/Stockfish.git "$RUNNER_TEMP/stockfish"
+          git -C "$RUNNER_TEMP/stockfish" checkout 5062aee519a1ba262d472d8ab139851ced56573e
+          make -C "$RUNNER_TEMP/stockfish/src" -j2 ARCH=x86-64-avx2 build
+      - name: Install controller
+        run: python3 -m pip install --disable-pip-version-check chess==1.11.2
+      - name: 16-game paired Stockfish screen
+        shell: bash
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/screen-${{ matrix.label }}"
+          mkdir -p "$out"
+          python3 lab/tools/fundamentals_tournament.py \
+            --candidate "$PWD/candidate/src/stockfish" \
+            --opponent "$RUNNER_TEMP/stockfish/src/stockfish" \
+            --candidate-label '${{ matrix.label }}' \
+            --opponent-label 'Stockfish-5062aee5' \
+            --candidate-fundamentals \
+            --move-time-ms 50 --max-plies 180 \
+            --output-dir "$out" \
+            | tee "$out/match.log"
+          cp "$RUNNER_TEMP/candidate-bench.txt" "$out/candidate-bench.txt"
+          printf 'candidate_ref=%s\ncandidate_sha=%s\nstockfish_sha=%s\n' \
+            '${{ matrix.ref }}' "$(git -C candidate rev-parse HEAD)" \
+            "$(git -C "$RUNNER_TEMP/stockfish" rev-parse HEAD)" > "$out/revisions.txt"
+          cat "$out/summary.json"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: screen-${{ matrix.label }}
+          path: ${{ runner.temp }}/screen-${{ matrix.label }}
+          retention-days: 30
+
+  aggregate:
+    if: always()
+    needs: [screen, aa-calibration]
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: screen-*
+          path: results
+      - name: Build leaderboard
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import json, pathlib
+          rows=[]
+          for p in pathlib.Path('results').rglob('summary.json'):
+              x=json.loads(p.read_text())
+              rows.append(x)
+          rows.sort(key=lambda x:(x.get('score_fraction',0), x.get('draws',0)), reverse=True)
+          print('# Fundamentals Ultra screening leaderboard')
+          print('| candidate | W | D | L | score | naive Elo | mean depth | mean nodes |')
+          print('|---|---:|---:|---:|---:|---:|---:|---:|')
+          for x in rows:
+              elo=x.get('naive_logistic_elo')
+              print(f"| {x['candidate']} | {x['wins']} | {x['draws']} | {x['losses']} | {100*x['score_fraction']:.2f}% | {elo if elo is not None else 'n/a'} | {x.get('candidate_mean_depth')} | {x.get('candidate_mean_nodes')} |")
+          pathlib.Path('leaderboard.json').write_text(json.dumps(rows,indent=2,sort_keys=True)+'\n')
+          pathlib.Path('leaderboard.md').write_text('\n'.join([
+              '# Fundamentals Ultra screening leaderboard','',
+              '| candidate | W | D | L | score | naive Elo |',
+              '|---|---:|---:|---:|---:|---:|',
+              *[f"| {x['candidate']} | {x['wins']} | {x['draws']} | {x['losses']} | {100*x['score_fraction']:.2f}% | {x.get('naive_logistic_elo')} |" for x in rows]
+          ])+'\n')
+          PY
+          cat leaderboard.md
+      - uses: actions/upload-artifact@v4
+        with:
+          name: fundamentals-ultra-screen-leaderboard
+          path: |
+            leaderboard.json
+            leaderboard.md
+          retention-days: 30
