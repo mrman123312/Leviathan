@@ -1,0 +1,109 @@
+name: Fundamentals Ultra Stars Search Lattice
+
+on:
+  push:
+    branches: [leviathan/fundamentals-ultra-lab]
+    paths: ['.github/workflows/fundamentals-ultra-stars-search-lattice.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  screen:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 70
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {label: control, cap: 4, margin: 48, skeptic: 0}
+          - {label: qf-tight24, cap: 4, margin: 24, skeptic: 0}
+          - {label: qf-tight32, cap: 4, margin: 32, skeptic: 0}
+          - {label: qf-wide72, cap: 4, margin: 72, skeptic: 0}
+          - {label: qf-wide96, cap: 4, margin: 96, skeptic: 0}
+          - {label: qf-cap3, cap: 3, margin: 48, skeptic: 0}
+          - {label: qf-cap5, cap: 5, margin: 48, skeptic: 0}
+          - {label: qf-cap5-wide72, cap: 5, margin: 72, skeptic: 0}
+          - {label: margin-skeptic, cap: 4, margin: 48, skeptic: 1}
+          - {label: skeptic-tight32, cap: 4, margin: 32, skeptic: 1}
+          - {label: skeptic-cap5-64, cap: 5, margin: 64, skeptic: 1}
+    steps:
+      - uses: actions/checkout@v4
+        with: {ref: leviathan/fundamentals-ultra-lab, path: lab}
+      - uses: actions/checkout@v4
+        with: {ref: leviathan/fundamentals-ultra-phasefix-qfrontier, path: cand}
+      - uses: actions/checkout@v4
+        with: {ref: leviathan/fundamentals-ultra-phasefix-qfrontier, path: base}
+
+      - name: Materialize one isolated search mutation
+        env:
+          CAP: '${{ matrix.cap }}'
+          MARGIN: '${{ matrix.margin }}'
+          SKEPTIC: '${{ matrix.skeptic }}'
+        run: |
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+          p=Path('cand/src/search.cpp'); s=p.read_text()
+          cap=int(os.environ['CAP']); margin=int(os.environ['MARGIN']); skeptic=os.environ['SKEPTIC']=='1'
+          old='moveCount > 4 || (moveCount > 2 && leviathanCaptureCeiling < alpha - 48)'
+          new=f'moveCount > {cap} || (moveCount > 2 && leviathanCaptureCeiling < alpha - {margin})'
+          if s.count(old)!=1:
+              raise SystemExit(f'Q-frontier anchor count={s.count(old)}')
+          s=s.replace(old,new,1)
+          if skeptic:
+              anchor='''                // Post LMR continuation history updates\n                update_continuation_histories(ss, movedPiece, move.to_sq(), 1334);\n            }\n        }\n\n        // Step 18. Full-depth search when LMR is skipped\n'''
+              repl='''                // Post LMR continuation history updates\n                update_continuation_histories(ss, movedPiece, move.to_sq(), 1334);\n            }\n            // Leviathan Margin Skeptic: re-open only genuinely reduced quiet\n            // near-alpha fail-lows, where the reduction itself is plausible debt.\n            else if (d < newDepth && depth >= 6 && moveCount <= 10 && !capture && !givesCheck\n                     && value >= alpha - (18 + 3 * std::min(int(depth), 12))\n                     && (PvNode || ss->ttPv\n                         || Leviathan::Fundamentals::quiet_tactical_tension(\n                           pos, move, capture, givesCheck)))\n            {\n                leviathanResearched = true;\n                value = -search<NonPV>(pos, ss + 1, -(alpha + 1), -alpha, newDepth, !cutNode);\n                if (value > alpha)\n                    update_continuation_histories(ss, movedPiece, move.to_sq(), 1334);\n            }\n        }\n\n        // Step 18. Full-depth search when LMR is skipped\n'''
+              if s.count(anchor)!=1:
+                  raise SystemExit(f'Margin Skeptic anchor count={s.count(anchor)}')
+              s=s.replace(anchor,repl,1)
+          p.write_text(s)
+          PY
+          git -C cand diff --check
+          git -C cand diff -- src/search.cpp | tee mutation.patch
+
+      - name: Build candidate, kernel control, and pinned Stockfish
+        run: |
+          make -C cand/src net && make -C cand/src clean && make -C cand/src -j2 ARCH=x86-64-avx2 build
+          make -C base/src net && make -C base/src clean && make -C base/src -j2 ARCH=x86-64-avx2 build
+          git clone -q https://github.com/official-stockfish/Stockfish.git "$RUNNER_TEMP/sf"
+          git -C "$RUNNER_TEMP/sf" checkout -q 5062aee519a1ba262d472d8ab139851ced56573e
+          make -C "$RUNNER_TEMP/sf/src" -j2 ARCH=x86-64-avx2 build
+          python3 -m pip install --disable-pip-version-check chess==1.11.2
+
+      - name: Generate common fresh balanced corpus
+        run: |
+          python3 lab/tools/generate_balanced_openings.py --stockfish "$RUNNER_TEMP/sf/src/stockfish" --output openings.json --count 30 --plies 10 --seed 17082026 --max-abs-cp 90
+
+      - name: 60-game equal-node causal screen
+        run: |
+          mkdir -p nodes
+          python3 lab/tools/fundamentals_tournament.py --candidate "$PWD/cand/src/stockfish" --opponent "$PWD/base/src/stockfish" --candidate-label '${{ matrix.label }}' --opponent-label ultra-kernel --candidate-fundamentals --opponent-fundamentals --nodes-per-move 60000 --openings-json openings.json --max-plies 180 --output-dir nodes | tee nodes/match.log
+
+      - name: 60-game equal-time causal screen
+        run: |
+          mkdir -p time
+          python3 lab/tools/fundamentals_tournament.py --candidate "$PWD/cand/src/stockfish" --opponent "$PWD/base/src/stockfish" --candidate-label '${{ matrix.label }}' --opponent-label ultra-kernel --candidate-fundamentals --opponent-fundamentals --move-time-ms 100 --openings-json openings.json --max-plies 180 --output-dir time | tee time/match.log
+
+      - name: Deep-oracle regret screen
+        run: |
+          python3 lab/tools/oracle_regret.py --candidate "$PWD/cand/src/stockfish" --baseline "$PWD/base/src/stockfish" --oracle "$RUNNER_TEMP/sf/src/stockfish" --openings-json openings.json --candidate-label '${{ matrix.label }}' --candidate-fundamentals --baseline-fundamentals --choice-nodes 80000 --oracle-nodes 500000 --output regret.json | tee regret.log
+
+      - name: Record immutable provenance
+        run: |
+          printf 'label=%s\ncandidate_source=%s\nbase=%s\nstockfish=%s\ncap=%s\nmargin=%s\nskeptic=%s\n' \
+            '${{ matrix.label }}' "$(git -C cand rev-parse HEAD)" "$(git -C base rev-parse HEAD)" "$(git -C "$RUNNER_TEMP/sf" rev-parse HEAD)" '${{ matrix.cap }}' '${{ matrix.margin }}' '${{ matrix.skeptic }}' > revisions.txt
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: 'ultra-stars-${{ matrix.label }}'
+          path: |
+            nodes
+            time
+            regret.json
+            regret.log
+            openings.json
+            mutation.patch
+            revisions.txt
+          retention-days: 30
