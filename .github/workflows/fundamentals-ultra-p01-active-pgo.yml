@@ -1,0 +1,91 @@
+name: Fundamentals Ultra P01 Active PGO
+
+on:
+  push:
+    branches: [leviathan/fundamentals-ultra-lab]
+    paths: ['.github/workflows/fundamentals-ultra-p01-active-pgo.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  speed:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 100
+    steps:
+      - uses: actions/checkout@v4
+        with: {ref: '${{ github.sha }}', path: lab}
+      - uses: actions/checkout@v4
+        with: {ref: leviathan/fundamentals-ultra-p01-qfrontier, path: standard}
+      - uses: actions/checkout@v4
+        with: {ref: leviathan/fundamentals-ultra-p01-qfrontier, path: active}
+
+      - name: Define representative active-mode PGO workload
+        shell: bash
+        run: |
+          cat > active/src/pgo-active.sh <<'EOF'
+          #!/usr/bin/env bash
+          set -euo pipefail
+          {
+            echo uci
+            echo 'setoption name Threads value 1'
+            echo 'setoption name Hash value 64'
+            echo 'setoption name Leviathan Fundamentals value true'
+            echo 'setoption name Leviathan Fundamentals Authority value 1'
+            echo 'setoption name Leviathan Quiet Overdrive value 0'
+            echo isready
+            echo 'position startpos'
+            echo 'go nodes 1200000'
+            echo 'position startpos moves e2e4 e7e5 g1f3 b8c6 f1b5 a7a6 b5a4 g8f6 e1g1 f8e7'
+            echo 'go nodes 1200000'
+            echo 'position fen r2q1rk1/ppp2ppp/2n2n2/2bp4/2B1P3/2P2N2/PP3PPP/RNBQ1RK1 w - - 2 9'
+            echo 'go nodes 1200000'
+            echo 'position fen 4rrk1/pp3ppp/2p1b3/3pP3/3P1P2/2P1B3/PP4PP/3R1RK1 w - - 0 20'
+            echo 'go nodes 1200000'
+            echo quit
+          } | ./stockfish
+          EOF
+          chmod +x active/src/pgo-active.sh
+
+      - name: Build standard PGO and active-trained PGO from identical P01 source
+        shell: bash
+        run: |
+          set -euo pipefail
+          make -C standard/src net
+          make -C standard/src -j2 profile-build ARCH=x86-64-avx2
+          cp standard/src/stockfish standard/src/p01-standard-pgo
+          make -C active/src net
+          make -C active/src -j2 profile-build ARCH=x86-64-avx2 PGOBENCH='./pgo-active.sh'
+          cp active/src/stockfish active/src/p01-active-pgo
+          sha256sum standard/src/p01-standard-pgo active/src/p01-active-pgo | tee binaries.sha256
+          cat > active-options.json <<'EOF'
+          {"Threads":1,"Hash":64,"Leviathan Fundamentals":true,"Leviathan Fundamentals Authority":1,"Leviathan Quiet Overdrive":0,"Leviathan Risk":false,"Leviathan Policy":false,"Leviathan MetaSearch":false,"Leviathan Specialist":false,"Leviathan Atlas":false,"Leviathan Search DSL":false}
+          EOF
+
+      - name: Exact-behavior A/A-calibrated ABBA speed test
+        shell: bash
+        run: |
+          set -euo pipefail
+          cp standard/src/p01-standard-pgo standard/src/control-a
+          cp standard/src/p01-standard-pgo standard/src/control-b
+          python3 lab/tools/lossless_pair_benchmark.py \
+            --control-a standard/src/control-a \
+            --control-b standard/src/control-b \
+            --candidate active/src/p01-active-pgo \
+            --options active-options.json \
+            --rounds 31 \
+            --output active-pgo.json | tee active-pgo.log
+          test -s active-pgo.json
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ultra-p01-active-pgo
+          path: |
+            active-pgo.json
+            active-pgo.log
+            binaries.sha256
+            active/src/PGOBENCH.out
+            standard/src/PGOBENCH.out
+            active/src/pgo-active.sh
+          retention-days: 30
