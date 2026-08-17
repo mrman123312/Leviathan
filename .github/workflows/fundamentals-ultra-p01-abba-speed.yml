@@ -1,0 +1,81 @@
+name: Fundamentals Ultra P01 ABBA Speed
+
+on:
+  push:
+    branches: [leviathan/fundamentals-ultra-lab]
+    paths: ['.github/workflows/fundamentals-ultra-p01-abba-speed.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  abba:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with: {ref: '${{ github.sha }}', path: lab}
+      - uses: actions/checkout@v4
+        with: {ref: leviathan/fundamentals-ultra-v0, path: base}
+      - uses: actions/checkout@v4
+        with: {ref: leviathan/fundamentals-ultra-v0, path: cand, fetch-depth: 0}
+      - name: Materialize lossless P0+P1 delta
+        working-directory: cand
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git cherry-pick ae6f326512bd418c30c7bf9919f9546866619a57
+          git diff HEAD^ --check
+      - name: Build identical AVX2 binaries
+        run: |
+          make -C base/src net && make -C base/src clean && make -C base/src -j2 ARCH=x86-64-avx2 build
+          make -C cand/src net && make -C cand/src clean && make -C cand/src -j2 ARCH=x86-64-avx2 build
+      - name: 30-block ABBA paired speed replication
+        run: |
+          python3 - <<'PY' | tee abba.log
+          import subprocess,time,re,math,statistics,json,hashlib
+          A='base/src/stockfish';B='cand/src/stockfish'
+          opts='setoption name Threads value 1\nsetoption name Hash value 64\nsetoption name Leviathan Fundamentals value true\nsetoption name Leviathan Fundamentals Authority value 1\nsetoption name Leviathan Quiet Overdrive value 0\n'
+          cmd='bench 16 1 12 default depth'
+          def one(path):
+              t0=time.perf_counter()
+              p=subprocess.run([path],input=opts+cmd+'\nquit\n',text=True,capture_output=True,check=True)
+              wall=time.perf_counter()-t0;out=p.stdout+p.stderr
+              nodes=int(re.findall(r'Nodes searched\s*:\s*(\d+)',out)[-1])
+              lines=[]
+              for raw in out.splitlines():
+                  x=raw.strip()
+                  if x.startswith('Position:') or x.startswith('bestmove '): lines.append(x)
+                  elif x.startswith('info ') and not x.startswith('info string '):
+                      x=re.sub(r'\s+nps\s+\d+','',x);x=re.sub(r'\s+time\s+\d+','',x);lines.append(x)
+              sig=hashlib.sha256('\n'.join(lines).encode()).hexdigest()
+              return wall,nodes,sig
+          for _ in range(2):one(A);one(B)
+          blocks=[]
+          for i in range(30):
+              seq=[('A',A),('B',B),('B',B),('A',A)] if i%2==0 else [('B',B),('A',A),('A',A),('B',B)]
+              rec=[]
+              for tag,path in seq:
+                  wall,nodes,sig=one(path);rec.append({'tag':tag,'wall_s':wall,'nodes':nodes,'sig':sig})
+              an={r['nodes'] for r in rec if r['tag']=='A'};bn={r['nodes'] for r in rec if r['tag']=='B'}
+              asig={r['sig'] for r in rec if r['tag']=='A'};bsig={r['sig'] for r in rec if r['tag']=='B'}
+              if an!=bn or asig!=bsig: raise SystemExit(f'behavior mismatch block {i}: {rec}')
+              at=statistics.fmean(r['wall_s'] for r in rec if r['tag']=='A');bt=statistics.fmean(r['wall_s'] for r in rec if r['tag']=='B')
+              ratio=at/bt;blocks.append({'block':i,'base_s':at,'candidate_s':bt,'speed_ratio':ratio,'records':rec})
+              print(json.dumps({'block':i,'base_s':at,'candidate_s':bt,'speed_ratio':ratio}),flush=True)
+          logs=[math.log(x['speed_ratio']) for x in blocks];m=statistics.fmean(logs);se=statistics.stdev(logs)/math.sqrt(len(logs));lo=math.exp(m-1.96*se);hi=math.exp(m+1.96*se);gm=math.exp(m)
+          out={'schema':'LV_ABBA_SPEED_V1','blocks':len(blocks),'geomean_speed_ratio_candidate_vs_base':gm,'geomean_speedup_pct':(gm-1)*100,'approx_95pct_speed_ratio':[lo,hi],'approx_95pct_speedup_pct':[(lo-1)*100,(hi-1)*100],'median_block_speed_ratio':statistics.median(x['speed_ratio'] for x in blocks),'all_behavior_identical':True,'rows':blocks}
+          open('abba.json','w').write(json.dumps(out,indent=2)+'\n');print('SUMMARY',json.dumps({k:v for k,v in out.items() if k!='rows'},sort_keys=True))
+          PY
+      - name: Provenance
+        run: |
+          printf 'lab=%s\nbase=%s\ncandidate=%s\np01_source=%s\n' "$(git -C lab rev-parse HEAD)" "$(git -C base rev-parse HEAD)" "$(git -C cand rev-parse HEAD)" 'ae6f326512bd418c30c7bf9919f9546866619a57' > revisions.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: fundamentals-ultra-p01-abba-speed
+          path: |
+            abba.json
+            abba.log
+            revisions.txt
+          retention-days: 30
