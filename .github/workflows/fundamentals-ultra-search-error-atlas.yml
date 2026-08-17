@@ -99,6 +99,7 @@ jobs:
         with: {pattern: 'search-error-atlas-rows-*', path: rows}
       - name: Fit out-of-fold risk models at two regret severities
         run: |
+          python3 -m pip install --disable-pip-version-check chess==1.11.2
           mapfile -t inputs < <(find rows -name 'rows-*.json' | sort)
           python3 lab/tools/search_error_atlas.py fit --inputs "${inputs[@]}" --regret-threshold 15 --folds 5 --output atlas15.json | tee atlas15.log
           python3 lab/tools/search_error_atlas.py fit --inputs "${inputs[@]}" --regret-threshold 30 --folds 5 --output atlas30.json | tee atlas30.log
@@ -107,18 +108,19 @@ jobs:
           out={}
           for k in (15,30):
               x=json.load(open(f'atlas{k}.json'))
-              simple=max(v for v in [x['baseline_auc_move_instability'],x['baseline_auc_recent_score_drift'],x['baseline_auc_inverse_top2_gap']] if v is not None)
+              simple_vals=[v for v in [x['baseline_auc_move_instability'],x['baseline_auc_recent_score_drift'],x['baseline_auc_inverse_top2_gap']] if v is not None]
+              simple=max(simple_vals) if simple_vals else None
               risk=x['risk_concentration']
               out[str(k)]={
                 'auc':x['oof_auc_logistic'],
                 'best_simple_auc':simple,
-                'auc_lift':None if x['oof_auc_logistic'] is None else x['oof_auc_logistic']-simple,
+                'auc_lift':None if x['oof_auc_logistic'] is None or simple is None else x['oof_auc_logistic']-simple,
                 'positive_capture_top_quartile':risk['positive_capture_rate'],
                 'top_mean_regret_cp':risk['top_mean_regret_cp'],
                 'rest_mean_regret_cp':risk['rest_mean_regret_cp'],
               }
               q=out[str(k)]
-              q['screen_pass']=bool(q['auc'] is not None and q['auc']>=0.70 and q['auc_lift']>=0.05 and q['positive_capture_top_quartile'] is not None and q['positive_capture_top_quartile']>=0.60 and q['top_mean_regret_cp'] >= 2*max(0.1,q['rest_mean_regret_cp']))
+              q['screen_pass']=bool(q['auc'] is not None and q['best_simple_auc'] is not None and q['auc']>=0.70 and q['auc_lift']>=0.05 and q['positive_capture_top_quartile'] is not None and q['positive_capture_top_quartile']>=0.60 and q['top_mean_regret_cp'] >= 2*max(0.1,q['rest_mean_regret_cp']))
           json.dump({'schema':'LV_SEARCH_ERROR_ATLAS_GATE_V1','rule':'screen only; pass earns a fully fresh prospective holdout, not production integration','thresholds':out},open('gate.json','w'),indent=2,sort_keys=True);print(json.dumps(out,indent=2,sort_keys=True))
           PY
       - uses: actions/upload-artifact@v4
