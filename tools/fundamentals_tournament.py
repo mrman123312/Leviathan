@@ -46,8 +46,6 @@ def configure(engine: chess.engine.SimpleEngine, fundamentals: bool) -> dict:
     if fundamentals:
         set_if("Leviathan Fundamentals", True)
         set_if("Leviathan Fundamentals Authority", 1)
-        # The old competitive Fundamentals control explicitly disabled this
-        # unrelated high-authority organ. Keep that contract when the option exists.
         set_if("Leviathan Quiet Overdrive", 0)
     if opts:
         engine.configure(opts)
@@ -83,6 +81,10 @@ def play_one(candidate, opponent, opening_name, opening_moves, candidate_color, 
     game.headers["CandidateColor"] = "White" if candidate_color else "Black"
     game.headers["MoveTimeMs"] = str(move_ms)
     node = game.end()
+    # python-chess uses object identity changes in `game=` to issue ucinewgame
+    # and reset its per-game protocol state. A fresh token per paired game is the
+    # supported way to keep persistent engine memory from leaking across games.
+    game_token = object()
 
     cand_times: list[float] = []
     opp_times: list[float] = []
@@ -102,7 +104,12 @@ def play_one(candidate, opponent, opening_name, opening_moves, candidate_color, 
         eng = candidate if cand_turn else opponent
         t0 = time.perf_counter()
         try:
-            r = eng.play(b, chess.engine.Limit(time=move_ms / 1000.0), info=INFO)
+            r = eng.play(
+                b,
+                chess.engine.Limit(time=move_ms / 1000.0),
+                game=game_token,
+                info=INFO,
+            )
         except Exception as exc:
             error = f"{type(exc).__name__}: {exc}"
             termination = "ENGINE_ERROR"
@@ -194,8 +201,6 @@ def main() -> int:
                 games.append(game)
                 records.append(record)
                 print(json.dumps(record, sort_keys=True), flush=True)
-                candidate.ucinewgame()
-                opponent.ucinewgame()
     finally:
         candidate.quit()
         opponent.quit()
