@@ -1,0 +1,98 @@
+name: Fundamentals Ultra Lc0 Policy Probe
+
+on:
+  push:
+    branches: [leviathan/fundamentals-ultra-lab]
+    paths: ['.github/workflows/fundamentals-ultra-lc0-policy-probe.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  policy-probe:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with: {ref: leviathan/fundamentals-ultra-lab, path: lab}
+      - uses: actions/checkout@v4
+        with: {ref: leviathan/fundamentals-ultra-phasefix-qfrontier, path: kernel}
+
+      - name: Build current kernel and current Stockfish
+        run: |
+          make -C kernel/src net && make -C kernel/src clean && make -C kernel/src -j2 ARCH=x86-64-avx2 build
+          git clone -q https://github.com/official-stockfish/Stockfish.git "$RUNNER_TEMP/sf"
+          git -C "$RUNNER_TEMP/sf" checkout -q 5062aee519a1ba262d472d8ab139851ced56573e
+          make -C "$RUNNER_TEMP/sf/src" -j2 ARCH=x86-64-avx2 build
+          python3 -m pip install --disable-pip-version-check chess==1.11.2
+
+      - name: Build Lc0 0.32.1 CPU and pin small distilled network
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq libopenblas-dev zlib1g-dev
+          python3 -m pip install --disable-pip-version-check meson ninja
+          git clone -q --branch v0.32.1 --depth 1 https://github.com/LeelaChessZero/lc0.git "$RUNNER_TEMP/lc0"
+          (cd "$RUNNER_TEMP/lc0" && ./build.sh release -Dgtest=false)
+          cp "$RUNNER_TEMP/lc0/build/release/lc0" "$RUNNER_TEMP/lc0/build/release/lc0-policyhead"
+          curl -L --fail --retry 3 -o "$RUNNER_TEMP/lc0/build/release/t1-256x10.pb.gz" \
+            https://storage.lczero.org/files/networks-contrib/t1-256x10-distilled-swa-2432500.pb.gz
+          sha256sum "$RUNNER_TEMP/lc0/build/release/t1-256x10.pb.gz" | tee lc0-network.sha256
+          cat > "$RUNNER_TEMP/lc0-policy" <<EOF
+          #!/bin/sh
+          exec "$RUNNER_TEMP/lc0/build/release/lc0-policyhead" --weights="$RUNNER_TEMP/lc0/build/release/t1-256x10.pb.gz" --backend=blas --threads=1
+          EOF
+          chmod +x "$RUNNER_TEMP/lc0-policy"
+          printf 'uci\nquit\n' | "$RUNNER_TEMP/lc0-policy" | tee lc0-uci.txt
+
+      - name: Generate one balanced 40-position corpus
+        run: |
+          python3 lab/tools/generate_balanced_openings.py --stockfish "$RUNNER_TEMP/sf/src/stockfish" --output positions.json --count 40 --plies 10 --seed 26081701 --max-abs-cp 90
+          sha256sum positions.json | tee positions.sha256
+
+      - name: Compare policy-head proposals to 80k kernel under deep oracle
+        run: |
+          python3 - <<'PY' | tee policy-probe.log
+          import chess,chess.engine,json,time,statistics
+          KOPT={'Threads':1,'Hash':64,'Leviathan Fundamentals':True,'Leviathan Fundamentals Authority':1,'Leviathan Quiet Overdrive':0}
+          SOPT={'Threads':1,'Hash':64}
+          K=chess.engine.SimpleEngine.popen_uci('kernel/src/stockfish');K.configure(KOPT)
+          L=chess.engine.SimpleEngine.popen_uci(__import__('os').environ['RUNNER_TEMP']+'/lc0-policy')
+          OB=chess.engine.SimpleEngine.popen_uci(__import__('os').environ['RUNNER_TEMP']+'/sf/src/stockfish');OB.configure(SOPT)
+          OK=chess.engine.SimpleEngine.popen_uci(__import__('os').environ['RUNNER_TEMP']+'/sf/src/stockfish');OK.configure(SOPT)
+          OL=chess.engine.SimpleEngine.popen_uci(__import__('os').environ['RUNNER_TEMP']+'/sf/src/stockfish');OL.configure(SOPT)
+          rows=[]
+          try:
+            for i,x in enumerate(json.load(open('positions.json')),1):
+              b=chess.Board(x['final_fen']); tok=('p',i,x['final_fen'])
+              ki=K.analyse(b,chess.engine.Limit(nodes=80000),game=('k',tok));km=ki['pv'][0]
+              t=time.perf_counter();li=L.analyse(b,chess.engine.Limit(nodes=1),game=('l',tok));lms=(time.perf_counter()-t)*1000;lm=li['pv'][0]
+              oi=OB.analyse(b,chess.engine.Limit(nodes=500000),game=('ob',tok));om=oi['pv'][0];os=int(oi['score'].pov(b.turn).score(mate_score=100000) or 0)
+              ksi=OK.analyse(b,chess.engine.Limit(nodes=500000),root_moves=[km],game=('ok',tok));ks=int(ksi['score'].pov(b.turn).score(mate_score=100000) or 0)
+              lsi=OL.analyse(b,chess.engine.Limit(nodes=500000),root_moves=[lm],game=('ol',tok));ls=int(lsi['score'].pov(b.turn).score(mate_score=100000) or 0)
+              kr=max(0,os-ks);lr=max(0,os-ls)
+              rows.append({'i':i,'fen':b.fen(),'kernel':km.uci(),'policy':lm.uci(),'oracle':om.uci(),'kernel_regret':kr,'policy_regret':lr,'policy_ms':lms,'disagree':km!=lm})
+              print(f'{i:02d}/40 K={km} r={kr} L={lm} r={lr} O={om} policy_ms={lms:.2f}',flush=True)
+          finally:
+            for e in [K,L,OB,OK,OL]:e.quit()
+          dis=[r for r in rows if r['disagree']]
+          out={'positions':len(rows),'disagreements':len(dis),'policy_latency_ms':{'mean':statistics.fmean(r['policy_ms'] for r in rows),'median':statistics.median(r['policy_ms'] for r in rows)},'kernel':{'mean_regret':statistics.fmean(r['kernel_regret'] for r in rows),'oracle_agreement':sum(r['kernel']==r['oracle'] for r in rows)/len(rows)},'policy':{'mean_regret':statistics.fmean(r['policy_regret'] for r in rows),'oracle_agreement':sum(r['policy']==r['oracle'] for r in rows)/len(rows)},'on_disagreement':{'count':len(dis),'policy_better':sum(r['policy_regret']<r['kernel_regret'] for r in dis),'kernel_better':sum(r['kernel_regret']<r['policy_regret'] for r in dis),'same_regret':sum(r['kernel_regret']==r['policy_regret'] for r in dis)},'rows':rows}
+          open('policy-probe.json','w').write(json.dumps(out,indent=2)+'\n');print(json.dumps({k:v for k,v in out.items() if k!='rows'},indent=2))
+          PY
+
+      - name: Provenance
+        run: |
+          printf 'kernel=%s\nstockfish=%s\nlc0=%s\nlc0_tag=v0.32.1\nnetwork=t1-256x10-distilled-swa-2432500\n' \
+            "$(git -C kernel rev-parse HEAD)" "$(git -C "$RUNNER_TEMP/sf" rev-parse HEAD)" "$(git -C "$RUNNER_TEMP/lc0" rev-parse HEAD)" > revisions.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ultra-lc0-policy-probe
+          path: |
+            policy-probe.json
+            policy-probe.log
+            positions.json
+            positions.sha256
+            lc0-network.sha256
+            lc0-uci.txt
+            revisions.txt
+          retention-days: 30
