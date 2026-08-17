@@ -1,0 +1,88 @@
+name: Fundamentals Ultra SplitKey Confirmation
+
+on:
+  push:
+    branches: [leviathan/fundamentals-ultra-lab]
+    paths: ['.github/workflows/fundamentals-ultra-splitkey.yml']
+
+permissions:
+  contents: write
+
+jobs:
+  splitkey:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+        with: {ref: leviathan/fundamentals-v2.1.1-phasefix, path: cand, fetch-depth: 0}
+      - uses: actions/checkout@v4
+        with: {ref: leviathan/fundamentals-v2.1.1-phasefix, path: base}
+      - uses: actions/checkout@v4
+        with: {ref: leviathan/fundamentals-ultra-lab, path: lab}
+      - name: Apply isolated repeated-history split key
+        working-directory: cand
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path('src/search.cpp');s=p.read_text()
+          anchor='''    posKey                         = pos.key();
+    auto [ttHit, ttData, ttWriter] = tt.probe(posKey);'''
+          repl='''    posKey = pos.key();
+    // Leviathan SplitKey: board identity is normally sufficient and keeps
+    // maximum TT reuse. Only split the key when the current search path has
+    // repeated, where board-only identity can conflate graph histories.
+    if (Leviathan::Fundamentals::ready() && pos.has_repeated())
+        posKey ^= Key(0x9E3779B97F4A7C15ULL);
+    auto [ttHit, ttData, ttWriter] = tt.probe(posKey);'''
+          if s.count(anchor)<1: raise SystemExit(f'probe anchor count={s.count(anchor)}')
+          p.write_text(s.replace(anchor,repl,1))
+          PY
+          git diff --check
+      - name: Build phase-fix controls and Stockfish
+        run: |
+          make -C cand/src net
+          cp cand/src/nn-ab28990d4ea3.nnue base/src/
+          make -C cand/src clean && make -C cand/src -j2 ARCH=x86-64-avx2 build
+          make -C base/src clean && make -C base/src -j2 ARCH=x86-64-avx2 build
+          git clone https://github.com/official-stockfish/Stockfish.git "$RUNNER_TEMP/sf"
+          git -C "$RUNNER_TEMP/sf" checkout 5062aee519a1ba262d472d8ab139851ced56573e
+          make -C "$RUNNER_TEMP/sf/src" -j2 ARCH=x86-64-avx2 build
+          python3 -m pip install --disable-pip-version-check chess==1.11.2
+      - name: Recreate balanced corpus
+        run: |
+          python3 lab/tools/generate_balanced_openings.py --stockfish "$RUNNER_TEMP/sf/src/stockfish" --output openings.json --count 50 --plies 8 --seed 8910 --max-abs-cp 80
+          test "$(sha256sum openings.json | cut -d' ' -f1)" = '444b13d062e5aa38e72f6ffc5a2f3aa8daf92d4b6712a2d40646c857b51795da'
+      - name: 100-game equal-time vs phase-fix
+        run: |
+          mkdir -p time
+          python3 lab/tools/fundamentals_tournament.py --candidate "$PWD/cand/src/stockfish" --opponent "$PWD/base/src/stockfish" --candidate-label phasefix-splitkey --opponent-label phasefix --candidate-fundamentals --opponent-fundamentals --move-time-ms 100 --openings-json openings.json --max-plies 180 --output-dir time | tee time/match.log
+      - name: 100-game equal-node vs phase-fix
+        run: |
+          mkdir -p nodes
+          python3 lab/tools/fundamentals_tournament.py --candidate "$PWD/cand/src/stockfish" --opponent "$PWD/base/src/stockfish" --candidate-label phasefix-splitkey --opponent-label phasefix --candidate-fundamentals --opponent-fundamentals --nodes-per-move 80000 --openings-json openings.json --max-plies 180 --output-dir nodes | tee nodes/match.log
+      - name: 100-game Stockfish confirmation
+        run: |
+          mkdir -p stockfish
+          python3 lab/tools/fundamentals_tournament.py --candidate "$PWD/cand/src/stockfish" --opponent "$RUNNER_TEMP/sf/src/stockfish" --candidate-label phasefix-splitkey --opponent-label Stockfish-5062aee5 --candidate-fundamentals --move-time-ms 100 --openings-json openings.json --max-plies 180 --output-dir stockfish | tee stockfish/match.log
+      - name: Deep-oracle regret
+        run: |
+          python3 lab/tools/oracle_regret.py --candidate "$PWD/cand/src/stockfish" --baseline "$PWD/base/src/stockfish" --oracle "$RUNNER_TEMP/sf/src/stockfish" --openings-json openings.json --candidate-label phasefix-splitkey --candidate-fundamentals --baseline-fundamentals --choice-nodes 80000 --oracle-nodes 500000 --output regret.json | tee regret.log
+      - name: Publish materialized candidate
+        working-directory: cand
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git checkout -B leviathan/fundamentals-ultra-phasefix-splitkey
+          git add src/search.cpp
+          git commit -m 'Ultra: isolate repeated-history TT split key on phase-fix'
+          git push --force origin HEAD:leviathan/fundamentals-ultra-phasefix-splitkey
+      - uses: actions/upload-artifact@v4
+        with:
+          name: fundamentals-ultra-splitkey
+          path: |
+            time
+            nodes
+            stockfish
+            regret.json
+            regret.log
+            openings.json
+          retention-days: 30
