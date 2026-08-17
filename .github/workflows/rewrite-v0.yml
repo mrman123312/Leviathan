@@ -5,6 +5,7 @@ on:
     branches:
       - leviathan/rewrite-v0-greenfield
       - leviathan/rewrite-v1-donor-ecology
+      - leviathan/rewrite-v3-three-loop-optimization
     paths:
       - 'rewrite/**'
       - '.github/workflows/rewrite-v0.yml'
