@@ -1138,9 +1138,10 @@ moves_loop:  // When in check, search starts here
 
     int moveCount = 0;
 
-    const bool leviathanRiskReady  = Leviathan::Control::risk_ready();
-    const bool leviathanDslReady   = Leviathan::DSL::ready();
-    const bool leviathanTraceReady = Leviathan::Trace::ready();
+    const bool leviathanRiskReady         = Leviathan::Control::risk_ready();
+    const bool leviathanDslReady          = Leviathan::DSL::ready();
+    const bool leviathanTraceReady        = Leviathan::Trace::ready();
+    const bool leviathanFundamentalsReady = Leviathan::Fundamentals::ready();
 
     // Step 13. Loop through all pseudo-legal moves until no moves remain
     // or a beta cutoff occurs.
@@ -1225,9 +1226,10 @@ moves_loop:  // When in check, search starts here
             }
             else if (!ss->followPV || !PvNode)
             {
-                const bool leviathanScopeProtected =
-                  Leviathan::Fundamentals::protected_scope_move(
-                    pos, move, prevSq, capture, givesCheck);
+                const bool leviathanScopeProtected = leviathanFundamentalsReady
+                  && (move.type_of() == PROMOTION
+                      || (type_of(movedPiece) == PAWN
+                          && relative_rank(color_of(movedPiece), move.to_sq()) >= RANK_6));
                 int dIndex  = std::min(int(depth), int(lmrDivisor.size())) - 1;
                 int history = (*contHist[0])[movedPiece][move.to_sq()]
                             + (*contHist[1])[movedPiece][move.to_sq()]
