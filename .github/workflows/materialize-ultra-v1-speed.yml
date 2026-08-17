@@ -1,0 +1,60 @@
+name: Materialize Fundamentals Ultra v1 Speed
+
+on:
+  push:
+    branches: [leviathan/fundamentals-ultra-v1-speed]
+    paths: ['.github/workflows/materialize-ultra-v1-speed.yml']
+
+permissions:
+  contents: write
+
+jobs:
+  materialize:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: leviathan/fundamentals-ultra-v1-speed
+          fetch-depth: 0
+      - name: Apply proven lossless P0+P1 delta
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git cherry-pick ae6f326512bd418c30c7bf9919f9546866619a57
+          git diff HEAD^ --check
+      - name: Exact-behavior smoke
+        run: |
+          git worktree add "$RUNNER_TEMP/base" 0625df7581109e4db15a936b4b0237d9476e2074
+          make -C "$RUNNER_TEMP/base/src" net && make -C "$RUNNER_TEMP/base/src" clean && make -C "$RUNNER_TEMP/base/src" -j2 ARCH=x86-64-avx2 build
+          make -C src net && make -C src clean && make -C src -j2 ARCH=x86-64-avx2 build
+          python3 - <<'PY'
+          import subprocess,re,hashlib,os
+          a=os.environ['RUNNER_TEMP']+'/base/src/stockfish'; b='src/stockfish'
+          opts='setoption name Threads value 1\nsetoption name Hash value 64\nsetoption name Leviathan Fundamentals value true\nsetoption name Leviathan Fundamentals Authority value 1\nsetoption name Leviathan Quiet Overdrive value 0\n'
+          def sig(p):
+            x=subprocess.run([p],input=opts+'bench 16 1 12 default depth\nquit\n',text=True,capture_output=True,check=True);o=x.stdout+x.stderr;z=[]
+            for raw in o.splitlines():
+              q=raw.strip()
+              if q.startswith('Position:') or q.startswith('bestmove '):z.append(q)
+              elif q.startswith('info ') and not q.startswith('info string '):
+                q=re.sub(r'\s+nps\s+\d+','',q);q=re.sub(r'\s+time\s+\d+','',q);z.append(q)
+            return int(re.findall(r'Nodes searched\s*:\s*(\d+)',o)[-1]),hashlib.sha256('\n'.join(z).encode()).hexdigest()
+          sa,sb=sig(a),sig(b);print('base',sa,'v1-speed',sb)
+          if sa!=sb:raise SystemExit('behavior mismatch')
+          PY
+      - name: Freeze provenance
+        run: |
+          cat > experiments/ULTRA_V1_SPEED_PROVENANCE.md <<'EOF'
+          # Fundamentals Ultra v1 Speed
+
+          Base: `leviathan/fundamentals-ultra-v0@0625df7581109e4db15a936b4b0237d9476e2074`
+
+          Added mechanism: P0+P1 dead-organ fast paths from `ae6f326512bd418c30c7bf9919f9546866619a57`.
+
+          Promotion evidence: 30-block ABBA speed replication on Ultra-v0; identical 1,767,725-node search behavior and identical normalized transcript hash in every block; candidate faster in 30/30 blocks; geometric mean speedup +3.9308%; approximate 95% interval +3.4142% to +4.4499%.
+
+          This branch makes no new chess-quality claim. It is a behavior-preserving throughput successor and remains rollbackable to Ultra-v0.
+          EOF
+          git add experiments/ULTRA_V1_SPEED_PROVENANCE.md
+          git commit -m 'Ultra v1 speed: freeze P0+P1 provenance'
+          git push origin HEAD:leviathan/fundamentals-ultra-v1-speed
