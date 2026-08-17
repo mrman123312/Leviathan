@@ -12,7 +12,29 @@ permissions:
   contents: read
 
 jobs:
+  positions:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+        with: {ref: leviathan/fundamentals-ultra-lab, path: lab}
+      - name: Build pinned Stockfish and generate one immutable corpus
+        run: |
+          git clone -q https://github.com/official-stockfish/Stockfish.git "$RUNNER_TEMP/sf"
+          git -C "$RUNNER_TEMP/sf" checkout -q 5062aee519a1ba262d472d8ab139851ced56573e
+          make -C "$RUNNER_TEMP/sf/src" -j2 ARCH=x86-64-avx2 build
+          python3 -m pip install --disable-pip-version-check chess==1.11.2
+          python3 lab/tools/generate_balanced_openings.py --stockfish "$RUNNER_TEMP/sf/src/stockfish" --output positions.json --count 40 --plies 10 --seed 26081701 --max-abs-cp 90
+          sha256sum positions.json | tee positions.sha256
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ultra-meta-positions
+          path: |
+            positions.json
+            positions.sha256
+          retention-days: 30
+
   regret:
+    needs: positions
     runs-on: ubuntu-22.04
     timeout-minutes: 60
     strategy:
@@ -26,6 +48,8 @@ jobs:
         with: {ref: leviathan/fundamentals-ultra-phasefix-qfrontier, path: kernel}
       - uses: actions/checkout@v4
         with: {ref: leviathan/fundamentals-v2.1, path: base}
+      - uses: actions/download-artifact@v4
+        with: {name: ultra-meta-positions, path: shared}
       - name: Build kernel, independent base, and pinned Stockfish
         run: |
           make -C kernel/src net && make -C kernel/src clean && make -C kernel/src -j2 ARCH=x86-64-avx2 build
@@ -34,21 +58,23 @@ jobs:
           git -C "$RUNNER_TEMP/sf" checkout -q 5062aee519a1ba262d472d8ab139851ced56573e
           make -C "$RUNNER_TEMP/sf/src" -j2 ARCH=x86-64-avx2 build
           python3 -m pip install --disable-pip-version-check chess==1.11.2
-      - name: Equal-budget deep-oracle experiment
+      - name: Isolated equal-budget deep-oracle experiment
         run: |
           python3 lab/tools/ultra_meta_regret.py \
             --kernel "$PWD/kernel/src/stockfish" \
             --base "$PWD/base/src/stockfish" \
             --stockfish "$RUNNER_TEMP/sf/src/stockfish" \
+            --openings-json "$PWD/shared/positions.json" \
             --strategy '${{ matrix.strategy }}' \
-            --positions 40 --total-nodes 80000 --oracle-nodes 400000 --seed 26081701 \
+            --total-nodes 80000 --oracle-nodes 500000 \
             --output 'meta-${{ matrix.strategy }}.json' | tee 'meta-${{ matrix.strategy }}.log'
       - name: Provenance
         run: |
-          printf 'strategy=%s\nkernel=%s\nbase=%s\nstockfish=%s\n' '${{ matrix.strategy }}' "$(git -C kernel rev-parse HEAD)" "$(git -C base rev-parse HEAD)" "$(git -C "$RUNNER_TEMP/sf" rev-parse HEAD)" > revisions.txt
+          cat shared/positions.sha256 > revisions.txt
+          printf 'strategy=%s\nkernel=%s\nbase=%s\nstockfish=%s\n' '${{ matrix.strategy }}' "$(git -C kernel rev-parse HEAD)" "$(git -C base rev-parse HEAD)" "$(git -C "$RUNNER_TEMP/sf" rev-parse HEAD)" >> revisions.txt
       - uses: actions/upload-artifact@v4
         with:
-          name: 'ultra-meta-${{ matrix.strategy }}'
+          name: 'ultra-meta-v2-${{ matrix.strategy }}'
           path: |
             meta-${{ matrix.strategy }}.json
             meta-${{ matrix.strategy }}.log
