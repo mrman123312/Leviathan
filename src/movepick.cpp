@@ -212,8 +212,8 @@ ExtMove* MovePicker::score(const MoveList<Type>& ml) {
         threatByLesser[KING]  = 0;
     }
 
-    const bool leviathanPolicyReady = Type == QUIETS && Leviathan::Policy::ready();
-    const bool leviathanAtlasReady  = Type == QUIETS && Leviathan::Atlas::ready();
+    constexpr bool leviathanPolicyReady = false;
+    constexpr bool leviathanAtlasReady  = false;
     const bool leviathanRule50Ready = Type == QUIETS && Leviathan::Fundamentals::ready()
                                       && Leviathan::Fundamentals::state().rule50Pressure
                                       && pos.rule50_count() >= 70;
