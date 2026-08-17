@@ -12,7 +12,9 @@ void SearchEngine::clear(){
 
 bool SearchEngine::time_up(){
     if(!use_deadline_) return false;
-    if((nodes_ & 2047ULL) != 0) return false;
+    // Check often enough that a time-bounded search cannot substantially
+    // overshoot its UCI contract, while avoiding a clock read at every node.
+    if((nodes_ & 255ULL) != 0) return false;
     if(std::chrono::steady_clock::now() >= deadline_){ stopped_=true; return true; }
     return false;
 }
@@ -220,9 +222,13 @@ SearchReport SearchEngine::search(const Position& root,const SearchLimits& limit
     use_deadline_=limits.movetime_ms>0;
     if(use_deadline_) deadline_=std::chrono::steady_clock::now()+std::chrono::milliseconds(limits.movetime_ms);
 
+    const int targetMaxDepth = limits.max_depth > 0
+        ? std::min(limits.max_depth, MAX_PLY - 1)
+        : (use_deadline_ ? MAX_PLY - 1 : 5);
+
     SearchReport report{};
     int previousScore=0;
-    for(int depth=1;depth<=std::max(1,limits.max_depth);++depth){
+    for(int depth=1;depth<=targetMaxDepth;++depth){
         int alpha=-INF, beta=INF, window=35;
         if(depth>=3){
             alpha=std::max(-INF,previousScore-window);
