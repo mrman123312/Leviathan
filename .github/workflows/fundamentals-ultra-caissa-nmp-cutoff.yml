@@ -1,0 +1,68 @@
+name: Fundamentals Ultra Caissa NMP Cutoff Evidence
+
+on:
+  push:
+    branches: [leviathan/fundamentals-ultra-lab]
+    paths: ['.github/workflows/fundamentals-ultra-caissa-nmp-cutoff.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  screen:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+        with: {ref: '${{ github.sha }}', path: lab}
+      - uses: actions/checkout@v4
+        with: {ref: leviathan/fundamentals-ultra-p01-qfrontier, path: cand}
+      - uses: actions/checkout@v4
+        with: {ref: leviathan/fundamentals-ultra-p01-qfrontier, path: base}
+      - name: Materialize donor mechanism
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path('cand/src/search.cpp');s=p.read_text()
+          old='if (cutNode && ss->staticEval >= beta - 13 * depth - 47 * improving + 365 && !excludedMove'
+          new='if (cutNode && ss->staticEval >= beta - 13 * depth - 47 * improving + 365\n                               - ((ss + 1)->cutoffCnt < 2 ? 19 : 0)\n        && !excludedMove'
+          if s.count(old)!=1: raise SystemExit(f'NMP anchor count={s.count(old)}')
+          p.write_text(s.replace(old,new,1))
+          PY
+          git -C cand diff --check
+          git -C cand diff -- src/search.cpp | tee mutation.patch
+      - name: Build candidate, P01 and current Stockfish for opening generation
+        run: |
+          make -C cand/src net && make -C cand/src clean && make -C cand/src -j2 ARCH=x86-64-avx2 build
+          make -C base/src net && make -C base/src clean && make -C base/src -j2 ARCH=x86-64-avx2 build
+          git clone -q https://github.com/official-stockfish/Stockfish.git "$RUNNER_TEMP/sf"
+          git -C "$RUNNER_TEMP/sf" checkout -q 5062aee519a1ba262d472d8ab139851ced56573e
+          make -C "$RUNNER_TEMP/sf/src" -j2 ARCH=x86-64-avx2 build
+          python3 -m pip install --disable-pip-version-check chess==1.11.2
+      - name: Fresh corpus
+        run: |
+          python3 lab/tools/generate_balanced_openings.py --stockfish "$RUNNER_TEMP/sf/src/stockfish" --output openings.json --count 60 --plies 18 --seed 161803398 --max-abs-cp 100
+      - name: 120-game equal-node A/B
+        run: |
+          mkdir -p nodes
+          python3 lab/tools/fundamentals_tournament.py --candidate "$PWD/cand/src/stockfish" --opponent "$PWD/base/src/stockfish" --candidate-label P01-CaissaNMP --opponent-label P01 --candidate-fundamentals --opponent-fundamentals --nodes-per-move 100000 --openings-json "$PWD/openings.json" --max-plies 200 --output-dir nodes | tee nodes/match.log
+      - name: 120-game fixed-time A/B
+        run: |
+          mkdir -p time
+          python3 lab/tools/fundamentals_tournament.py --candidate "$PWD/cand/src/stockfish" --opponent "$PWD/base/src/stockfish" --candidate-label P01-CaissaNMP --opponent-label P01 --candidate-fundamentals --opponent-fundamentals --movetime-ms 100 --openings-json "$PWD/openings.json" --max-plies 200 --output-dir time | tee time/match.log
+      - name: Provenance
+        run: |
+          printf 'candidate_base=%s\nbaseline=%s\ncaissa_donor=e53fe6ebf2a48af382fd5d3355e36e3ef63aa173\ncutoff_min=2\nmargin_discount=19\n' "$(git -C cand rev-parse HEAD)" "$(git -C base rev-parse HEAD)" > revisions.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ultra-caissa-nmp-cutoff
+          path: |
+            mutation.patch
+            openings.json
+            nodes
+            time
+            revisions.txt
+          retention-days: 30
