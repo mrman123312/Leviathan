@@ -1,6 +1,7 @@
 #include "chess.h"
 #include "search.h"
 #include "tablebase.h"
+#include <algorithm>
 #include <iostream>
 #include <sstream>
 #include <string>
@@ -8,15 +9,35 @@
 
 using namespace leviathan;
 
-static uint64_t perft(const Position& p,int depth){
+static uint64_t perft_inplace(Position& p,int depth){
     if(depth==0) return 1;
     uint64_t n=0;
-    for(Move m:p.legal_moves()) { Position q=p; q.make_move(m); n += perft(q,depth-1); }
+    const Color us=p.side_to_move();
+    for(Move m:p.pseudo_legal_moves(false)){
+        UndoState undo;
+        if(!p.make_move(m,undo)) continue;
+        if(p.in_check(us)){
+            p.unmake_move(m,undo);
+            continue;
+        }
+        n += perft_inplace(p,depth-1);
+        p.unmake_move(m,undo);
+    }
     return n;
+}
+
+static uint64_t perft(const Position& p,int depth){
+    Position work=p;
+    return perft_inplace(work,depth);
 }
 
 static bool has_move(const Position& p, const char* text){
     for(Move m:p.legal_moves()) if(move_to_uci(m)==text) return true;
+    return false;
+}
+
+static bool has_tactical_move(const Position& p, const char* text){
+    for(Move m:p.legal_moves(true)) if(move_to_uci(m)==text) return true;
     return false;
 }
 
@@ -29,6 +50,19 @@ static const char* wdl_name(Wdl wdl){
         case Wdl::Win: return "win";
     }
     return "unknown";
+}
+
+static bool undo_roundtrip(Position p){
+    const std::string originalFen=p.fen();
+    const uint64_t originalKey=p.key();
+    const auto moves=p.legal_moves();
+    for(Move m:moves){
+        UndoState undo;
+        if(!p.make_move(m,undo)) return false;
+        p.unmake_move(m,undo);
+        if(p.fen()!=originalFen || p.key()!=originalKey) return false;
+    }
+    return true;
 }
 
 static bool selftest(){
@@ -54,16 +88,41 @@ static bool selftest(){
     if(!promo || !has_move(*promo,"a7a8q") || !has_move(*promo,"a7a8r") || !has_move(*promo,"a7a8b") || !has_move(*promo,"a7a8n")){
         std::cerr<<"selftest promotion failed\n"; return false;
     }
+    if(!has_tactical_move(*promo,"a7a8q") || !has_tactical_move(*promo,"a7a8n")){
+        std::cerr<<"selftest quiet promotion missing from tactical/qsearch move set\n"; return false;
+    }
+
+    if(!undo_roundtrip(start) || !undo_roundtrip(*castle) || !undo_roundtrip(ep) || !undo_roundtrip(*promo)){
+        std::cerr<<"selftest make/unmake roundtrip failed\n"; return false;
+    }
+
+    auto phantomEp=Position::from_fen("rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq e3 0 1");
+    auto noEp=Position::from_fen("rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq - 0 1");
+    if(!phantomEp || !noEp || phantomEp->key()!=noEp->key()){
+        std::cerr<<"selftest phantom EP incorrectly changes repetition key\n"; return false;
+    }
+
+    auto realEp=Position::from_fen("4k3/8/8/3pP3/8/8/8/4K3 w - d6 0 1");
+    auto realEpNone=Position::from_fen("4k3/8/8/3pP3/8/8/8/4K3 w - - 0 1");
+    if(!realEp || !realEpNone || realEp->key()==realEpNone->key()){
+        std::cerr<<"selftest legal EP missing from repetition key\n"; return false;
+    }
+
+    auto pinnedEp=Position::from_fen("k3r3/8/8/3pP3/8/8/8/4K3 w - d6 0 1");
+    auto pinnedEpNone=Position::from_fen("k3r3/8/8/3pP3/8/8/8/4K3 w - - 0 1");
+    if(!pinnedEp || !pinnedEpNone || pinnedEp->key()!=pinnedEpNone->key()){
+        std::cerr<<"selftest illegal pinned EP incorrectly changes repetition key\n"; return false;
+    }
 
     Position p=Position::startpos();
     for(const char* mtxt: {"e2e4","e7e5","g1f3","b8c6","f1b5"}){
         auto m=p.parse_uci_move(mtxt); if(!m){std::cerr<<"selftest move parse failed "<<mtxt<<"\n";return false;} p.make_move(*m);
     }
     auto round=Position::from_fen(p.fen());
-    if(!round || round->fen()!=p.fen()){std::cerr<<"selftest FEN roundtrip failed\n";return false;}
+    if(!round || round->fen()!=p.fen() || round->key()!=p.key()){
+        std::cerr<<"selftest FEN/key roundtrip failed\n";return false;
+    }
 
-    // Exact C++/Python feature-contract checks from the untouched distillation holdout.
-    // Expected values here are side-to-move scores; the archived JSONL stores White POV.
     struct EvalCase { const char* fen; int expected; };
     const EvalCase evalCases[] = {
         {"r3kb1r/pp1n1ppp/2p5/3PP3/2P1b1n1/N1B5/PP1NBPPP/R3K2R b KQkq - 4 14", -140},
@@ -86,6 +145,33 @@ static bool selftest(){
         std::cerr<<"selftest search failed depth="<<report.completed_depth<<" nodes="<<report.nodes<<"\n"; return false;
     }
 
+    auto sparse=Position::from_fen("8/8/8/8/8/2k5/8/2K5 w - - 0 1");
+    if(!sparse){std::cerr<<"selftest timed-search FEN parse failed\n";return false;}
+    SearchEngine timed;
+    auto timedReport=timed.search(*sparse,SearchLimits{0,30},{sparse->key()});
+    if(timedReport.completed_depth<=5){
+        std::cerr<<"selftest timed search still depth-capped at "<<timedReport.completed_depth<<"\n";
+        return false;
+    }
+
+    auto mateAt100=Position::from_fen("7k/6Q1/6K1/8/8/8/8/8 b - - 100 1");
+    if(!mateAt100){std::cerr<<"selftest rule50 mate FEN parse failed\n";return false;}
+    SearchEngine mateSearch;
+    auto mateReport=mateSearch.search(*mateAt100,SearchLimits{1,0},{mateAt100->key()});
+    if(mateReport.score>-29000){
+        std::cerr<<"selftest rule50 incorrectly overrides checkmate score="<<mateReport.score<<"\n";
+        return false;
+    }
+
+    auto drawAt100=Position::from_fen("7k/8/6K1/8/8/8/8/8 b - - 100 1");
+    if(!drawAt100){std::cerr<<"selftest rule50 draw FEN parse failed\n";return false;}
+    SearchEngine drawSearch;
+    auto drawReport=drawSearch.search(*drawAt100,SearchLimits{1,0},{drawAt100->key()});
+    if(drawReport.score!=0){
+        std::cerr<<"selftest rule50 non-terminal expected draw got "<<drawReport.score<<"\n";
+        return false;
+    }
+
     if(null_tablebase().probe_wdl(Position::startpos()).has_value()){
         std::cerr<<"selftest null tablebase unexpectedly returned a result\n"; return false;
     }
@@ -103,7 +189,7 @@ int main(int argc,char** argv){
     while(std::getline(std::cin,line)){
         std::istringstream in(line); std::string cmd; in>>cmd;
         if(cmd=="uci"){
-            std::cout<<"id name Leviathan Rewrite v2\n";
+            std::cout<<"id name Leviathan Rewrite v3\n";
             std::cout<<"id author Leviathan Project\n";
             std::cout<<"option name SyzygyPath type string default <empty>\n";
             std::cout<<"uciok\n"<<std::flush;
@@ -140,16 +226,33 @@ int main(int argc,char** argv){
             }
             if(ok) pos=next; else std::cout<<"info string invalid position command\n";
         } else if(cmd=="go"){
-            SearchLimits lim; lim.max_depth=5;
-            std::string t; while(in>>t){ if(t=="depth") in>>lim.max_depth; else if(t=="movetime") in>>lim.movetime_ms; }
+            SearchLimits lim;
+            bool sawDepth=false, sawMovetime=false;
+            std::string t;
+            while(in>>t){
+                if(t=="depth"){ in>>lim.max_depth; sawDepth=true; }
+                else if(t=="movetime"){ in>>lim.movetime_ms; sawMovetime=true; }
+            }
+            if(!sawDepth && !sawMovetime) lim.max_depth=5;
             auto r=search.search(pos,lim,game_history);
-            std::cout<<"info depth "<<r.completed_depth<<" score cp "<<r.score<<" nodes "<<r.nodes<<" pv";
+            std::cout<<"info depth "<<r.completed_depth<<" score cp "<<r.score<<" nodes "<<r.nodes
+                     <<" tthits "<<r.tt_hits<<" ttstores "<<r.tt_stores<<" pv";
             for(auto m:r.pv) std::cout<<' '<<move_to_uci(m);
             std::cout<<"\nbestmove "<<(r.best.is_null()?"0000":move_to_uci(r.best))<<"\n"<<std::flush;
         } else if(cmd=="eval"){
             const auto e=default_evaluator().evaluate(pos);
             const auto& d=default_evaluator().descriptor();
             std::cout<<"info string evaluator "<<d.id<<" score "<<e.mean_cp<<" provenance "<<e.provenance<<"\n"<<std::flush;
+        } else if(cmd=="legal"){
+            auto moves=pos.legal_moves();
+            std::vector<std::string> text; text.reserve(moves.size());
+            for(Move m:moves) text.push_back(move_to_uci(m));
+            std::sort(text.begin(),text.end());
+            std::cout<<"legal";
+            for(const auto& m:text) std::cout<<' '<<m;
+            std::cout<<"\n"<<std::flush;
+        } else if(cmd=="key"){
+            std::cout<<"key "<<pos.key()<<"\n"<<std::flush;
         } else if(cmd=="perft"){
             int d=1; in>>d; std::cout<<"nodes "<<perft(pos,d)<<"\n"<<std::flush;
         } else if(cmd=="tbprobe"){

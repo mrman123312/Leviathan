@@ -1,6 +1,8 @@
 #pragma once
 #include <array>
+#include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -40,6 +42,48 @@ struct Move {
     constexpr bool operator==(const Move&) const = default;
 };
 
+// Chess has at most 218 legal moves in a position; 256 also safely covers the
+// pseudo-legal control representation. Keeping this object inline removes a
+// heap allocation from every generated search node.
+class MoveList {
+public:
+    static constexpr std::size_t kCapacity = 256;
+
+    void push_back(Move m) {
+        // Never silently truncate the search tree. Capacity exhaustion is a
+        // correctness failure and must crash loudly in every build mode.
+        if(size_ >= kCapacity) std::abort();
+        moves_[size_++] = m;
+    }
+    bool empty() const { return size_ == 0; }
+    std::size_t size() const { return size_; }
+    Move& operator[](std::size_t i) { return moves_[i]; }
+    const Move& operator[](std::size_t i) const { return moves_[i]; }
+    Move* begin() { return moves_.data(); }
+    Move* end() { return moves_.data() + size_; }
+    const Move* begin() const { return moves_.data(); }
+    const Move* end() const { return moves_.data() + size_; }
+
+private:
+    std::array<Move,kCapacity> moves_{};
+    std::size_t size_ = 0;
+};
+
+struct UndoState {
+    Piece moved = Piece::Empty;
+    Piece captured_on_to = Piece::Empty;
+    Piece ep_captured = Piece::Empty;
+    int ep_capture_square = -1;
+    uint8_t castling = 0;
+    int ep_square = -1;
+    int halfmove = 0;
+    int fullmove = 1;
+    Color side = Color::White;
+    int white_king = -1;
+    int black_king = -1;
+    uint64_t key = 0;
+};
+
 std::string square_name(int sq);
 int parse_square(std::string_view s);
 std::string move_to_uci(Move m);
@@ -59,24 +103,32 @@ public:
     int fullmove_number() const { return fullmove_; }
     uint8_t castling_rights() const { return castling_; }
 
-    std::vector<Move> pseudo_legal_moves(bool captures_only=false) const;
-    std::vector<Move> legal_moves(bool captures_only=false) const;
+    // tactical_only means captures plus all promotions, including quiet ones.
+    MoveList pseudo_legal_moves(bool tactical_only=false) const;
+    std::vector<Move> legal_moves(bool tactical_only=false) const;
     bool make_move(Move m);
+    bool make_move(Move m, UndoState& undo);
+    void unmake_move(Move m, const UndoState& undo);
     bool in_check(Color c) const;
     bool attacked(int sq, Color by) const;
-    uint64_t key() const;
+    uint64_t key() const { return key_; }
 
     std::optional<Move> parse_uci_move(std::string_view text) const;
 
 private:
     std::array<Piece,64> board_{};
+    std::array<int8_t,2> king_sq_{{-1,-1}};
     Color side_ = Color::White;
     uint8_t castling_ = 0;
     int ep_square_ = -1;
     int halfmove_ = 0;
     int fullmove_ = 1;
+    uint64_t key_ = 0;
 
-    int king_square(Color c) const;
+    int king_square(Color c) const { return king_sq_[static_cast<int>(c)]; }
+    int canonical_ep_square() const;
+    void recompute_key();
+    void set_piece(int sq, Piece p);
 };
 
 int piece_value(PieceType pt);

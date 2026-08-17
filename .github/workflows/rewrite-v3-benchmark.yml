@@ -1,0 +1,43 @@
+# Final post-audit rerun marker: 2026-08-16-final-rollback
+name: Rewrite v3 Architecture Benchmark
+
+on:
+  push:
+    branches:
+      - leviathan/rewrite-v3-three-loop-optimization
+    paths:
+      - '.github/workflows/rewrite-v3-benchmark.yml'
+
+jobs:
+  compare-v2-v3:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+      - name: Materialize frozen v2 baseline
+        shell: bash
+        run: |
+          git fetch --depth=1 origin 489e154b231b0922702892c76ab44efddf26bef5
+          git worktree add --detach /tmp/leviathan-v2 489e154b231b0922702892c76ab44efddf26bef5
+      - name: Build v2 and current v3
+        shell: bash
+        run: |
+          cmake -S /tmp/leviathan-v2/rewrite -B /tmp/leviathan-v2-build -DCMAKE_BUILD_TYPE=Release
+          cmake --build /tmp/leviathan-v2-build -j2
+          cmake -S rewrite -B rewrite/build-benchmark -DCMAKE_BUILD_TYPE=Release
+          cmake --build rewrite/build-benchmark -j2
+      - name: Benchmark same runner
+        shell: bash
+        run: |
+          mkdir -p rewrite/results/v3-benchmark
+          python3 rewrite/tools/architecture_benchmark.py \
+            --base /tmp/leviathan-v2-build/leviathan \
+            --current "$PWD/rewrite/build-benchmark/leviathan" \
+            --current-ref "$GITHUB_SHA" \
+            --repeats 3 \
+            --output rewrite/results/v3-benchmark/v2-v3.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rewrite-v3-architecture-benchmark
+          path: rewrite/results/v3-benchmark/v2-v3.json
