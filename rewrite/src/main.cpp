@@ -139,6 +139,26 @@ static bool selftest(){
         return false;
     }
 
+    // FIDE terminal precedence: a mating position is mate even when rule-50
+    // reaches 100 halfmoves; a non-terminal position at the same clock is draw.
+    auto mateAt100=Position::from_fen("7k/6Q1/6K1/8/8/8/8/8 b - - 100 1");
+    if(!mateAt100){std::cerr<<"selftest rule50 mate FEN parse failed\n";return false;}
+    SearchEngine mateSearch;
+    auto mateReport=mateSearch.search(*mateAt100,SearchLimits{1,0},{mateAt100->key()});
+    if(mateReport.score>-29000){
+        std::cerr<<"selftest rule50 incorrectly overrides checkmate score="<<mateReport.score<<"\n";
+        return false;
+    }
+
+    auto drawAt100=Position::from_fen("7k/8/6K1/8/8/8/8/8 b - - 100 1");
+    if(!drawAt100){std::cerr<<"selftest rule50 draw FEN parse failed\n";return false;}
+    SearchEngine drawSearch;
+    auto drawReport=drawSearch.search(*drawAt100,SearchLimits{1,0},{drawAt100->key()});
+    if(drawReport.score!=0){
+        std::cerr<<"selftest rule50 non-terminal expected draw got "<<drawReport.score<<"\n";
+        return false;
+    }
+
     if(null_tablebase().probe_wdl(Position::startpos()).has_value()){
         std::cerr<<"selftest null tablebase unexpectedly returned a result\n"; return false;
     }
