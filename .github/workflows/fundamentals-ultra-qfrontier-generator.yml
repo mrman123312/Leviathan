@@ -1,0 +1,82 @@
+name: Fundamentals Ultra Q Frontier Generator
+
+on:
+  push:
+    branches: [leviathan/fundamentals-ultra-lab]
+    paths: ['.github/workflows/fundamentals-ultra-qfrontier-generator.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  screen:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 80
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {label: kernel-cap4, mode: cap4}
+          - {label: cap6, mode: cap6}
+          - {label: cap8, mode: cap8}
+          - {label: evidence-only, mode: evidence}
+          - {label: evidence-plus96, mode: evidence96}
+    steps:
+      - uses: actions/checkout@v4
+        with: {ref: leviathan/fundamentals-ultra-lab, path: lab}
+      - uses: actions/checkout@v4
+        with: {ref: leviathan/fundamentals-ultra-v0, path: cand}
+      - uses: actions/checkout@v4
+        with: {ref: leviathan/fundamentals-ultra-v0, path: base}
+      - name: Replace ordinal frontier with candidate rule
+        if: matrix.mode != 'cap4'
+        env: {MODE: '${{ matrix.mode }}'}
+        run: |
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+          p=Path('cand/src/search.cpp');s=p.read_text();m=os.environ['MODE']
+          old='''                if (moveCount > 4 || (moveCount > 2 && leviathanCaptureCeiling < alpha - 48))\n                    continue;'''
+          rules={
+            'cap6':'''                if (moveCount > 6 || (moveCount > 2 && leviathanCaptureCeiling < alpha - 48))\n                    continue;''',
+            'cap8':'''                if (moveCount > 8 || (moveCount > 2 && leviathanCaptureCeiling < alpha - 48))\n                    continue;''',
+            # Remove the ordinal ceiling entirely. Later captures live or die by\n            # material ceiling + the existing alpha-relative SEE test below.\n            'evidence':'''                if (moveCount > 2 && leviathanCaptureCeiling < alpha - 48)\n                    continue;''',
+            # More conservative uncapped version: beyond the first four, demand\n            # substantial crude upside before paying even the SEE/search cost.\n            'evidence96':'''                if ((moveCount > 2 && leviathanCaptureCeiling < alpha - 48)\n                    || (moveCount > 4 && leviathanCaptureCeiling < alpha + 96))\n                    continue;'''
+          }
+          if s.count(old)!=1:raise SystemExit('frontier anchor')
+          p.write_text(s.replace(old,rules[m],1))
+          PY
+          git -C cand diff --check
+          git -C cand diff -- src/search.cpp | tee mutation.patch
+      - name: Build engines and current Stockfish
+        run: |
+          make -C cand/src net && make -C cand/src clean && make -C cand/src -j2 ARCH=x86-64-avx2 build
+          make -C base/src net && make -C base/src clean && make -C base/src -j2 ARCH=x86-64-avx2 build
+          git clone -q https://github.com/official-stockfish/Stockfish.git "$RUNNER_TEMP/sf"
+          git -C "$RUNNER_TEMP/sf" checkout -q 5062aee519a1ba262d472d8ab139851ced56573e
+          make -C "$RUNNER_TEMP/sf/src" -j2 ARCH=x86-64-avx2 build
+          python3 -m pip install --disable-pip-version-check chess==1.11.2
+      - name: Fresh 30-opening holdout
+        run: python3 lab/tools/generate_balanced_openings.py --stockfish "$RUNNER_TEMP/sf/src/stockfish" --output openings.json --count 30 --plies 12 --seed 314159265 --max-abs-cp 100
+      - name: 60 equal-node games
+        run: |
+          mkdir nodes
+          python3 lab/tools/fundamentals_tournament.py --candidate "$PWD/cand/src/stockfish" --opponent "$PWD/base/src/stockfish" --candidate-label '${{ matrix.label }}' --opponent-label ultra-v0 --candidate-fundamentals --opponent-fundamentals --nodes-per-move 80000 --openings-json openings.json --max-plies 180 --output-dir nodes | tee nodes/match.log
+      - name: 60 fixed-time games
+        run: |
+          mkdir time
+          python3 lab/tools/fundamentals_tournament.py --candidate "$PWD/cand/src/stockfish" --opponent "$PWD/base/src/stockfish" --candidate-label '${{ matrix.label }}' --opponent-label ultra-v0 --candidate-fundamentals --opponent-fundamentals --move-time-ms 100 --openings-json openings.json --max-plies 180 --output-dir time | tee time/match.log
+      - name: Deep-oracle regret
+        run: python3 lab/tools/oracle_regret.py --candidate "$PWD/cand/src/stockfish" --baseline "$PWD/base/src/stockfish" --oracle "$RUNNER_TEMP/sf/src/stockfish" --openings-json openings.json --candidate-label '${{ matrix.label }}' --candidate-fundamentals --baseline-fundamentals --choice-nodes 100000 --oracle-nodes 600000 --output regret.json | tee regret.log
+      - uses: actions/upload-artifact@v4
+        with:
+          name: 'ultra-qgen-${{ matrix.label }}'
+          path: |
+            nodes
+            time
+            regret.json
+            regret.log
+            openings.json
+            mutation.patch
+          retention-days: 30
