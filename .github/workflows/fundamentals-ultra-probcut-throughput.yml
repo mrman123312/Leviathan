@@ -1,0 +1,104 @@
+name: Fundamentals Ultra ProbCut Throughput
+
+on:
+  push:
+    branches: [leviathan/fundamentals-ultra-lab]
+    paths:
+      - '.github/workflows/fundamentals-ultra-probcut-throughput.yml'
+      - 'tools/divergent_pair_throughput.py'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  throughput:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with: {ref: '${{ github.sha }}', path: lab}
+      - uses: actions/checkout@v4
+        with: {ref: leviathan/fundamentals-ultra-p01-qfrontier, path: cand}
+      - uses: actions/checkout@v4
+        with: {ref: leviathan/fundamentals-ultra-p01-qfrontier, path: base}
+
+      - name: Materialize exact confirmed ProbCut paid-evidence candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import re
+          from pathlib import Path
+          p=Path('cand/src/search.cpp'); s=p.read_text()
+          pairs=[
+            ('Move  move, excludedMove, bestMove;', 'Move  move, excludedMove, bestMove, probCutNearMiss;'),
+            ('Value bestValue, value, eval, maxValue, probCutBeta;', 'Value bestValue, value, eval, maxValue, probCutBeta, probCutNearValue;'),
+            ('bestMove       = Move::none();\n    priorReduction = (ss - 1)->reduction;', 'bestMove         = Move::none();\n    probCutNearMiss  = Move::none();\n    probCutNearValue = -VALUE_INFINITE;\n    priorReduction   = (ss - 1)->reduction;'),
+            ('MovePicker mp(pos, ttData.move, depth, &mainHistory, &lowPlyHistory, &captureHistory, contHist,\n                  &sharedHistory, ss->ply);', 'const Move leviathanPreferredMove = ttData.move ? ttData.move : probCutNearMiss;\n    MovePicker mp(pos, leviathanPreferredMove, depth, &mainHistory, &lowPlyHistory, &captureHistory,\n                  contHist, &sharedHistory, ss->ply);')]
+          for a,b in pairs:
+              if s.count(a)!=1: raise SystemExit(f'anchor count={s.count(a)} for {a[:60]!r}')
+              s=s.replace(a,b,1)
+          pattern=r'(?ms)^(\s*)if \(value >= probCutBeta\)\n\1\{\n.*?^\1\}'
+          m=re.search(pattern,s)
+          if not m: raise SystemExit('ProbCut success-block regex anchor')
+          I=m.group(1)
+          extra=(f"\n{I}else if (value >= beta && !is_decisive(value) && value > probCutNearValue)\n"
+                 f"{I}{{\n{I}    probCutNearValue = value;\n{I}    probCutNearMiss  = move;\n{I}}}")
+          s=s[:m.end()]+extra+s[m.end():]
+          a='r += 697;  // Base reduction offset to compensate for other tweaks\n        r -= moveCount * 65;'
+          b='r += 697;  // Base reduction offset to compensate for other tweaks\n        if (move == probCutNearMiss)\n            r -= 256;\n        r -= moveCount * 65;'
+          if s.count(a)!=1: raise SystemExit('LMR base anchor')
+          p.write_text(s.replace(a,b,1))
+          PY
+          git -C cand diff --check
+          git -C cand diff -- src/search.cpp > mutation.patch
+          test -s mutation.patch
+
+      - name: Build P01 A/A controls and ProbCut candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          make -C base/src net
+          make -C base/src clean
+          make -C base/src -j2 ARCH=x86-64-avx2 build
+          cp base/src/stockfish base/src/control_a
+          cp base/src/stockfish base/src/control_b
+          cp base/src/nn-ab28990d4ea3.nnue cand/src/
+          make -C cand/src clean
+          make -C cand/src -j2 ARCH=x86-64-avx2 build
+          cat > active.json <<'EOF'
+          {"Threads":1,"Hash":64,"Leviathan Fundamentals":true,"Leviathan Fundamentals Authority":1,"Leviathan Quiet Overdrive":0,"Leviathan Risk":false,"Leviathan Policy":false,"Leviathan MetaSearch":false,"Leviathan Specialist":false,"Leviathan Atlas":false,"Leviathan Search DSL":false}
+          EOF
+
+      - name: Fifteen-round calibrated fixed-node throughput
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 lab/tools/divergent_pair_throughput.py \
+            --control-a base/src/control_a \
+            --control-b base/src/control_b \
+            --candidate cand/src/stockfish \
+            --options active.json \
+            --rounds 15 \
+            --command 'bench 16 1 50000 default nodes' \
+            --output probcut-throughput.json | tee probcut-throughput.log
+          test -s probcut-throughput.json
+
+      - name: Provenance
+        shell: bash
+        run: |
+          set -euo pipefail
+          printf 'candidate_base=%s\nbaseline=%s\nsource_confirmation_run=32006000162\nrounds=15\nbench=50000_nodes_per_position\n' \
+            "$(git -C cand rev-parse HEAD)" "$(git -C base rev-parse HEAD)" > revisions.txt
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ultra-probcut-throughput
+          path: |
+            mutation.patch
+            active.json
+            probcut-throughput.json
+            probcut-throughput.log
+            revisions.txt
+          retention-days: 30
