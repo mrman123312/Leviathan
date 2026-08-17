@@ -1,0 +1,36 @@
+name: Fundamentals Ultra P01 Calibrated
+on:
+  push:
+    branches: [leviathan/fundamentals-ultra-lab]
+    paths: ['.github/workflows/fundamentals-ultra-p01-calibrated.yml']
+permissions: {contents: read}
+jobs:
+  speed:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+        with: {ref: leviathan/fundamentals-v2.1.1-phasefix, path: base}
+      - uses: actions/checkout@v4
+        with: {ref: leviathan/fundamentals-ultra-lab, path: lab}
+      - name: Materialize P01 on phase-fix
+        run: |
+          cp -a base cand
+          cp lab/tools/apply_p01.py cand/tools/apply_p01.py
+          (cd cand && python3 tools/apply_p01.py && git diff --check)
+          make -C base/src net; cp base/src/nn-ab28990d4ea3.nnue cand/src/
+          make -C base/src clean && make -C base/src -j2 ARCH=x86-64-avx2 build
+          cp base/src/stockfish base/src/ref; cp base/src/stockfish base/src/aa
+          make -C cand/src clean && make -C cand/src -j2 ARCH=x86-64-avx2 build
+          cat > options.json <<'EOF'
+          {"Threads":1,"Hash":64,"Leviathan Fundamentals":true,"Leviathan Fundamentals Authority":1,"Leviathan Quiet Overdrive":0,"Leviathan Search DSL":false,"Leviathan Risk":false,"Leviathan Atlas":false,"Leviathan Policy":false}
+          EOF
+      - name: 21-round calibrated exact-behavior test
+        run: |
+          python3 lab/tools/lossless_pair_benchmark_v2.py --reference base/src/ref --aa base/src/aa --candidate cand/src/stockfish --options options.json --rounds 21 --output speed.json | tee speed.log
+      - uses: actions/upload-artifact@v4
+        with:
+          name: fundamentals-ultra-p01-calibrated
+          path: |
+            speed.json
+            speed.log
+          retention-days: 30
