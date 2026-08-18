@@ -11,11 +11,16 @@ git clone --depth 1 --branch agent/p18-hybrid-cpu-gpu-multiponder https://github
 if($LASTEXITCODE-ne 0){ throw 'Git clone failed' }
 
 $bash='C:\msys64\usr\bin\bash.exe'
+$compiler='C:\msys64\ucrt64\bin\x86_64-w64-mingw32-c++.exe'
 if(-not (Test-Path $bash)){ throw 'MSYS2 bash not found at C:\msys64\usr\bin\bash.exe' }
+if(-not (Test-Path $compiler)){ throw 'MSYS2 UCRT64 compiler not found at C:\msys64\ucrt64\bin\x86_64-w64-mingw32-c++.exe. Install the UCRT64 GCC toolchain first.' }
 $msysPath=$work -replace '\\','/'
 if($msysPath -match '^([A-Za-z]):/(.*)$'){ $msysPath='/' + $matches[1].ToLower() + '/' + $matches[2] }
+Write-Host '=== VERIFY UCRT64 TOOLCHAIN ===' -ForegroundColor Cyan
+& $bash -lc "export PATH=/ucrt64/bin:/usr/bin:`$PATH; command -v x86_64-w64-mingw32-c++; x86_64-w64-mingw32-c++ --version | head -n 1"
+if($LASTEXITCODE-ne 0){ throw 'UCRT64 compiler exists but is not executable inside MSYS2.' }
 Write-Host '=== BUILD CURRENT P09 STATIC-RACE CORE ===' -ForegroundColor Cyan
-& $bash -lc "cd '$msysPath/src' && make -j2 build ARCH=x86-64-avx2 COMP=mingw"
+& $bash -lc "export PATH=/ucrt64/bin:/usr/bin:`$PATH; cd '$msysPath/src' && make -j2 build ARCH=x86-64-avx2 COMP=mingw"
 if($LASTEXITCODE-ne 0){ throw 'P09 build failed' }
 $cand=Join-Path $work 'src\stockfish.exe'
 if(-not (Test-Path $cand)){ throw "Built engine not found: $cand" }
