@@ -1,0 +1,165 @@
+name: P13b Depth Aware Qsearch Quiet Checks
+
+on:
+  push:
+    branches: [agent/p13b-depth-aware-qchecks]
+    paths: ['.github/workflows/p13b-depth-aware-qchecks.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  oracle-screen:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 95
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with: {ref: 3404fa2ea9b4fe75236e2584be9da3416e646ec2, path: cand, fetch-depth: 1}
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with: {ref: 3404fa2ea9b4fe75236e2584be9da3416e646ec2, path: base, fetch-depth: 1}
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          repository: official-stockfish/Stockfish
+          ref: 5062aee519a1ba262d472d8ab139851ced56573e
+          path: oracle
+          fetch-depth: 1
+
+      - name: Add TT-depth-aware first-layer quiet checks
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          h=Path('cand/src/search.h');s=h.read_text();old='    Value qsearch(Position& pos, Stack* ss, Value alpha, Value beta);';new='    Value qsearch(Position& pos, Stack* ss, Value alpha, Value beta, bool allowQuietChecks = true);';assert s.count(old)==1;h.write_text(s.replace(old,new,1))
+          p=Path('cand/src/search.cpp');s=p.read_text();old='Value Search::Worker::qsearch(Position& pos, Stack* ss, Value alpha, Value beta) {';new='Value Search::Worker::qsearch(Position& pos, Stack* ss, Value alpha, Value beta, bool allowQuietChecks) {';assert s.count(old)==1;s=s.replace(old,new,1)
+          # Capture-only qsearch is one effort level below richer qsearch, while both remain below main depth 1.
+          anchor='''    constexpr bool PvNode = nodeType == PV;
+
+    assert(alpha >= -VALUE_INFINITE'''
+          repl='''    constexpr bool PvNode = nodeType == PV;
+    const Depth qsearchDepth = allowQuietChecks ? DEPTH_QS : DEPTH_QS - 1;
+
+    assert(alpha >= -VALUE_INFINITE''';assert s.count(anchor)==1;s=s.replace(anchor,repl,1)
+          old='''    if (!PvNode && ttData.depth >= DEPTH_QS
+        && is_valid(ttData.value)''';new='''    if (!PvNode && ttData.depth >= qsearchDepth
+        && is_valid(ttData.value)''';assert s.count(old)==1;s=s.replace(old,new,1)
+          old='''    MovePicker mp(pos, ttData.move, DEPTH_QS, &mainHistory, &lowPlyHistory, &captureHistory,
+                  contHist, &sharedHistory, ss->ply);''';new='''    MovePicker mp(pos, ttData.move, qsearchDepth, &mainHistory, &lowPlyHistory, &captureHistory,
+                  contHist, &sharedHistory, ss->ply);''';assert s.count(old)==1;s=s.replace(old,new,1)
+          old='        value = -qsearch<nodeType>(pos, ss + 1, -beta, -alpha);';new='        value = -qsearch<nodeType>(pos, ss + 1, -beta, -alpha, false);';assert s.count(old)==1;s=s.replace(old,new,1)
+          marker='''    // Step 9. Check for mate and stalemate
+'''
+          block='''    // P13b: one richer qsearch layer. Non-capturing checks must be legal and SEE-safe.
+    // Recursion drops to capture-only qsearch at TT depth -1, so a richer depth-0
+    // bound may satisfy a poorer child but a poorer entry can never satisfy the richer parent.
+    if (allowQuietChecks && !ss->inCheck && bestValue < beta)
+    {
+        for (Move quietCheck : MoveList<QUIETS>(pos))
+        {
+            if (!pos.legal(quietCheck) || !pos.gives_check(quietCheck) || !pos.see_ge(quietCheck, 0))
+                continue;
+
+            do_move(pos, quietCheck, st, true, ss);
+            value = -qsearch<nodeType>(pos, ss + 1, -beta, -alpha, false);
+            undo_move(pos, quietCheck);
+
+            assert(value > -VALUE_INFINITE && value < VALUE_INFINITE);
+            if (value > bestValue)
+            {
+                bestValue = value;
+                if (value > alpha)
+                {
+                    bestMove = quietCheck;
+                    if (PvNode)
+                        ss->pv->update(quietCheck, (ss + 1)->pv);
+                    if (value < beta)
+                        alpha = value;
+                    else
+                        break;
+                }
+            }
+        }
+    }
+
+''';assert s.count(marker)==1;s=s.replace(marker,block+marker,1)
+          old='''    ttWriter.write(posKey, value_to_tt(bestValue, ss->ply), pvHit,
+                   bestValue >= beta ? BOUND_LOWER : BOUND_UPPER, DEPTH_QS, bestMove,''';new='''    ttWriter.write(posKey, value_to_tt(bestValue, ss->ply), pvHit,
+                   bestValue >= beta ? BOUND_LOWER : BOUND_UPPER, qsearchDepth, bestMove,''';assert s.count(old)==1;s=s.replace(old,new,1)
+          p.write_text(s)
+          PY
+          git -C cand diff --check
+          git -C cand diff -- src/search.cpp src/search.h | tee p13b.patch
+
+      - name: Build exact engines
+        run: |
+          set -euo pipefail
+          for d in base cand oracle; do make -C "$d/src" net; make -C "$d/src" clean; make -C "$d/src" -j2 ARCH=x86-64-avx2 build; done
+          python3 -m pip install --disable-pip-version-check 'python-chess>=1.999,<2'
+
+      - name: Fresh 80-position equal-node oracle screen
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir result
+          cat > result/screen.py <<'PY'
+          import json,random,statistics
+          from pathlib import Path
+          import chess,chess.engine
+          SEED=20260817131342;TARGET=80;CHOICE=80000;ORACLE=750000;GRADE=300000
+          def cfg(e):
+            o={}
+            for k,v in [('Threads',1),('Hash',64),('Leviathan Fundamentals',True),('Leviathan Fundamentals Authority',1),('Leviathan Quiet Overdrive',0)]:
+              if k in e.options:o[k]=v
+            for k in ['Leviathan Risk','Leviathan Policy','Leviathan MetaSearch','Leviathan Specialist','Leviathan Atlas','Leviathan Search DSL']:
+              if k in e.options:o[k]=False
+            if o:e.configure(o)
+          def cp(i,c):
+            s=i.get('score');return None if s is None else s.pov(c).score(mate_score=100000)
+          rng=random.Random(SEED);gen=chess.engine.SimpleEngine.popen_uci('oracle/src/stockfish');oo=chess.engine.SimpleEngine.popen_uci('oracle/src/stockfish');gb=chess.engine.SimpleEngine.popen_uci('oracle/src/stockfish');gc=chess.engine.SimpleEngine.popen_uci('oracle/src/stockfish');base=chess.engine.SimpleEngine.popen_uci('base/src/stockfish');cand=chess.engine.SimpleEngine.popen_uci('cand/src/stockfish')
+          for e in (gen,oo,gb,gc):e.configure({'Threads':1,'Hash':64})
+          cfg(base);cfg(cand);fens=[];seen=set();attempt=0
+          try:
+            while len(fens)<TARGET and attempt<300:
+              attempt+=1;b=chess.Board();plies=rng.choice([8,12,16,20,24,28,32])
+              for ply in range(plies):
+                if b.is_game_over():break
+                infos=gen.analyse(b,chess.engine.Limit(nodes=1600),multipv=min(6,b.legal_moves.count()),game=('w',attempt,ply));infos=infos if isinstance(infos,list) else [infos]
+                rr=[(x['pv'][0],int(x['score'].pov(b.turn).score(mate_score=100000) or 0)) for x in infos if x.get('pv')]
+                if not rr:break
+                best=rr[0][1];viable=[x for x in rr if best-x[1]<=120] or rr[:1];b.push(rng.choice(viable)[0])
+              if b.is_game_over():continue
+              key=' '.join(b.fen().split()[:4]);
+              if key in seen:continue
+              sc=cp(gen.analyse(b,chess.engine.Limit(nodes=8000),game=('f',attempt)),b.turn)
+              if sc is not None and abs(sc)<=250 and b.legal_moves.count()>=8:seen.add(key);fens.append(b.fen())
+            if len(fens)<TARGET:raise RuntimeError(f'only {len(fens)} positions')
+            Path('result/fens.txt').write_text('\n'.join(fens)+'\n');rows=[]
+            for i,fen in enumerate(fens):
+              b=chess.Board(fen);col=b.turn;oi=oo.analyse(b,chess.engine.Limit(nodes=ORACLE),game=('o',i));os=cp(oi,col);om=oi.get('pv',[None])[0]
+              order=[('base',base),('cand',cand)] if i%2==0 else [('cand',cand),('base',base)];ch={}
+              for n,e in order:
+                r=e.play(b,chess.engine.Limit(nodes=CHOICE),info=chess.engine.INFO_ALL,game=(n,i));ch[n]=(r.move,r.info.get('depth'),r.info.get('nodes'))
+              bm,bd,bn=ch['base'];cm,cd,cn=ch['cand'];bg=cp(gb.analyse(b,chess.engine.Limit(nodes=GRADE),root_moves=[bm],game=('gb',i)),col);cg=cp(gc.analyse(b,chess.engine.Limit(nodes=GRADE),root_moves=[cm],game=('gc',i)),col);reg=lambda g:max(0,os-g) if os is not None and g is not None else None;br,cr=reg(bg),reg(cg)
+              rows.append({'fen':fen,'oracle_move':om.uci() if om else None,'base_move':bm.uci(),'candidate_move':cm.uci(),'base_regret':br,'candidate_regret':cr,'improvement_cp':br-cr,'base_depth':bd,'candidate_depth':cd,'base_nodes':bn,'candidate_nodes':cn})
+          finally:
+            for e in (gen,oo,gb,gc,base,cand):e.quit()
+          ds=[r['improvement_cp'] for r in rows];out={'schema':'LV_P13B_DEPTH_AWARE_QCHECKS_V1','positions':len(rows),'changed_roots':sum(r['base_move']!=r['candidate_move'] for r in rows),'base_mean_regret_cp':statistics.fmean(r['base_regret'] for r in rows),'candidate_mean_regret_cp':statistics.fmean(r['candidate_regret'] for r in rows),'mean_improvement_cp':statistics.fmean(ds),'median_improvement_cp':statistics.median(ds),'better':sum(x>0 for x in ds),'tie':sum(x==0 for x in ds),'worse':sum(x<0 for x in ds),'largest_rescue_cp':max(ds),'largest_harm_cp':min(ds),'mean_base_depth':statistics.fmean((r['base_depth'] or 0) for r in rows),'mean_candidate_depth':statistics.fmean((r['candidate_depth'] or 0) for r in rows),'promotion_rule':'prototype only; positive oracle regret plus rescue/harm asymmetry and sufficient changed roots required before games'};Path('result/rows.json').write_text(json.dumps(rows,indent=2)+'\n');Path('result/summary.json').write_text(json.dumps(out,indent=2)+'\n');print(json.dumps(out,indent=2))
+          PY
+          python3 result/screen.py
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: p13b-${{ github.sha }}
+          path: [result/, p13b.patch]
+          retention-days: 30
+      - name: Commit durable result
+        if: always()
+        run: |
+          set -euo pipefail
+          test -s result/summary.json || exit 0
+          git clone -q --depth 1 --branch agent/p13b-depth-aware-qchecks "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" record
+          mkdir -p record/experiments;cp result/summary.json record/experiments/p13b-depth-aware-qchecks-latest.json
+          cd record;git config user.name 'github-actions[bot]';git config user.email '41898282+github-actions[bot]@users.noreply.github.com';git add experiments/p13b-depth-aware-qchecks-latest.json
+          if ! git diff --cached --quiet;then git commit -m 'P13b: record depth-aware qcheck evidence';git push;fi
