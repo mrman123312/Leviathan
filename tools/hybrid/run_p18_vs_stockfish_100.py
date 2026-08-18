@@ -44,13 +44,13 @@ def safe_quit(engine: chess.engine.SimpleEngine | None) -> None:
 
 
 def configure_engine(engine: chess.engine.SimpleEngine, threads: int, hash_mb: int) -> None:
+    # Ponder is a python-chess managed option; engine.play(..., ponder=True)
+    # activates it correctly. Only configure unmanaged resource options here.
     opts: dict[str, Any] = {}
     if "Threads" in engine.options:
         opts["Threads"] = threads
     if "Hash" in engine.options:
         opts["Hash"] = hash_mb
-    if "Ponder" in engine.options:
-        opts["Ponder"] = True
     if opts:
         engine.configure(opts)
 
@@ -86,7 +86,7 @@ def generate_openings(opponent: str, out: Path, count: int, plies: int, seed: in
         configure_engine(engine, 1, 32)
         for i in range(count):
             board = chess.Board()
-            for ply in range(plies):
+            for _ in range(plies):
                 if board.is_game_over(claim_draw=True):
                     break
                 legal_count = board.legal_moves.count()
