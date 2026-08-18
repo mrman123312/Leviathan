@@ -25,10 +25,13 @@ jobs:
           python -m py_compile tools/hybrid/split_positions.py
           python -m py_compile tools/hybrid/leviathan_hybrid_uci.py
           python -m py_compile tools/hybrid/leviathan_hybrid_uci_v2.py
+          python -m py_compile tools/hybrid/test_p18_v2_policy.py
       - name: Heuristic scorer smoke
         run: python tools/hybrid/gpu_risk_model.py --self-test --device off
       - name: Existing hybrid orchestration tests
         run: python tools/hybrid/test_hybrid_core.py
+      - name: Regret-aware scheduling policy
+        run: python tools/hybrid/test_p18_v2_policy.py
       - name: Group split leakage check
         run: |
           python - <<'PY'
