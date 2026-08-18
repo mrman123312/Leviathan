@@ -1,0 +1,38 @@
+name: Leviathan CPU Teacher Distillation
+
+on:
+  push:
+    branches:
+      - leviathan/rewrite-v2-bootstrap-strength
+    paths:
+      - 'rewrite/tools/distill_stockfish_eval.py'
+      - '.github/workflows/rewrite-v2-distill.yml'
+  workflow_dispatch:
+
+jobs:
+  distill:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build official Stockfish 18 teacher
+        run: |
+          git clone --depth 1 --branch sf_18 https://github.com/official-stockfish/Stockfish.git /tmp/stockfish18
+          make -C /tmp/stockfish18/src -j2 build ARCH=x86-64
+      - name: Install lightweight training dependencies
+        run: python3 -m pip install --disable-pip-version-check chess==1.11.2 numpy==2.3.2
+      - name: Distill and hold out
+        run: |
+          python3 rewrite/tools/distill_stockfish_eval.py \
+            --teacher /tmp/stockfish18/src/stockfish \
+            --samples 2400 \
+            --holdout 600 \
+            --depth 5 \
+            --ridge 120 \
+            --seed 8910 \
+            --output-dir rewrite/results/distillation
+          cat rewrite/results/distillation/report.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: leviathan-cpu-distillation
+          path: rewrite/results/distillation/
