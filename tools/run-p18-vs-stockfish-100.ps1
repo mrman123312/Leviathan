@@ -5,12 +5,12 @@ function Free-GB([string]$Path){
   return [math]::Round($d.Free/1GB,2)
 }
 
-$RepoCommit='d829f8fe4ffc4c71778f4347bd7ae03053672af6'
+$RepoCommit='c2f184e77b02847f94e12f6a3f97e02888ef916c'
 $Root=Join-Path $HOME 'LeviathanHardwareResults'
 $Work=Join-Path $Root 'p18.2-one-shot-work'
 New-Item -ItemType Directory -Force -Path $Root | Out-Null
 
-Write-Host '=== P18.4 FULL CPU+GPU VS STOCKFISH / 100 GAMES + DECISIVE CPU-ONLY REPLAYS ===' -ForegroundColor Magenta
+Write-Host '=== P18.4 FULL CPU+GPU VS STOCKFISH / 100 GAMES + DECISIVE NO-GPU REPLAYS ===' -ForegroundColor Magenta
 Write-Host "Pinned research commit: $RepoCommit"
 
 $baselineDir=Get-ChildItem $Root -Directory | Sort-Object LastWriteTime -Descending | Where-Object { Test-Path (Join-Path $_.FullName 'stockfish-baseline.exe') } | Select-Object -First 1
@@ -111,14 +111,14 @@ Write-Host '=== VERIFY PROMOTED MODEL LOADS ON DIRECTML ===' -ForegroundColor Cy
 & $Py (Join-Path $Work 'tools\hybrid\gpu_risk_model.py') --device dml --checkpoint $Model
 Assert-LastExit 'P18.4 DirectML checkpoint load'
 
-Write-Host '=== START 100-GAME FAIR PONDER MATCH + DECISIVE CPU-ONLY ABLATIONS ===' -ForegroundColor Magenta
-Write-Host 'Every hybrid WIN or LOSS is replayed from the exact same opening/color with raw P09 CPU-only.'
-Write-Host 'Draws are not replayed. Both versions face the same Stockfish with equal CPU/hash/movetime and pondering.'
+Write-Host '=== START 100-GAME FAIR PONDER MATCH + DECISIVE NO-GPU ABLATIONS ===' -ForegroundColor Magenta
+Write-Host 'Every GPU-enabled WIN or LOSS is replayed from the exact same opening/color with the same P18 architecture but GPU/model disabled.'
+Write-Host 'Draws are not replayed. Both variants face the same Stockfish with equal CPU/hash/movetime and pondering.'
 $MatchOut=Join-Path $Work 'local_results\hybrid\p18-vs-stockfish-100'
 $Harness=Join-Path $Work 'tools\hybrid\run_p18_vs_stockfish_100.py'
 $HybridScript=Join-Path $Work 'tools\hybrid\leviathan_hybrid_uci_v2.py'
 & $Py $Harness --engine $P09 --opponent-engine $Stockfish --model $Model --hybrid-script $HybridScript --out-dir $MatchOut --games 100 --movetime-ms 500 --max-plies 240 --threads 0 --hash 128 --max-scouts 4 --reply-nodes 12000 --anneal-seconds 0.15 --min-final-scouts 2 --opening-plies 10 --opening-nodes 1500 --seed 20260818
-Assert-LastExit '100-game P18.4 vs Stockfish match + decisive CPU-only ablations'
+Assert-LastExit '100-game P18.4 vs Stockfish match + decisive no-GPU ablations'
 
-Write-Host "`n=== DONE: P18.4 CPU+GPU VS STOCKFISH 100 GAMES + DECISIVE CPU-ONLY ABLATIONS ===" -ForegroundColor Green
+Write-Host "`n=== DONE: P18.4 CPU+GPU VS STOCKFISH 100 GAMES + DECISIVE NO-GPU ABLATIONS ===" -ForegroundColor Green
 Write-Host "Results root: $MatchOut" -ForegroundColor Green
