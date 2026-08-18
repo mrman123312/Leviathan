@@ -1,0 +1,49 @@
+name: P09 Race Source Verify
+on:
+  push:
+    branches: [leviathan/p09-static-race]
+    paths: ['src/**', '.github/workflows/p09-race-source-verify.yml']
+  workflow_dispatch:
+permissions: {contents: write}
+jobs:
+  verify:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with: {ref: leviathan/p09-static-race, path: cand, fetch-depth: 1}
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with: {ref: 3404fa2ea9b4fe75236e2584be9da3416e646ec2, path: base, fetch-depth: 1}
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with: {ref: leviathan/fundamentals-ultra-lab, path: harness, fetch-depth: 1}
+      - name: Build exact control/candidate
+        run: |
+          set -euo pipefail
+          make -C base/src net; make -C base/src clean; make -C base/src -j2 ARCH=x86-64-avx2 build
+          cp base/src/stockfish base/src/control_a; cp base/src/stockfish base/src/control_b
+          cp base/src/nn-ab28990d4ea3.nnue cand/src/
+          make -C cand/src clean; make -C cand/src -j2 ARCH=x86-64-avx2 build
+          cat > active.json <<'EOF'
+          {"Threads":1,"Hash":64,"Leviathan Fundamentals":true,"Leviathan Fundamentals Authority":1,"Leviathan Quiet Overdrive":0,"Leviathan Risk":false,"Leviathan Policy":false,"Leviathan MetaSearch":false,"Leviathan Specialist":false,"Leviathan Atlas":false,"Leviathan Search DSL":false}
+          EOF
+      - name: Exact behavior plus calibrated timing
+        run: |
+          set -euo pipefail
+          python3 harness/tools/lossless_pair_benchmark.py --control-a base/src/control_a --control-b base/src/control_b --candidate cand/src/stockfish --options active.json --rounds 31 --output verify.json | tee verify.log
+      - name: Summarize
+        run: |
+          python3 - <<'PY'
+          import json,os
+          d=json.load(open('verify.json'));s=d['signatures'];r=d['results'];exact=all(s['control_a'][k]['nodes']==s['candidate'][k]['nodes'] and s['control_a'][k]['behavior_sha256']==s['candidate'][k]['behavior_sha256'] for k in ('default','depth11','nodes50k'));x=r['candidate'];a=r['control_b'];o={'schema':'LV_P09_RACE_SOURCE_VERIFY_V1','candidate_sha':os.popen('git -C cand rev-parse HEAD').read().strip(),'p01_sha':'3404fa2ea9b4fe75236e2584be9da3416e646ec2','exact_behavior':exact,'candidate_median':x['median_speedup'],'candidate_geo':x['geometric_mean_speedup'],'candidate_ci':x['bootstrap_median_95pct_ci'],'faster_rounds':x['faster_rounds'],'rounds':x['rounds'],'aa_median':a['median_speedup'],'aa_ci':a['bootstrap_median_95pct_ci'],'verified_lossless_win':bool(exact and x['bootstrap_median_95pct_ci'][0]>1.0)};open('summary.json','w').write(json.dumps(o,indent=2)+'\n');print(json.dumps(o,indent=2));assert exact
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with: {name: p09-race-source-${{ github.sha }}, path: [verify.json, verify.log, summary.json], retention-days: 30}
+      - name: Commit durable verification
+        if: always()
+        run: |
+          set -euo pipefail
+          git clone -q --depth 1 --branch leviathan/p09-static-race "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" record
+          mkdir -p record/experiments
+          if [ -s summary.json ]; then cp summary.json record/experiments/p09-race-source-verify-latest.json; else printf '{"schema":"LV_P09_RACE_SOURCE_VERIFY_V1","status":"execution_failed"}\n' > record/experiments/p09-race-source-verify-latest.json; fi
+          cd record;git config user.name github-actions[bot];git config user.email 41898282+github-actions[bot]@users.noreply.github.com;git add experiments/p09-race-source-verify-latest.json;if ! git diff --cached --quiet;then git commit -m 'Race: record P09 source verification';git push;fi
