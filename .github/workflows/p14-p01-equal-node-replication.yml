@@ -1,0 +1,102 @@
+name: P14 P01 Equal-Node Replication
+
+on:
+  push:
+    branches: [agent/p14-p01-equal-node-replication]
+    paths: ['.github/workflows/p14-p01-equal-node-replication.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  shard:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 95
+    strategy:
+      fail-fast: false
+      matrix: {shard: [0, 1, 2, 3]}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with: {ref: agent/p14-p01-equal-node-replication, path: lab, fetch-depth: 1}
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with: {ref: 3404fa2ea9b4fe75236e2584be9da3416e646ec2, path: leviathan, fetch-depth: 1}
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          repository: official-stockfish/Stockfish
+          ref: 5062aee519a1ba262d472d8ab139851ced56573e
+          path: sf
+          fetch-depth: 1
+      - name: Build exact engines
+        run: |
+          set -euo pipefail
+          for d in leviathan sf; do make -C "$d/src" net; make -C "$d/src" clean; make -C "$d/src" -j2 ARCH=x86-64-avx2 build; done
+          python3 -m pip install --disable-pip-version-check chess==1.11.2
+      - name: Generate fresh balanced pairs
+        env: {SHARD: '${{ matrix.shard }}'}
+        run: |
+          set -euo pipefail
+          seed=$((8910001 + SHARD * 1000003))
+          python3 lab/tools/generate_balanced_openings.py --stockfish "$PWD/sf/src/stockfish" --output openings.json --count 50 --plies 14 --seed "$seed" --max-abs-cp 100
+          sha256sum openings.json > openings.sha256
+      - name: Play 100-game same-node shard
+        run: |
+          set -euo pipefail
+          mkdir result
+          python3 lab/tools/fundamentals_tournament.py --candidate "$PWD/leviathan/src/stockfish" --opponent "$PWD/sf/src/stockfish" --candidate-label Ultra-P01 --opponent-label Stockfish-5062aee5 --candidate-fundamentals --nodes-per-move 100000 --openings-json "$PWD/openings.json" --max-plies 200 --output-dir result | tee result/match.log
+      - name: Provenance
+        env: {SHARD: '${{ matrix.shard }}'}
+        run: |
+          printf 'p01=%s\nstockfish=%s\nopenings=%s\nshard=%s\n' "$(git -C leviathan rev-parse HEAD)" "$(git -C sf rev-parse HEAD)" "$(cut -d' ' -f1 openings.sha256)" "$SHARD" > revisions.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: p14-shard-${{ matrix.shard }}-${{ github.sha }}
+          path: |
+            result/
+            revisions.txt
+            openings.sha256
+          retention-days: 30
+
+  aggregate:
+    needs: shard
+    if: always()
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: agent/p14-p01-equal-node-replication
+          fetch-depth: 1
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: p14-shard-*-${{ github.sha }}
+          path: shards
+      - name: Aggregate pair-clustered result
+        run: |
+          set -euo pipefail
+          mkdir -p experiments
+          python3 - <<'PY'
+          import glob,json,math,random,statistics,os
+          games=[];pairs=[];summaries=[]
+          dirs=sorted(glob.glob('shards/p14-shard-*'))
+          if len(dirs)!=4: raise SystemExit(f'expected 4 shards, got {len(dirs)}')
+          for d in dirs:
+            s=json.load(open(d+'/result/summary.json'));summaries.append(s)
+            rows=[json.loads(x) for x in open(d+'/result/games.jsonl') if x.strip()];games.extend(rows)
+            by={}
+            for g in rows:by.setdefault(g['opening'],[]).append(g['candidate_score'])
+            if len(by)!=50 or not all(len(v)==2 for v in by.values()):raise SystemExit('pair integrity failure')
+            pairs += [sum(v)/2 for v in by.values()]
+          if len(games)!=400 or len(pairs)!=200:raise SystemExit('aggregate size failure')
+          score=sum(g['candidate_score'] for g in games)/400
+          w=sum(g['candidate_score']==1 for g in games);d=sum(g['candidate_score']==.5 for g in games);l=sum(g['candidate_score']==0 for g in games)
+          rng=random.Random(8910);boot=[]
+          for _ in range(100000):boot.append(statistics.fmean(pairs[rng.randrange(200)] for __ in range(200)))
+          boot.sort();ci=[boot[2500],boot[97500]]
+          elo=400*math.log10(score/(1-score)) if 0<score<1 else None
+          out={'schema':'LV_P14_P01_EQUAL_NODE_REPLICATION_V1','p01_sha':'3404fa2ea9b4fe75236e2584be9da3416e646ec2','stockfish_sha':'5062aee519a1ba262d472d8ab139851ced56573e','games':400,'opening_pairs':200,'wins':w,'draws':d,'losses':l,'score_fraction':score,'naive_logistic_elo':elo,'pair_bootstrap_95pct_score':ci,'pair_mean':statistics.fmean(pairs),'pair_sd':statistics.stdev(pairs),'shards':summaries,'workflow_sha':os.environ.get('GITHUB_SHA'),'rule':'prospective fresh 400-game replication; 100k nodes per move; pair-clustered uncertainty'}
+          open('experiments/p14-p01-equal-node-replication-latest.json','w').write(json.dumps(out,indent=2)+'\n');print(json.dumps(out,indent=2))
+          PY
+          git config user.name 'github-actions[bot]';git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add experiments/p14-p01-equal-node-replication-latest.json
+          git commit -m 'P14: record 400-game P01 equal-node replication'
+          git push origin HEAD:agent/p14-p01-equal-node-replication
