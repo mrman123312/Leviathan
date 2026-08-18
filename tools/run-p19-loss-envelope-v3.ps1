@@ -1,7 +1,7 @@
 $ErrorActionPreference='Stop'
 function Assert-LastExit([string]$Stage){ if($LASTEXITCODE-ne 0){ throw "$Stage failed with exit code $LASTEXITCODE" } }
 
-$RepoCommit='d639e16d6eeddf3cb5e1df6b9e97878881e5a1ad'
+$RepoCommit='26bd88f65d69b1cbcf462264a24f3b52cd7cfe5b'
 $Root=Join-Path $HOME 'LeviathanHardwareResults'
 $Work=Join-Path $Root 'p19-loss-envelope-work'
 $Venv=Join-Path $Root 'p18-dml-venv'
@@ -12,6 +12,7 @@ Write-Host '=== P19.2 LOSS-ENVELOPE SURVIVAL ===' -ForegroundColor Magenta
 Write-Host 'P19.1 rejected an approximately -0.4 pawn drawable-looking position because its absolute -20cp floor was the wrong invariant.' -ForegroundColor Red
 Write-Host 'New invariant: do not materially increase worst estimated LOSS probability across an all-reply hostile envelope.' -ForegroundColor Yellow
 Write-Host 'Mate/decisive loss is still a hard veto. Immediate legal draw is a hard survival lock.' -ForegroundColor Yellow
+Write-Host 'Missing requested reply line = maximally unsafe (strict fail-closed).' -ForegroundColor Yellow
 Write-Host 'P09 + frozen Stockfish critics: 1 thread, fixed nodes. No learned GPU authority. No master merge.' -ForegroundColor Yellow
 Write-Host "Pinned research source: $RepoCommit"
 
@@ -43,8 +44,8 @@ if(-not $baselineDir){throw 'No stockfish-baseline.exe found under LeviathanHard
 $Stockfish=Join-Path $baselineDir.FullName 'stockfish-baseline.exe'
 Write-Host "Frozen Stockfish: $Stockfish" -ForegroundColor DarkGray
 
-$Harness=Join-Path $Work 'tools\hybrid\run_p19_loss_envelope_v3.py'
-$Out=Join-Path $Work 'local_results\p19-loss-envelope-v3'
+$Harness=Join-Path $Work 'tools\hybrid\run_p19_loss_envelope_v3_strict.py'
+$Out=Join-Path $Work 'local_results\p19-loss-envelope-v3-strict'
 Write-Host '=== 20 HISTORICAL/MICRO SENTINELS, THEN FRESH 100-GAME GATE ===' -ForegroundColor Magenta
 Write-Host 'Each candidate: WDL baseline -> all opponent replies -> deepest 6 hostile replies -> relative loss envelope.' -ForegroundColor DarkGray
 Write-Host 'Normal tolerance: at most +15/1000 worst loss probability vs the current-position envelope.' -ForegroundColor DarkGray
