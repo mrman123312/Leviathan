@@ -6,8 +6,8 @@ function Free-GB([string]$Path){
 }
 
 # Source commit containing: corrected regret decode, decision-level miner resume,
-# and decisive no-GPU replay harness.
-$RepoCommit='2d80c5178d56424fe09cc8204c633b230d828835'
+# decisive no-GPU replay harness, and DirectML-safe live scorer inference.
+$RepoCommit='fdc3de409792f1ace10ade3477469656df91c52d'
 $Root=Join-Path $HOME 'LeviathanHardwareResults'
 $Work=Join-Path $Root 'p18.2-one-shot-work'
 New-Item -ItemType Directory -Force -Path $Root | Out-Null
@@ -120,9 +120,9 @@ if(Test-P18Promotion){
   if(Test-Path $TrainRows){$datasets += $TrainRows}
   if(Test-Path $ReplyTrain){$datasets += $ReplyTrain}
   Write-Host '=== MINIMUM PREREQUISITE: TRAIN PROVISIONAL ADVISOR FROM DATA ALREADY ON DISK ===' -ForegroundColor Yellow
-  Write-Host 'This is NOT the final/gated P18.4 model. It exists only so the requested GPU-vs-no-GPU match is real.' -ForegroundColor Yellow
+  Write-Host 'Training this tiny 12->48->48->3 model on CPU avoids DirectML training incompatibilities; the checkpoint is still used on the RTX via DirectML during the match.' -ForegroundColor Yellow
   $TrainerPy=Join-Path $Work 'tools\hybrid\train_risk_model_v4.py'
-  & $Py $TrainerPy @datasets --output $ProvisionalModel --metrics-output $ProvisionalMetrics --device dml --hidden 48 --epochs 80 --patience 12 --min-risk-auc 0 --min-top20-regret-capture 0 --min-reply-top1-gain -1 --min-reply-coverage 0
+  & $Py $TrainerPy @datasets --output $ProvisionalModel --metrics-output $ProvisionalMetrics --device cpu --hidden 48 --epochs 80 --patience 12 --min-risk-auc 0 --min-top20-regret-capture 0 --min-reply-top1-gain -1 --min-reply-coverage 0
   $trainExit=$LASTEXITCODE
   if(-not(Test-Path $ProvisionalModel)){throw "Provisional advisor training did not produce a checkpoint (exit=$trainExit)."}
   if($trainExit-ne 0){Write-Warning "Provisional model did not satisfy its research metrics (exit=$trainExit), but checkpoint exists and will be used for this exploratory match as requested."}
@@ -148,10 +148,11 @@ Write-Host '=== MATCH-FIRST 100 GAMES COMPLETE ===' -ForegroundColor Green
 Write-Host "Results root: $MatchOut" -ForegroundColor Green
 
 # Only AFTER the requested match is complete do we resume/finish the expensive final campaign.
+# The advisor is tiny; train it on CPU for DirectML compatibility. Runtime inference remains DML/GPU.
 if(-not(Test-P18Promotion)){
   Write-Host '=== NOW RESUME/FINISH FULL P18.4 MINING + HOLDOUT + WARM GATES ===' -ForegroundColor Cyan
   $FullTrainer=Join-Path $Work 'tools\hybrid\run-hybrid-one-shot.ps1'
-  & $FullTrainer -Engine $P09 -OpponentEngine $Stockfish -Threads 8 -Hash 128 -Games 80 -Python $Py -Device dml -OutDir 'local_results/hybrid/p18-one-shot'
+  & $FullTrainer -Engine $P09 -OpponentEngine $Stockfish -Threads 8 -Hash 128 -Games 80 -Python $Py -Device cpu -OutDir 'local_results/hybrid/p18-one-shot'
   if($LASTEXITCODE-ne 0){
     Write-Warning 'Full P18.4 campaign stopped or failed a promotion gate. The match-first results remain saved.'
     exit $LASTEXITCODE
