@@ -23,6 +23,7 @@ jobs:
           python -m py_compile tools/hybrid/mine_finite_compute.py
           python -m py_compile tools/hybrid/generate_training_positions.py
           python -m py_compile tools/hybrid/split_positions.py
+          python -m py_compile tools/hybrid/benchmark_warm_advantage.py
           python -m py_compile tools/hybrid/leviathan_hybrid_uci.py
           python -m py_compile tools/hybrid/leviathan_hybrid_uci_v2.py
           python -m py_compile tools/hybrid/test_p18_v2_policy.py
