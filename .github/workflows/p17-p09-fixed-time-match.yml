@@ -1,0 +1,128 @@
+name: P17 P09 Fixed-Time Match
+
+on:
+  push:
+    branches: [agent/p17-p09-fixed-time-match]
+    paths: ['.github/workflows/p17-p09-fixed-time-match.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  shard:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 95
+    strategy:
+      fail-fast: false
+      matrix: {shard: [0,1,2,3]}
+    env:
+      SHARD: ${{ matrix.shard }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with: {ref: 3404fa2ea9b4fe75236e2584be9da3416e646ec2, path: cand, fetch-depth: 1}
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with: {ref: leviathan/fundamentals-ultra-lab, path: lab, fetch-depth: 1}
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          repository: official-stockfish/Stockfish
+          ref: 5062aee519a1ba262d472d8ab139851ced56573e
+          path: sf
+          fetch-depth: 1
+
+      - name: Materialize P09 static champion
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path('cand/src/leviathan_fundamentals.h');s=p.read_text()
+          old='inline bool ready() { return state().enabled && state().authority > 0; }';assert s.count(old)==1;s=s.replace(old,'inline constexpr bool ready() { return true; }',1)
+          old='''inline bool zugzwang_risk(const Position& pos) {
+    if (!ready() || !state().zugzwangGuard)
+        return false;
+
+    // Conservative detector: sparse positions with very little non-pawn
+    // mobility are where null-move assumptions are structurally least safe.
+    return pos.count<ALL_PIECES>() <= 9 && non_pawn_count(pos) <= 2;
+}''';new='''inline bool zugzwang_risk(const Position& pos) {
+    return pos.count<ALL_PIECES>() <= 9 && non_pawn_count(pos) <= 2;
+}''';assert s.count(old)==1;s=s.replace(old,new,1)
+          old='    if (!ready() || !state().sacrificeRescue)\n        return false;\n\n';assert s.count(old)==1;s=s.replace(old,'',1)
+          old='    if (!ready())\n        return 0;\n\n';assert s.count(old)==1;s=s.replace(old,'',1)
+          for a,b in [('state().forcingBuyback','384'),('state().recaptureBuyback','256'),('state().passerBuyback','320'),('state().endgameBuyback','128')]:assert s.count(a)>=1;s=s.replace(a,b,1)
+          start='    // Authority 2 is the funding mechanism. v2.1 deliberately avoids\n';end='        delta += state().quietOverdrive * lateness * depthScale / 48;\n    }\n\n';i=s.find(start);j=s.find(end,i);assert i>=0 and j>=0;j+=len(end);s=s[:i]+'    // Static Authority-1 champion.\n\n'+s[j:]
+          old='''inline int quiet_ordering_bonus(const Position& pos, Move move) {
+    if (!ready() || !state().rule50Pressure || pos.rule50_count() < 70)
+        return 0;
+
+    // Captures are scored in another MovePicker stage. Push pawn moves upward
+    // when the fifty-move counter is dangerous because they reset it.
+    return pawn_move(pos, move) ? state().rule50PawnBonus : 0;
+}''';new='''inline int quiet_ordering_bonus(const Position& pos, Move move) {
+    if (pos.rule50_count() < 70)
+        return 0;
+    return pawn_move(pos, move) ? 3072 : 0;
+}''';assert s.count(old)==1;p.write_text(s.replace(old,new,1))
+          m=Path('cand/src/movepick.cpp');s=m.read_text();old='''    const bool leviathanRule50Ready = Type == QUIETS && Leviathan::Fundamentals::ready()
+                                      && Leviathan::Fundamentals::state().rule50Pressure
+                                      && pos.rule50_count() >= 70;''';new='''    const bool leviathanRule50Ready = Type == QUIETS && pos.rule50_count() >= 70;''';assert s.count(old)==1;m.write_text(s.replace(old,new,1))
+          PY
+          git -C cand diff --check
+
+      - name: Build engines and generate fresh shard openings
+        shell: bash
+        run: |
+          set -euo pipefail
+          for d in cand sf; do make -C "$d/src" net; make -C "$d/src" clean; make -C "$d/src" -j2 ARCH=x86-64-avx2 build; done
+          python3 -m pip install --disable-pip-version-check chess==1.11.2
+          seed=$((891017 + SHARD * 1000003))
+          python3 lab/tools/generate_balanced_openings.py --stockfish "$PWD/sf/src/stockfish" --output openings.json --count 25 --plies 14 --seed "$seed" --max-abs-cp 100
+
+      - name: Play 50 fixed-time games
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir result
+          python3 lab/tools/fundamentals_tournament.py --candidate "$PWD/cand/src/stockfish" --opponent "$PWD/sf/src/stockfish" --candidate-label P09-Static --opponent-label Stockfish-5062aee5 --candidate-fundamentals --move-time-ms 50 --openings-json "$PWD/openings.json" --max-plies 200 --output-dir result | tee result/match.log
+          printf 'p01=%s\nstockfish=%s\nshard=%s\n' "$(git -C cand rev-parse HEAD)" "$(git -C sf rev-parse HEAD)" "$SHARD" > result/revisions.txt
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: p17-shard-${{ matrix.shard }}-${{ github.sha }}
+          path: result/
+          retention-days: 30
+
+  aggregate:
+    needs: shard
+    if: always()
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with: {ref: agent/p17-p09-fixed-time-match, fetch-depth: 1}
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: p17-shard-*-${{ github.sha }}
+          path: shards
+      - name: Aggregate pair-clustered result
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p experiments
+          python3 - <<'PY'
+          import glob,json,math,random,statistics,os
+          dirs=sorted(glob.glob('shards/p17-shard-*'));games=[];pairs=[];subs=[]
+          if len(dirs)!=4:raise SystemExit(f'expected 4 shard artifacts, got {len(dirs)}')
+          for d in dirs:
+            subs.append(json.load(open(d+'/summary.json')));rows=[json.loads(x) for x in open(d+'/games.jsonl') if x.strip()];games.extend(rows);by={}
+            for g in rows:by.setdefault(g['opening'],[]).append(g['candidate_score'])
+            if len(by)!=25 or not all(len(v)==2 for v in by.values()):raise SystemExit('pair integrity failure')
+            pairs.extend(sum(v)/2 for v in by.values())
+          score=statistics.fmean(g['candidate_score'] for g in games);w=sum(g['candidate_score']==1 for g in games);dr=sum(g['candidate_score']==.5 for g in games);l=len(games)-w-dr
+          rng=random.Random(891017);boot=[]
+          for _ in range(100000):boot.append(statistics.fmean(pairs[rng.randrange(len(pairs))] for __ in pairs))
+          boot.sort();ci=[boot[2500],boot[97500]];elo=400*math.log10(score/(1-score)) if 0<score<1 else None
+          out={'schema':'LV_P17_P09_FIXED_TIME_V1','candidate':'P09 static','stockfish_sha':'5062aee519a1ba262d472d8ab139851ced56573e','games':len(games),'opening_pairs':len(pairs),'move_time_ms':50,'wins':w,'draws':dr,'losses':l,'score_fraction':score,'naive_logistic_elo':elo,'pair_bootstrap_95pct_score':ci,'pair_mean':statistics.fmean(pairs),'pair_sd':statistics.stdev(pairs),'candidate_mean_nodes':statistics.fmean(s['candidate_mean_nodes'] for s in subs),'opponent_mean_nodes':statistics.fmean(s['opponent_mean_nodes'] for s in subs),'candidate_mean_depth':statistics.fmean(s['candidate_mean_depth'] for s in subs),'opponent_mean_depth':statistics.fmean(s['opponent_mean_depth'] for s in subs),'shards':subs,'workflow_sha':os.environ.get('GITHUB_SHA'),'rule':'fresh 200-game fixed-time screen; promotion still requires replication at another time budget and no same-node regression'}
+          open('experiments/p17-p09-fixed-time-match-latest.json','w').write(json.dumps(out,indent=2)+'\n');print(json.dumps(out,indent=2))
+          PY
+          git config user.name 'github-actions[bot]';git config user.email '41898282+github-actions[bot]@users.noreply.github.com';git add experiments/p17-p09-fixed-time-match-latest.json;git commit -m 'P17: record P09 fixed-time match';git push origin HEAD:agent/p17-p09-fixed-time-match
