@@ -7,6 +7,7 @@ param(
   [int]$FastNodes = 50000,
   [int]$DeepNodes = 800000,
   [int]$ReplyNodes = 12000,
+  [int]$OpponentLabelNodes = 50000,
   [string]$Python = "python",
   [string]$OutDir = "local_results/hybrid/p18-one-shot"
 )
@@ -23,10 +24,10 @@ Write-Host "=== P18.2 one-shot preflight ==="
 Write-Host "=== Generate diverse engine-distribution positions ==="
 & $Python (Join-Path $PSScriptRoot "generate_training_positions.py") --engine $OpponentEngine --output $all --games $Games --threads 1 --hash 32
 & $Python (Join-Path $PSScriptRoot "split_positions.py") --input $all --train $trainPos --holdout $holdPos --holdout-frac 0.20
-Write-Host "=== Mine train labels (reply + finite-compute risk + regret) ==="
-& $Python (Join-Path $PSScriptRoot "mine_finite_compute.py") --engine $Engine --opponent-engine $OpponentEngine --positions $trainPos --output $trainRows --reply-nodes $ReplyNodes --fast-nodes $FastNodes --deep-nodes $DeepNodes --multipv 4 --threads $Threads --hash $Hash
+Write-Host "=== Mine train labels (shallow reply probe vs stronger opponent truth + P09 risk/regret) ==="
+& $Python (Join-Path $PSScriptRoot "mine_finite_compute.py") --engine $Engine --opponent-engine $OpponentEngine --positions $trainPos --output $trainRows --reply-nodes $ReplyNodes --opponent-label-nodes $OpponentLabelNodes --fast-nodes $FastNodes --deep-nodes $DeepNodes --multipv 4 --threads $Threads --hash $Hash
 Write-Host "=== Mine untouched prospective holdout ==="
-& $Python (Join-Path $PSScriptRoot "mine_finite_compute.py") --engine $Engine --opponent-engine $OpponentEngine --positions $holdPos --output $holdRows --reply-nodes $ReplyNodes --fast-nodes $FastNodes --deep-nodes $DeepNodes --multipv 4 --threads $Threads --hash $Hash
+& $Python (Join-Path $PSScriptRoot "mine_finite_compute.py") --engine $Engine --opponent-engine $OpponentEngine --positions $holdPos --output $holdRows --reply-nodes $ReplyNodes --opponent-label-nodes $OpponentLabelNodes --fast-nodes $FastNodes --deep-nodes $DeepNodes --multipv 4 --threads $Threads --hash $Hash
 Write-Host "=== Train leakage-resistant three-head advisor ==="
 & $Python (Join-Path $PSScriptRoot "train_risk_model.py") $trainRows --prospective $holdRows --output $model --metrics-output $metrics --device cuda --hidden 48 --epochs 160 --patience 20
 if ($LASTEXITCODE -ne 0) { Write-Warning "Promotion gates failed. Checkpoint was saved for research but MUST NOT be used as champion."; exit $LASTEXITCODE }
