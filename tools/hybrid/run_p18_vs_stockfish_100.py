@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Resumable 100-game P18 hybrid vs Stockfish hardware match with decisive-game ablation.
+"""Resumable 100-game P18 hybrid vs Stockfish match with decisive no-GPU ablations.
 
 Main match:
 - P18 CPU+GPU hybrid vs frozen Stockfish
@@ -7,15 +7,17 @@ Main match:
 - equal CPU thread/hash budgets and equal own-move time
 - UCI pondering enabled for both sides
 
-Counterfactual:
-- after every hybrid WIN or LOSS, replay the exact same opening and color
-- replace P18 with the raw P09 CPU engine (no GPU advisor / no multi-reply proxy)
-- keep Stockfish, CPU threads, hash, move time, pondering, opening, and color fixed
+Counterfactual after every hybrid WIN or LOSS:
+- exact same opening and Leviathan color
+- exact same P18 multi-reply/ponder architecture
+- exact same Stockfish, CPU threads, hash, own-move time, and pondering
+- learned GPU advisor disabled via --gpu-device off and no checkpoint
+- built-in heuristic scorer remains so only the learned GPU/model feature is removed
 - draws do not trigger a replay
 
-This is an outcome-level A/B check, not proof from a single sample: threaded chess search
-and pondering can be nondeterministic. The harness therefore reports the first move divergence
-and labels whether the hybrid outcome was better, worse, or unchanged versus CPU-only.
+A single replay is outcome-level evidence, not proof: threaded/pondering chess searches may be
+nondeterministic. The harness records the first move divergence and whether the GPU-enabled
+outcome was better, worse, or unchanged versus the otherwise-identical no-GPU hybrid.
 """
 from __future__ import annotations
 
@@ -116,14 +118,13 @@ def generate_openings(opponent: str, out: Path, count: int, plies: int, seed: in
     return fens
 
 
-def open_hybrid_pair(args: argparse.Namespace, threads: int, log_path: Path):
-    hybrid_cmd = [
+def hybrid_command(args: argparse.Namespace, threads: int, log_path: Path, use_gpu_model: bool) -> list[str]:
+    cmd = [
         sys.executable,
         str(Path(args.hybrid_script).resolve()),
         "--engine", str(Path(args.engine).resolve()),
         "--opponent-engine", str(Path(args.opponent_engine).resolve()),
-        "--model", str(Path(args.model).resolve()),
-        "--gpu-device", "auto",
+        "--gpu-device", "auto" if use_gpu_model else "off",
         "--threads", str(threads),
         "--hash", str(args.hash),
         "--max-scouts", str(args.max_scouts),
@@ -132,19 +133,18 @@ def open_hybrid_pair(args: argparse.Namespace, threads: int, log_path: Path):
         "--min-final-scouts", str(args.min_final_scouts),
         "--log", str(log_path.resolve()),
     ]
-    lev = chess.engine.SimpleEngine.popen_uci(hybrid_cmd, timeout=45.0)
+    if use_gpu_model:
+        cmd.extend(["--model", str(Path(args.model).resolve())])
+    return cmd
+
+
+def open_hybrid_pair(args: argparse.Namespace, threads: int, log_path: Path, use_gpu_model: bool):
+    cmd = hybrid_command(args, threads, log_path, use_gpu_model)
+    lev = chess.engine.SimpleEngine.popen_uci(cmd, timeout=45.0)
     sf = chess.engine.SimpleEngine.popen_uci(str(Path(args.opponent_engine).resolve()), timeout=30.0)
     configure_engine(lev, threads, args.hash)
     configure_engine(sf, threads, args.hash)
-    return lev, sf, hybrid_cmd
-
-
-def open_cpu_only_pair(args: argparse.Namespace, threads: int):
-    lev = chess.engine.SimpleEngine.popen_uci(str(Path(args.engine).resolve()), timeout=30.0)
-    sf = chess.engine.SimpleEngine.popen_uci(str(Path(args.opponent_engine).resolve()), timeout=30.0)
-    configure_engine(lev, threads, args.hash)
-    configure_engine(sf, threads, args.hash)
-    return lev, sf
+    return lev, sf, cmd
 
 
 def score_from_result(result: str, leviathan_white: bool) -> float:
@@ -200,14 +200,14 @@ def first_divergence(a: list[str], b: list[str]) -> dict[str, Any]:
     n = min(len(a), len(b))
     for i in range(n):
         if a[i] != b[i]:
-            return {"first_divergence_ply": i + 1, "hybrid_move": a[i], "cpu_only_move": b[i]}
+            return {"first_divergence_ply": i + 1, "gpu_move": a[i], "no_gpu_move": b[i]}
     if len(a) != len(b):
         return {
             "first_divergence_ply": n + 1,
-            "hybrid_move": a[n] if len(a) > n else None,
-            "cpu_only_move": b[n] if len(b) > n else None,
+            "gpu_move": a[n] if len(a) > n else None,
+            "no_gpu_move": b[n] if len(b) > n else None,
         }
-    return {"first_divergence_ply": None, "hybrid_move": None, "cpu_only_move": None}
+    return {"first_divergence_ply": None, "gpu_move": None, "no_gpu_move": None}
 
 
 def load_rows(path: Path, key_name: str = "game") -> dict[int, dict[str, Any]]:
@@ -250,109 +250,111 @@ def main_summary(rows: list[dict[str, Any]], args: argparse.Namespace, threads: 
     }
 
 
-def counterfactual_label(hybrid_score: float, cpu_score: float) -> str:
-    if hybrid_score > cpu_score:
-        return "hybrid_better_outcome"
-    if hybrid_score < cpu_score:
-        return "hybrid_worse_outcome"
+def outcome_label(gpu_score: float, no_gpu_score: float) -> str:
+    if gpu_score > no_gpu_score:
+        return "gpu_better_outcome"
+    if gpu_score < no_gpu_score:
+        return "gpu_worse_outcome"
     return "same_outcome"
 
 
-def counterfactual_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
+def ablation_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
     labels = [str(r.get("outcome_comparison")) for r in rows]
-    win_rows = [r for r in rows if float(r.get("hybrid_score", -1)) == 1.0]
-    loss_rows = [r for r in rows if float(r.get("hybrid_score", -1)) == 0.0]
+    win_rows = [r for r in rows if float(r.get("gpu_score", -1)) == 1.0]
+    loss_rows = [r for r in rows if float(r.get("gpu_score", -1)) == 0.0]
 
     def counts(rs: list[dict[str, Any]]) -> dict[str, int]:
         return {
-            "cpu_only_win": sum(float(r.get("cpu_only_score", -1)) == 1.0 for r in rs),
-            "cpu_only_draw": sum(float(r.get("cpu_only_score", -1)) == 0.5 for r in rs),
-            "cpu_only_loss": sum(float(r.get("cpu_only_score", -1)) == 0.0 for r in rs),
+            "no_gpu_win": sum(float(r.get("no_gpu_score", -1)) == 1.0 for r in rs),
+            "no_gpu_draw": sum(float(r.get("no_gpu_score", -1)) == 0.5 for r in rs),
+            "no_gpu_loss": sum(float(r.get("no_gpu_score", -1)) == 0.0 for r in rs),
         }
 
     n = len(rows)
     return {
         "decisive_replays": n,
-        "hybrid_better_outcome": labels.count("hybrid_better_outcome"),
-        "hybrid_worse_outcome": labels.count("hybrid_worse_outcome"),
+        "gpu_better_outcome": labels.count("gpu_better_outcome"),
+        "gpu_worse_outcome": labels.count("gpu_worse_outcome"),
         "same_outcome": labels.count("same_outcome"),
-        "mean_hybrid_minus_cpu_score": (
-            sum(float(r["hybrid_score"]) - float(r["cpu_only_score"]) for r in rows) / n if n else 0.0
+        "mean_gpu_minus_no_gpu_score": (
+            sum(float(r["gpu_score"]) - float(r["no_gpu_score"]) for r in rows) / n if n else 0.0
         ),
-        "for_hybrid_wins": {"replays": len(win_rows), **counts(win_rows)},
-        "for_hybrid_losses": {"replays": len(loss_rows), **counts(loss_rows)},
+        "for_gpu_enabled_wins": {"replays": len(win_rows), **counts(win_rows)},
+        "for_gpu_enabled_losses": {"replays": len(loss_rows), **counts(loss_rows)},
     }
 
 
-def run_hybrid_game(args: argparse.Namespace, threads: int, session_log: Path, game_no: int, fen: str, leviathan_white: bool):
+def run_gpu_game(args: argparse.Namespace, threads: int, session_log: Path, game_no: int, fen: str, leviathan_white: bool):
     last_error = None
     for attempt in range(2):
         lev = sf = None
         try:
-            lev, sf, cmd = open_hybrid_pair(args, threads, session_log)
+            lev, sf, cmd = open_hybrid_pair(args, threads, session_log, True)
             if attempt == 0:
-                print(json.dumps({"event": "hybrid_command", "game": game_no, "command": cmd}), flush=True)
-            row = play_game(lev, sf, fen, leviathan_white, f"p18-hybrid-{game_no}", args.movetime_ms, args.max_plies)
+                print(json.dumps({"event": "gpu_hybrid_command", "game": game_no, "command": cmd}), flush=True)
+            row = play_game(lev, sf, fen, leviathan_white, f"p18-gpu-{game_no}", args.movetime_ms, args.max_plies)
             row["game"] = game_no
             return row
         except Exception as exc:
             last_error = exc
             if attempt == 0:
-                print(json.dumps({"event": "hybrid_game_restart", "game": game_no, "error": repr(exc)}), flush=True)
+                print(json.dumps({"event": "gpu_game_restart", "game": game_no, "error": repr(exc)}), flush=True)
         finally:
             safe_quit(lev)
             safe_quit(sf)
-    raise RuntimeError(f"hybrid game {game_no} failed twice: {last_error}")
+    raise RuntimeError(f"GPU-enabled game {game_no} failed twice: {last_error}")
 
 
-def run_cpu_counterfactual(args: argparse.Namespace, threads: int, hybrid_row: dict[str, Any]) -> dict[str, Any]:
-    game_no = int(hybrid_row["game"])
+def run_no_gpu_ablation(args: argparse.Namespace, threads: int, gpu_row: dict[str, Any], no_gpu_log: Path) -> dict[str, Any]:
+    game_no = int(gpu_row["game"])
     last_error = None
     for attempt in range(2):
         lev = sf = None
         try:
-            lev, sf = open_cpu_only_pair(args, threads)
+            lev, sf, cmd = open_hybrid_pair(args, threads, no_gpu_log, False)
+            if attempt == 0:
+                print(json.dumps({"event": "no_gpu_hybrid_command", "original_game": game_no, "command": cmd}), flush=True)
             replay = play_game(
                 lev,
                 sf,
-                str(hybrid_row["opening_fen"]),
-                bool(hybrid_row["leviathan_white"]),
-                f"p18-cpu-only-{game_no}",
+                str(gpu_row["opening_fen"]),
+                bool(gpu_row["leviathan_white"]),
+                f"p18-no-gpu-{game_no}",
                 args.movetime_ms,
                 args.max_plies,
             )
-            hs = float(hybrid_row["score_leviathan"])
-            cs = float(replay["score_leviathan"])
-            div = first_divergence(list(hybrid_row.get("moves") or []), list(replay.get("moves") or []))
+            gs = float(gpu_row["score_leviathan"])
+            ns = float(replay["score_leviathan"])
+            div = first_divergence(list(gpu_row.get("moves") or []), list(replay.get("moves") or []))
             return {
                 "original_game": game_no,
-                "opening_fen": hybrid_row["opening_fen"],
-                "leviathan_white": hybrid_row["leviathan_white"],
-                "hybrid_result": hybrid_row["result"],
-                "hybrid_score": hs,
-                "cpu_only_result": replay["result"],
-                "cpu_only_score": cs,
-                "cpu_only_termination": replay["termination"],
-                "cpu_only_plies": replay["plies"],
-                "cpu_only_moves": replay["moves"],
-                "outcome_comparison": counterfactual_label(hs, cs),
+                "opening_fen": gpu_row["opening_fen"],
+                "leviathan_white": gpu_row["leviathan_white"],
+                "gpu_result": gpu_row["result"],
+                "gpu_score": gs,
+                "no_gpu_result": replay["result"],
+                "no_gpu_score": ns,
+                "no_gpu_termination": replay["termination"],
+                "no_gpu_plies": replay["plies"],
+                "no_gpu_moves": replay["moves"],
+                "outcome_comparison": outcome_label(gs, ns),
                 **div,
             }
         except Exception as exc:
             last_error = exc
             if attempt == 0:
-                print(json.dumps({"event": "cpu_only_replay_restart", "original_game": game_no, "error": repr(exc)}), flush=True)
+                print(json.dumps({"event": "no_gpu_replay_restart", "original_game": game_no, "error": repr(exc)}), flush=True)
         finally:
             safe_quit(lev)
             safe_quit(sf)
-    raise RuntimeError(f"CPU-only replay for game {game_no} failed twice: {last_error}")
+    raise RuntimeError(f"no-GPU replay for game {game_no} failed twice: {last_error}")
 
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--engine", required=True, help="P09 CPU engine")
+    ap.add_argument("--engine", required=True, help="P09 CPU engine under both hybrid variants")
     ap.add_argument("--opponent-engine", required=True, help="frozen Stockfish baseline")
-    ap.add_argument("--model", required=True, help="promoted P18.4 checkpoint")
+    ap.add_argument("--model", required=True, help="promoted P18.4 checkpoint used only by GPU-enabled variant")
     ap.add_argument("--hybrid-script", required=True)
     ap.add_argument("--out-dir", required=True)
     ap.add_argument("--games", type=int, default=100)
@@ -380,8 +382,6 @@ def main() -> int:
     base_out = Path(args.out_dir)
     base_out.mkdir(parents=True, exist_ok=True)
 
-    # Keep the original run identity stable so an already-started 100-game match can be
-    # resumed and decisive games can be backfilled with CPU-only replays.
     identity = {
         "engine_sha256": sha256_file(Path(args.engine)),
         "stockfish_sha256": sha256_file(Path(args.opponent_engine)),
@@ -411,45 +411,47 @@ def main() -> int:
         manifest.write_text(json.dumps(identity, indent=2, sort_keys=True), encoding="utf-8")
 
     protocol = {
-        "counterfactual_protocol": "decisive-only-cpu-ablation-v1",
-        "trigger": "hybrid win or hybrid loss; no replay for draw",
-        "same": ["opening_fen", "leviathan_color", "stockfish_binary", "threads", "hash", "movetime_ms", "pondering"],
-        "removed": ["GPU advisor", "P18 multi-reply hybrid proxy"],
-        "cpu_only_engine": "P09 raw UCI engine",
+        "ablation_protocol": "decisive-only-no-gpu-v2",
+        "trigger": "GPU-enabled hybrid win or loss; no replay for draw",
+        "same": ["opening_fen", "leviathan_color", "P18 multi-reply architecture", "Stockfish binary", "threads", "hash", "movetime_ms", "pondering", "reply_nodes", "scout_count"],
+        "removed": ["learned P18.4 checkpoint", "GPU/accelerated model inference"],
+        "replacement": "same HybridProxyV2 using --gpu-device off and built-in heuristic scorer",
     }
-    (out / "counterfactual-protocol.json").write_text(json.dumps(protocol, indent=2, sort_keys=True), encoding="utf-8")
+    (out / "gpu-ablation-protocol.json").write_text(json.dumps(protocol, indent=2, sort_keys=True), encoding="utf-8")
 
     print(json.dumps({"event": "match_config", "run_id": run_id, "logical_cpus": logical, **identity, **protocol}, indent=2), flush=True)
     openings_path = out / "openings.fen"
     openings = generate_openings(args.opponent_engine, openings_path, args.games // 2, args.opening_plies, args.seed, args.opening_nodes)
     rows_path = out / "games.jsonl"
-    cf_path = out / "decisive-cpu-only-replays.jsonl"
+    ablation_path = out / "decisive-no-gpu-replays.jsonl"
     completed = load_rows(rows_path, "game")
-    cf_completed = load_rows(cf_path, "original_game")
+    ablation_completed = load_rows(ablation_path, "original_game")
 
     if completed:
         print(json.dumps({"event": "resume", "completed_games": len(completed), "remaining": args.games - len(completed)}), flush=True)
 
-    # Backfill any decisive hybrid games from an older run before continuing.
+    gpu_log = out / "p18-gpu-session.jsonl"
+    no_gpu_log = out / "p18-no-gpu-session.jsonl"
+
+    # Backfill decisive GPU games from an already-started run.
     for game_no in sorted(completed):
         row = completed[game_no]
-        if float(row.get("score_leviathan", 0.5)) == 0.5 or game_no in cf_completed:
+        if float(row.get("score_leviathan", 0.5)) == 0.5 or game_no in ablation_completed:
             continue
-        print(json.dumps({"event": "counterfactual_replay_start", "original_game": game_no, "reason": "resume_backfill"}), flush=True)
-        cf = run_cpu_counterfactual(args, threads, row)
-        with cf_path.open("a", encoding="utf-8") as f:
-            f.write(json.dumps(cf, sort_keys=True) + "\n")
+        print(json.dumps({"event": "no_gpu_replay_start", "original_game": game_no, "reason": "resume_backfill"}), flush=True)
+        ab = run_no_gpu_ablation(args, threads, row, no_gpu_log)
+        with ablation_path.open("a", encoding="utf-8") as f:
+            f.write(json.dumps(ab, sort_keys=True) + "\n")
             f.flush()
-        cf_completed[game_no] = cf
-        print(json.dumps({"event": "counterfactual_replay_complete", **cf, "counterfactual_cumulative": counterfactual_summary(list(cf_completed.values()))}, sort_keys=True), flush=True)
+        ablation_completed[game_no] = ab
+        print(json.dumps({"event": "no_gpu_replay_complete", **ab, "ablation_cumulative": ablation_summary(list(ablation_completed.values()))}, sort_keys=True), flush=True)
 
-    session_log = out / "p18-session.jsonl"
     for game_no in range(1, args.games + 1):
         if game_no in completed:
             continue
         fen = openings[(game_no - 1) // 2]
         leviathan_white = game_no % 2 == 1
-        row = run_hybrid_game(args, threads, session_log, game_no, fen, leviathan_white)
+        row = run_gpu_game(args, threads, gpu_log, game_no, fen, leviathan_white)
         with rows_path.open("a", encoding="utf-8") as f:
             f.write(json.dumps(row, sort_keys=True) + "\n")
             f.flush()
@@ -458,35 +460,36 @@ def main() -> int:
         print(json.dumps({"event": "game_complete", **row, "cumulative": main_summary(current, args, threads)}, sort_keys=True), flush=True)
 
         if float(row["score_leviathan"]) != 0.5:
-            print(json.dumps({"event": "counterfactual_replay_start", "original_game": game_no, "hybrid_result": row["result"]}), flush=True)
-            cf = run_cpu_counterfactual(args, threads, row)
-            with cf_path.open("a", encoding="utf-8") as f:
-                f.write(json.dumps(cf, sort_keys=True) + "\n")
+            print(json.dumps({"event": "no_gpu_replay_start", "original_game": game_no, "gpu_result": row["result"]}), flush=True)
+            ab = run_no_gpu_ablation(args, threads, row, no_gpu_log)
+            with ablation_path.open("a", encoding="utf-8") as f:
+                f.write(json.dumps(ab, sort_keys=True) + "\n")
                 f.flush()
-            cf_completed[game_no] = cf
-            print(json.dumps({"event": "counterfactual_replay_complete", **cf, "counterfactual_cumulative": counterfactual_summary(list(cf_completed.values()))}, sort_keys=True), flush=True)
+            ablation_completed[game_no] = ab
+            print(json.dumps({"event": "no_gpu_replay_complete", **ab, "ablation_cumulative": ablation_summary(list(ablation_completed.values()))}, sort_keys=True), flush=True)
 
     ordered = [completed[g] for g in range(1, args.games + 1) if g in completed]
-    cf_ordered = [cf_completed[g] for g in sorted(cf_completed)]
+    ab_ordered = [ablation_completed[g] for g in sorted(ablation_completed)]
     final = main_summary(ordered, args, threads)
-    cf_final = counterfactual_summary(cf_ordered)
+    ab_final = ablation_summary(ab_ordered)
     expected_replays = sum(float(r["score_leviathan"]) != 0.5 for r in ordered)
     final_payload = {
         "summary": final,
-        "decisive_counterfactual": cf_final,
+        "decisive_gpu_ablation": ab_final,
         "expected_decisive_replays": expected_replays,
-        "completed_decisive_replays": len(cf_ordered),
-        "counterfactual_complete": len(cf_ordered) == expected_replays,
+        "completed_decisive_replays": len(ab_ordered),
+        "gpu_ablation_complete": len(ab_ordered) == expected_replays,
         "run_id": run_id,
         "manifest": identity,
         "games_file": str(rows_path),
-        "counterfactual_file": str(cf_path),
-        "session_log": str(session_log),
+        "gpu_ablation_file": str(ablation_path),
+        "gpu_session_log": str(gpu_log),
+        "no_gpu_session_log": str(no_gpu_log),
     }
     (out / "summary.json").write_text(json.dumps(final_payload, indent=2, sort_keys=True), encoding="utf-8")
-    print("=== P18.4 CPU+GPU VS STOCKFISH: 100-GAME MATCH + DECISIVE CPU-ONLY ABLATIONS COMPLETE ===", flush=True)
+    print("=== P18.4 CPU+GPU VS STOCKFISH: 100 GAMES + DECISIVE NO-GPU ABLATIONS COMPLETE ===", flush=True)
     print(json.dumps(final_payload, indent=2, sort_keys=True), flush=True)
-    return 0 if len(ordered) == args.games and len(cf_ordered) == expected_replays else 6
+    return 0 if len(ordered) == args.games and len(ab_ordered) == expected_replays else 6
 
 
 if __name__ == "__main__":
