@@ -1,0 +1,44 @@
+name: P18 Hybrid CI
+
+on:
+  push:
+    branches: [agent/p18-hybrid-cpu-gpu-multiponder]
+    paths:
+      - 'tools/hybrid/**'
+      - '.github/workflows/p18-hybrid-ci.yml'
+  workflow_dispatch:
+
+jobs:
+  control-plane:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Compile hybrid Python
+        run: |
+          python -m py_compile tools/hybrid/gpu_risk_model.py
+          python -m py_compile tools/hybrid/train_risk_model.py
+          python -m py_compile tools/hybrid/mine_finite_compute.py
+          python -m py_compile tools/hybrid/generate_training_positions.py
+          python -m py_compile tools/hybrid/split_positions.py
+          python -m py_compile tools/hybrid/leviathan_hybrid_uci.py
+          python -m py_compile tools/hybrid/leviathan_hybrid_uci_v2.py
+      - name: Heuristic scorer smoke
+        run: python tools/hybrid/gpu_risk_model.py --self-test --device off
+      - name: Existing hybrid orchestration tests
+        run: python tools/hybrid/test_hybrid_core.py
+      - name: Group split leakage check
+        run: |
+          python - <<'PY'
+          import sys
+          sys.path.insert(0, 'tools/hybrid')
+          from train_risk_model import grouped_split
+          rows=[]
+          for g in range(20):
+              for i in range(4): rows.append({'_group':f'g{g}','features':[0]*12})
+          tr,va=grouped_split(rows,.2,20260817)
+          assert {r['_group'] for r in tr}.isdisjoint({r['_group'] for r in va})
+          print(len(tr),len(va))
+          PY
