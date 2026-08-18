@@ -1,0 +1,37 @@
+name: Hybrid CPU GPU Smoke
+
+on:
+  push:
+    branches:
+      - agent/p18-hybrid-cpu-gpu-multiponder
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.12'
+      - name: Syntax
+        run: |
+          python -m py_compile \
+            tools/hybrid/gpu_risk_model.py \
+            tools/hybrid/leviathan_hybrid_uci.py \
+            tools/hybrid/fake_uci_engine.py \
+            tools/hybrid/build_reply_dataset.py \
+            tools/hybrid/train_risk_model.py \
+            tools/hybrid/mine_finite_compute.py \
+            tools/hybrid/real_hybrid_smoke.py \
+            tools/hybrid/test_hybrid_core.py
+      - name: Hybrid protocol tests
+        run: |
+          chmod +x tools/hybrid/fake_uci_engine.py
+          python tools/hybrid/test_hybrid_core.py
+      - name: GPU scorer CPU fallback smoke
+        run: python tools/hybrid/gpu_risk_model.py --self-test --device cpu
