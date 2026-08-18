@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - agent/p18-hybrid-cpu-gpu-multiponder
+  pull_request:
   workflow_dispatch:
 
 permissions:
