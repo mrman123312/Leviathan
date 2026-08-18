@@ -1,0 +1,165 @@
+name: P12b Fixed En Passant Factorial
+
+on:
+  push:
+    branches: [agent/p12-en-passant-accounting-factorial]
+    paths: ['.github/workflows/p12b-fixed-en-passant-factorial.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  test:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 80
+    strategy:
+      fail-fast: false
+      matrix:
+        variant: [prune, order, history, qsearch, all]
+    env:
+      VARIANT: ${{ matrix.variant }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: 3404fa2ea9b4fe75236e2584be9da3416e646ec2
+          path: cand
+          fetch-depth: 1
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: 3404fa2ea9b4fe75236e2584be9da3416e646ec2
+          path: base
+          fetch-depth: 1
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: agent/p12-en-passant-accounting-factorial
+          path: lab
+          fetch-depth: 1
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          repository: official-stockfish/Stockfish
+          ref: 5062aee519a1ba262d472d8ab139851ced56573e
+          path: oracle
+          fetch-depth: 1
+
+      - name: Materialize one EP accounting surface
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p result
+          cp lab/experiments/p12-fixed-ep-corpus.txt result/fens.txt
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+          v=os.environ['VARIANT']; prune=v in ('prune','all'); order=v in ('order','all'); hist=v in ('history','all'); qs=v in ('qsearch','all')
+          if prune:
+            p=Path('cand/src/search.cpp');s=p.read_text()
+            old="                Piece capturedPiece = pos.piece_on(move.to_sq());\n                int   captHist = captureHistory[movedPiece][move.to_sq()][type_of(capturedPiece)];"
+            new="                Piece capturedPiece = move.type_of() == EN_PASSANT\n                                        ? make_piece(~us, PAWN)\n                                        : pos.piece_on(move.to_sq());\n                int   captHist = captureHistory[movedPiece][move.to_sq()][type_of(capturedPiece)];"
+            assert s.count(old)==1,(v,'prune',s.count(old));p.write_text(s.replace(old,new,1))
+          if order:
+            p=Path('cand/src/movepick.cpp');s=p.read_text()
+            old="        const Piece     capturedPiece = pos.piece_on(to);"
+            new="        const Piece     capturedPiece = m.type_of() == EN_PASSANT\n                                            ? make_piece(~us, PAWN)\n                                            : pos.piece_on(to);"
+            assert s.count(old)==1,(v,'order',s.count(old));p.write_text(s.replace(old,new,1))
+          if hist:
+            p=Path('cand/src/search.cpp');s=p.read_text()
+            old="        capturedPiece = type_of(pos.piece_on(bestMove.to_sq()));\n        captureHistory[movedPiece][bestMove.to_sq()][capturedPiece] << bonus * 1427 / 1024;"
+            new="        capturedPiece = bestMove.type_of() == EN_PASSANT ? PAWN : type_of(pos.piece_on(bestMove.to_sq()));\n        captureHistory[movedPiece][bestMove.to_sq()][capturedPiece] << bonus * 1427 / 1024;"
+            assert s.count(old)==1,(v,'hist-best',s.count(old));s=s.replace(old,new,1)
+            old="        movedPiece    = pos.moved_piece(move);\n        capturedPiece = type_of(pos.piece_on(move.to_sq()));\n        captureHistory[movedPiece][move.to_sq()][capturedPiece] << -malus * 1489 / 1024;"
+            new="        movedPiece    = pos.moved_piece(move);\n        capturedPiece = move.type_of() == EN_PASSANT ? PAWN : type_of(pos.piece_on(move.to_sq()));\n        captureHistory[movedPiece][move.to_sq()][capturedPiece] << -malus * 1489 / 1024;"
+            assert s.count(old)==1,(v,'hist-searched',s.count(old));p.write_text(s.replace(old,new,1))
+          if qs:
+            p=Path('cand/src/search.cpp');s=p.read_text()
+            old="                const Value leviathanCaptureCeiling =\n                  futilityBase + PieceValue[pos.piece_on(move.to_sq())];"
+            new="                const Value leviathanCapturedValue = move.type_of() == EN_PASSANT ? PawnValue : PieceValue[pos.piece_on(move.to_sq())];\n                const Value leviathanCaptureCeiling = futilityBase + leviathanCapturedValue;"
+            assert s.count(old)==1,(v,'qsearch',s.count(old));p.write_text(s.replace(old,new,1))
+          PY
+          git -C cand diff --check
+          git -C cand diff -- src/search.cpp src/movepick.cpp | tee "result/p12b-${VARIANT}.patch"
+
+      - name: Build exact engines
+        shell: bash
+        run: |
+          set -euo pipefail
+          for d in base cand oracle; do make -C "$d/src" net; make -C "$d/src" clean; make -C "$d/src" -j2 ARCH=x86-64-avx2 build; done
+          python3 -m pip install --disable-pip-version-check 'python-chess>=1.999,<2'
+
+      - name: Targeted oracle grade
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat > result/test.py <<'PY'
+          import json,os,statistics
+          from pathlib import Path
+          import chess,chess.engine
+          CHOICE=100000; ORACLE=900000; GRADE=350000
+          fens=[x.strip() for x in open('result/fens.txt') if x.strip()]
+          def cfg(e):
+            o={}
+            for k,v in [('Threads',1),('Hash',64),('Leviathan Fundamentals',True),('Leviathan Fundamentals Authority',1),('Leviathan Quiet Overdrive',0)]:
+              if k in e.options:o[k]=v
+            for k in ['Leviathan Risk','Leviathan Policy','Leviathan MetaSearch','Leviathan Specialist','Leviathan Atlas','Leviathan Search DSL']:
+              if k in e.options:o[k]=False
+            if o:e.configure(o)
+          def cp(i,c):
+            s=i.get('score');return None if s is None else s.pov(c).score(mate_score=100000)
+          base=chess.engine.SimpleEngine.popen_uci('base/src/stockfish');cand=chess.engine.SimpleEngine.popen_uci('cand/src/stockfish')
+          oo=chess.engine.SimpleEngine.popen_uci('oracle/src/stockfish');gb=chess.engine.SimpleEngine.popen_uci('oracle/src/stockfish');gc=chess.engine.SimpleEngine.popen_uci('oracle/src/stockfish')
+          cfg(base);cfg(cand)
+          for e in (oo,gb,gc):e.configure({'Threads':1,'Hash':64})
+          rows=[]
+          try:
+            for i,fen in enumerate(fens):
+              b=chess.Board(fen);col=b.turn;eps=[m.uci() for m in b.legal_moves if b.is_en_passant(m)]
+              oi=oo.analyse(b,chess.engine.Limit(nodes=ORACLE),game=('o',i));os=cp(oi,col);om=oi.get('pv',[None])[0]
+              order=[('base',base),('cand',cand)] if i%2==0 else [('cand',cand),('base',base)];ch={}
+              for n,e in order:ch[n]=e.play(b,chess.engine.Limit(nodes=CHOICE),game=(n,i)).move
+              bm,cm=ch['base'],ch['cand']
+              bg=cp(gb.analyse(b,chess.engine.Limit(nodes=GRADE),root_moves=[bm],game=('gb',i)),col);cg=cp(gc.analyse(b,chess.engine.Limit(nodes=GRADE),root_moves=[cm],game=('gc',i)),col)
+              reg=lambda g:max(0,os-g) if os is not None and g is not None else None
+              br,cr=reg(bg),reg(cg);rows.append({'fen':fen,'ep_moves':eps,'oracle_move':om.uci() if om else None,'base_move':bm.uci(),'candidate_move':cm.uci(),'base_regret':br,'candidate_regret':cr,'improvement_cp':br-cr})
+          finally:
+            for e in (base,cand,oo,gb,gc):e.quit()
+          ds=[r['improvement_cp'] for r in rows]
+          out={'variant':os.environ['VARIANT'],'positions':len(rows),'changed_roots':sum(r['base_move']!=r['candidate_move'] for r in rows),'base_mean_regret_cp':statistics.fmean(r['base_regret'] for r in rows),'candidate_mean_regret_cp':statistics.fmean(r['candidate_regret'] for r in rows),'mean_improvement_cp':statistics.fmean(ds),'median_improvement_cp':statistics.median(ds),'better':sum(x>0 for x in ds),'tie':sum(x==0 for x in ds),'worse':sum(x<0 for x in ds),'largest_rescue_cp':max(ds),'largest_harm_cp':min(ds),'ep_choices_base':sum(r['base_move'] in r['ep_moves'] for r in rows),'ep_choices_candidate':sum(r['candidate_move'] in r['ep_moves'] for r in rows)}
+          Path('result/rows.json').write_text(json.dumps(rows,indent=2)+'\n');Path('result/summary.json').write_text(json.dumps(out,indent=2)+'\n');print(json.dumps(out,indent=2))
+          PY
+          python3 result/test.py
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: p12b-${{ matrix.variant }}-${{ github.sha }}
+          path: result/
+          retention-days: 30
+
+  aggregate:
+    needs: test
+    if: always()
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with: {ref: agent/p12-en-passant-accounting-factorial, fetch-depth: 1}
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: p12b-*-${{ github.sha }}
+          path: evidence
+      - name: Commit aggregate
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import glob,json,os
+          rows=[]
+          for f in sorted(glob.glob('evidence/p12b-*/summary.json')):
+            try: rows.append(json.load(open(f)))
+            except Exception as e: rows.append({'file':f,'error':str(e)})
+          best=max(rows,key=lambda r:r.get('mean_improvement_cp',-10**9),default=None)
+          out={'schema':'LV_P12B_FIXED_EP_FACTORIAL_V1','p01_sha':'3404fa2ea9b4fe75236e2584be9da3416e646ec2','workflow_sha':os.environ.get('GITHUB_SHA'),'variants':rows,'best_targeted':best,'rule':'targeted EP evidence only; broad promotion requires prospective non-EP regression and game evidence'}
+          open('experiments/p12b-fixed-ep-factorial-latest.json','w').write(json.dumps(out,indent=2)+'\n');print(json.dumps(out,indent=2))
+          PY
+          git config user.name 'github-actions[bot]';git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add experiments/p12b-fixed-ep-factorial-latest.json
+          if ! git diff --cached --quiet; then git commit -m 'P12b: record fixed EP factorial evidence';git push origin HEAD:agent/p12-en-passant-accounting-factorial;fi
