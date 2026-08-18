@@ -3,10 +3,11 @@ name: P11 P01 Champion Factorial
 on:
   push:
     branches: [agent/p11-p01-champion-factorial]
+    paths: ['.github/workflows/p11-p01-champion-factorial.yml']
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   screen:
@@ -15,7 +16,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        variant: [lean, static, both]
+        variant: [lean, static, quiet, both, all]
     env:
       VARIANT: ${{ matrix.variant }}
     steps:
@@ -49,22 +50,41 @@ jobs:
           from pathlib import Path
 
           variant=os.environ['VARIANT']
-          lean=variant in ('lean','both')
-          static=variant in ('static','both')
+          lean=variant in ('lean','both','all')
+          static=variant in ('static','both','all')
+          quiet=variant in ('quiet','all')
 
-          if lean:
+          # Search-loop specializations. Quiet specialization reuses facts the
+          # branch has already proved instead of re-entering the generic classifier.
+          if lean or quiet:
               p=Path('cand/src/search.cpp'); s=p.read_text()
               old="    const bool leviathanRiskReady  = Leviathan::Control::risk_ready();\n    const bool leviathanDslReady   = Leviathan::DSL::ready();\n    const bool leviathanTraceReady = Leviathan::Trace::ready();"
-              new="    // Champion-only build: disabled experimental organs are compile-time false.\n    constexpr bool leviathanRiskReady  = false;\n    constexpr bool leviathanDslReady   = false;\n    constexpr bool leviathanTraceReady = false;"
-              if s.count(old)!=1: raise SystemExit('lean search anchor mismatch')
-              p.write_text(s.replace(old,new,1))
+              if lean and quiet:
+                  new="    constexpr bool leviathanRiskReady  = false;\n    constexpr bool leviathanDslReady   = false;\n    constexpr bool leviathanTraceReady = false;\n    const bool leviathanFundamentalsReady = Leviathan::Fundamentals::ready();"
+              elif lean:
+                  new="    constexpr bool leviathanRiskReady  = false;\n    constexpr bool leviathanDslReady   = false;\n    constexpr bool leviathanTraceReady = false;"
+              else:
+                  new=old + "\n    const bool leviathanFundamentalsReady = Leviathan::Fundamentals::ready();"
+              if s.count(old)!=1: raise SystemExit('search readiness anchor mismatch')
+              s=s.replace(old,new,1)
 
+              if quiet:
+                  old_scope="                const bool leviathanScopeProtected =\n                  Leviathan::Fundamentals::protected_scope_move(\n                    pos, move, prevSq, capture, givesCheck);"
+                  new_scope="                const bool leviathanScopeProtected = leviathanFundamentalsReady\n                  && (move.type_of() == PROMOTION\n                      || (type_of(movedPiece) == PAWN\n                          && relative_rank(color_of(movedPiece), move.to_sq()) >= RANK_6));"
+                  if s.count(old_scope)!=1: raise SystemExit('quiet scope anchor mismatch')
+                  s=s.replace(old_scope,new_scope,1)
+              p.write_text(s)
+
+          if lean:
               p=Path('cand/src/movepick.cpp'); s=p.read_text()
               old="    const bool leviathanPolicyReady = Type == QUIETS && Leviathan::Policy::ready();\n    const bool leviathanAtlasReady  = Type == QUIETS && Leviathan::Atlas::ready();"
               new="    constexpr bool leviathanPolicyReady = false;\n    constexpr bool leviathanAtlasReady  = false;"
               if s.count(old)!=1: raise SystemExit('lean movepick anchor mismatch')
               p.write_text(s.replace(old,new,1))
 
+          # Champion-profile specialization. The race build is intentionally tied
+          # to the already-proven profile: Fundamentals on, Authority 1, guards on,
+          # Quiet Overdrive 0. Research builds retain the generic configuration.
           if static:
               p=Path('cand/src/leviathan_fundamentals.h'); s=p.read_text()
 
@@ -109,7 +129,7 @@ jobs:
               j=s.find(end,i)
               if j<0: raise SystemExit('static authority2 end missing')
               j += len(end)
-              s=s[:i] + "    // Champion profile is fixed at Authority 1; Authority-2 overdrive is unreachable.\n\n" + s[j:]
+              s=s[:i] + "    // Authority-2 overdrive is unreachable in the champion profile.\n\n" + s[j:]
 
               old="""inline int quiet_ordering_bonus(const Position& pos, Move move) {
     if (!ready() || !state().rule50Pressure || pos.rule50_count() < 70)
@@ -132,10 +152,6 @@ jobs:
               new="    const bool leviathanRule50Ready = Type == QUIETS && pos.rule50_count() >= 70;"
               if s.count(old)!=1: raise SystemExit('static movepick rule50 anchor mismatch')
               p.write_text(s.replace(old,new,1))
-
-          for f in ('cand/src/search.cpp','cand/src/movepick.cpp','cand/src/leviathan_fundamentals.h'):
-              if Path(f).exists():
-                  pass
           PY
           git -C cand diff --check
           git -C cand diff -- src/search.cpp src/movepick.cpp src/leviathan_fundamentals.h | tee "p11-${VARIANT}.patch"
@@ -204,3 +220,62 @@ jobs:
             p11-${{ matrix.variant }}.log
             p11-${{ matrix.variant }}-summary.json
           retention-days: 30
+
+  aggregate:
+    needs: screen
+    if: always()
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout research branch
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: agent/p11-p01-champion-factorial
+          fetch-depth: 1
+
+      - name: Download all P11 evidence
+        uses: actions/download-artifact@v4
+        with:
+          pattern: p11-*-${{ github.sha }}
+          path: p11-results
+          merge-multiple: true
+
+      - name: Build durable aggregate
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p experiments
+          python3 - <<'PY'
+          import glob,json,os
+          rows=[]
+          for f in sorted(glob.glob('p11-results/p11-*-summary.json')):
+              try:
+                  rows.append(json.load(open(f)))
+              except Exception as e:
+                  rows.append({'file':f,'parse_error':str(e)})
+          wins=[r for r in rows if r.get('provisional_win')]
+          best=max(wins,key=lambda r:r.get('candidate_geo',0),default=None)
+          out={
+            'schema':'LV_P11_P01_CHAMPION_FACTORIAL_V1',
+            'p01_sha':'3404fa2ea9b4fe75236e2584be9da3416e646ec2',
+            'workflow_sha':os.environ.get('GITHUB_SHA'),
+            'variants':rows,
+            'best_provisional':best,
+            'promotion_rule':'exact behavior required; lower 95% median CI > 1.0; final champion still requires longer independent replication and P01/Stockfish strength gates'
+          }
+          open('experiments/p11-p01-champion-factorial-latest.json','w').write(json.dumps(out,indent=2)+'\n')
+          print(json.dumps(out,indent=2))
+          PY
+
+      - name: Commit aggregate evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add experiments/p11-p01-champion-factorial-latest.json
+          if git diff --cached --quiet; then
+            echo 'No aggregate change to commit.'
+          else
+            git commit -m 'P11: record P01 champion factorial evidence'
+            git push origin HEAD:agent/p11-p01-champion-factorial
+          fi
