@@ -1,0 +1,8 @@
+{
+  "schema": "LV_P12_EP_ACCOUNTING_FACTORIAL_V1",
+  "p01_sha": "3404fa2ea9b4fe75236e2584be9da3416e646ec2",
+  "workflow_sha": "9e7c94d4bb8cb13d00510beb4fe8e376930cfa6a",
+  "variants": [],
+  "best_targeted": null,
+  "rule": "targeted evidence only; promotion requires a positive causal EP signal plus fresh broad regression/game evidence"
+}
