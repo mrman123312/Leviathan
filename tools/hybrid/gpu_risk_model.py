@@ -68,7 +68,10 @@ class GpuRiskScorer:
     def _score_model(self,rows):
         torch=self.torch;assert torch is not None and self.torch_device is not None and self.model is not None
         x=torch.tensor(self._norm([r.vector() for r in rows]),dtype=torch.float32).to(self.torch_device)
-        with torch.inference_mode():
+        # DirectML/PyTorch 2.4 can fail with "Cannot set version_counter for inference tensor"
+        # under inference_mode(). no_grad() keeps inference autograd-free without creating
+        # inference tensors, and is safe on CPU/CUDA too.
+        with torch.no_grad():
             z=self.model(x);reply_prob=torch.softmax(z[:,0],dim=0);risk=torch.sigmoid(z[:,1]);regret=torch.expm1(torch.clamp(z[:,2],min=0,max=math.log1p(1000.0))) if self.heads>=3 else 25*risk
         rp=reply_prob.detach().cpu().tolist();rr=risk.detach().cpu().tolist();rg=regret.detach().cpu().tolist()
         return [{"reply_probability":float(p),"risk":float(r),"expected_regret_cp":float(max(0.,g)),"device":self.device,"mode":self.mode} for p,r,g in zip(rp,rr,rg)]
