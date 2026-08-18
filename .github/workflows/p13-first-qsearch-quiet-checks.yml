@@ -1,0 +1,198 @@
+name: P13 First Qsearch Quiet Checks
+
+on:
+  push:
+    branches: [agent/p13-first-qsearch-quiet-checks]
+    paths: ['.github/workflows/p13-first-qsearch-quiet-checks.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  oracle-screen:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 95
+    steps:
+      - name: Checkout exact P01 candidate
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: 3404fa2ea9b4fe75236e2584be9da3416e646ec2
+          path: cand
+          fetch-depth: 1
+      - name: Checkout exact P01 baseline
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: 3404fa2ea9b4fe75236e2584be9da3416e646ec2
+          path: base
+          fetch-depth: 1
+      - name: Checkout pinned Stockfish oracle
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          repository: official-stockfish/Stockfish
+          ref: 5062aee519a1ba262d472d8ab139851ced56573e
+          path: oracle
+          fetch-depth: 1
+
+      - name: Add one-layer SEE-safe quiet checks to qsearch
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          h=Path('cand/src/search.h');s=h.read_text()
+          old='    Value qsearch(Position& pos, Stack* ss, Value alpha, Value beta);'
+          new='    Value qsearch(Position& pos, Stack* ss, Value alpha, Value beta, bool allowQuietChecks = true);'
+          if s.count(old)!=1:raise SystemExit('search.h qsearch anchor mismatch')
+          h.write_text(s.replace(old,new,1))
+
+          p=Path('cand/src/search.cpp');s=p.read_text()
+          old='Value Search::Worker::qsearch(Position& pos, Stack* ss, Value alpha, Value beta) {'
+          new='Value Search::Worker::qsearch(Position& pos, Stack* ss, Value alpha, Value beta, bool allowQuietChecks) {'
+          if s.count(old)!=1:raise SystemExit('definition anchor mismatch')
+          s=s.replace(old,new,1)
+
+          old='        value = -qsearch<nodeType>(pos, ss + 1, -beta, -alpha);'
+          new='        value = -qsearch<nodeType>(pos, ss + 1, -beta, -alpha, false);'
+          if s.count(old)!=1:raise SystemExit(f'recursive qsearch anchor count={s.count(old)}')
+          s=s.replace(old,new,1)
+
+          marker='''    // Step 9. Check for mate and stalemate
+    // All legal moves have been searched. A special case: if we are
+'''
+          block='''    // P13: one-layer quiet-check verification. Stockfish's qsearch normally
+    // admits captures/evasions only. Borrow Berserk's information source but keep
+    // a strict budget: only the first qsearch layer, legal non-capturing checks,
+    // and only when SEE proves the checking move does not immediately lose material.
+    if (allowQuietChecks && !ss->inCheck && bestValue < beta)
+    {
+        for (Move quietCheck : MoveList<QUIETS>(pos))
+        {
+            if (!pos.legal(quietCheck) || !pos.gives_check(quietCheck)
+                || !pos.see_ge(quietCheck, 0))
+                continue;
+
+            do_move(pos, quietCheck, st, true, ss);
+            value = -qsearch<nodeType>(pos, ss + 1, -beta, -alpha, false);
+            undo_move(pos, quietCheck);
+
+            if (value > bestValue)
+            {
+                bestValue = value;
+                if (value > alpha)
+                {
+                    bestMove = quietCheck;
+                    if (PvNode)
+                        ss->pv->update(quietCheck, (ss + 1)->pv);
+                    if (value < beta)
+                        alpha = value;
+                    else
+                        break;
+                }
+            }
+        }
+    }
+
+'''
+          if s.count(marker)!=1:raise SystemExit('step9 marker mismatch')
+          p.write_text(s.replace(marker,block+marker,1))
+          PY
+          git -C cand diff --check
+          git -C cand diff -- src/search.cpp src/search.h | tee p13.patch
+
+      - name: Build engines
+        run: |
+          set -euo pipefail
+          for d in base cand oracle; do
+            make -C "$d/src" net
+            make -C "$d/src" clean
+            make -C "$d/src" -j2 ARCH=x86-64-avx2 build
+          done
+          python3 -m pip install --disable-pip-version-check 'python-chess>=1.999,<2'
+
+      - name: Fresh equal-node oracle screen
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir result
+          cat > result/screen.py <<'PY'
+          import json,random,statistics
+          from pathlib import Path
+          import chess,chess.engine
+          SEED=202608171313;TARGET=80;CHOICE=80000;ORACLE=750000;GRADE=300000
+          def cfg(e):
+            o={}
+            for k,v in [('Threads',1),('Hash',64),('Leviathan Fundamentals',True),('Leviathan Fundamentals Authority',1),('Leviathan Quiet Overdrive',0)]:
+              if k in e.options:o[k]=v
+            for k in ['Leviathan Risk','Leviathan Policy','Leviathan MetaSearch','Leviathan Specialist','Leviathan Atlas','Leviathan Search DSL']:
+              if k in e.options:o[k]=False
+            if o:e.configure(o)
+          def cp(i,c):
+            s=i.get('score');return None if s is None else s.pov(c).score(mate_score=100000)
+          rng=random.Random(SEED)
+          gen=chess.engine.SimpleEngine.popen_uci('oracle/src/stockfish');ob=chess.engine.SimpleEngine.popen_uci('oracle/src/stockfish');gb=chess.engine.SimpleEngine.popen_uci('oracle/src/stockfish');gc=chess.engine.SimpleEngine.popen_uci('oracle/src/stockfish')
+          base=chess.engine.SimpleEngine.popen_uci('base/src/stockfish');cand=chess.engine.SimpleEngine.popen_uci('cand/src/stockfish')
+          for e in (gen,ob,gb,gc):e.configure({'Threads':1,'Hash':64})
+          cfg(base);cfg(cand)
+          fens=[];seen=set();attempt=0
+          try:
+            while len(fens)<TARGET and attempt<250:
+              attempt+=1;b=chess.Board();plies=rng.choice([8,12,16,20,24,28,32])
+              for ply in range(plies):
+                if b.is_game_over():break
+                infos=gen.analyse(b,chess.engine.Limit(nodes=1800),multipv=min(6,b.legal_moves.count()),game=('walk',attempt,ply))
+                if not isinstance(infos,list):infos=[infos]
+                rr=[(z['pv'][0],int(z['score'].pov(b.turn).score(mate_score=100000) or 0)) for z in infos if z.get('pv')]
+                if not rr:break
+                best=rr[0][1];viable=[z for z in rr if best-z[1]<=120] or rr[:1];b.push(rng.choice(viable)[0])
+              if b.is_game_over():continue
+              key=' '.join(b.fen().split()[:4])
+              if key in seen:continue
+              info=gen.analyse(b,chess.engine.Limit(nodes=9000),game=('filter',attempt));sc=cp(info,b.turn)
+              if sc is not None and abs(sc)<=250 and b.legal_moves.count()>=8:
+                seen.add(key);fens.append(b.fen());print('fen',len(fens),sc,flush=True)
+            if len(fens)<TARGET:raise RuntimeError(f'generated {len(fens)}')
+            Path('result/fens.txt').write_text('\n'.join(fens)+'\n')
+            rows=[]
+            for i,fen in enumerate(fens):
+              b=chess.Board(fen);col=b.turn
+              oi=ob.analyse(b,chess.engine.Limit(nodes=ORACLE),game=('oracle',i));os=cp(oi,col);om=oi.get('pv',[None])[0]
+              order=[('base',base),('cand',cand)] if i%2==0 else [('cand',cand),('base',base)];choice={}
+              for n,e in order:
+                r=e.play(b,chess.engine.Limit(nodes=CHOICE),info=chess.engine.INFO_ALL,game=(n,i));choice[n]=(r.move,r.info.get('nodes'),r.info.get('depth'))
+              bm,bn,bd=choice['base'];cm,cn,cd=choice['cand']
+              bg=cp(gb.analyse(b,chess.engine.Limit(nodes=GRADE),root_moves=[bm],game=('gb',i)),col);cg=cp(gc.analyse(b,chess.engine.Limit(nodes=GRADE),root_moves=[cm],game=('gc',i)),col)
+              reg=lambda g:max(0,os-g) if os is not None and g is not None else None
+              br,cr=reg(bg),reg(cg);delta=br-cr
+              rows.append({'fen':fen,'oracle_move':om.uci() if om else None,'base_move':bm.uci(),'candidate_move':cm.uci(),'base_regret':br,'candidate_regret':cr,'improvement_cp':delta,'base_nodes':bn,'candidate_nodes':cn,'base_depth':bd,'candidate_depth':cd})
+              print(i+1,bm,cm,delta,flush=True)
+          finally:
+            for e in (gen,ob,gb,gc,base,cand):e.quit()
+          ds=[r['improvement_cp'] for r in rows];changed=[r for r in rows if r['base_move']!=r['candidate_move']]
+          out={'schema':'LV_P13_QCHECK_ORACLE_V1','positions':len(rows),'changed_roots':len(changed),'base_mean_regret_cp':statistics.mean(r['base_regret'] for r in rows),'candidate_mean_regret_cp':statistics.mean(r['candidate_regret'] for r in rows),'mean_improvement_cp':statistics.mean(ds),'median_improvement_cp':statistics.median(ds),'better':sum(x>0 for x in ds),'tie':sum(x==0 for x in ds),'worse':sum(x<0 for x in ds),'largest_rescue_cp':max(ds),'largest_harm_cp':min(ds),'mean_base_depth':statistics.mean(r['base_depth'] or 0 for r in rows),'mean_candidate_depth':statistics.mean(r['candidate_depth'] or 0 for r in rows),'promotion_rule':'prototype only: require positive oracle regret, rescue/harm asymmetry, and enough changed roots before games'}
+          Path('result/rows.json').write_text(json.dumps(rows,indent=2)+'\n');Path('result/summary.json').write_text(json.dumps(out,indent=2)+'\n');print(json.dumps(out,indent=2))
+          PY
+          python3 result/screen.py
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: p13-qchecks-${{ github.sha }}
+          path: |
+            result/
+            p13.patch
+          retention-days: 30
+
+      - name: Commit durable result
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ ! -s result/summary.json ]; then exit 0; fi
+          git clone -q --depth 1 --branch agent/p13-first-qsearch-quiet-checks "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" record
+          mkdir -p record/experiments
+          cp result/summary.json record/experiments/p13-first-qsearch-quiet-checks-latest.json
+          cd record
+          git config user.name 'github-actions[bot]';git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add experiments/p13-first-qsearch-quiet-checks-latest.json
+          if ! git diff --cached --quiet; then git commit -m 'P13: record qsearch quiet-check evidence';git push;fi
