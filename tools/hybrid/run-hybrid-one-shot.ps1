@@ -14,6 +14,9 @@ param(
   [string]$OutDir = "local_results/hybrid/p18-one-shot"
 )
 $ErrorActionPreference = "Stop"
+function Assert-LastExit([string]$Stage) {
+  if ($LASTEXITCODE -ne 0) { throw "$Stage failed with exit code $LASTEXITCODE" }
+}
 $root = Resolve-Path (Join-Path $PSScriptRoot "../..")
 $out = Join-Path $root $OutDir
 New-Item -ItemType Directory -Force -Path $out | Out-Null
@@ -21,15 +24,34 @@ $all = Join-Path $out "positions-all.txt"; $trainPos = Join-Path $out "positions
 $trainRows = Join-Path $out "train.jsonl"; $holdRows = Join-Path $out "prospective.jsonl"; $model = Join-Path $out "p18.2.pt"; $metrics = Join-Path $out "p18.2.metrics.json"; $warm = Join-Path $out "warm-advantage.json"
 Write-Host "=== P18.2 one-shot preflight ==="
 & nvidia-smi
-& $Python -c "import torch, json; print(json.dumps({'torch':torch.__version__,'cuda':torch.cuda.is_available(),'device':torch.cuda.get_device_name(0) if torch.cuda.is_available() else None},indent=2)); assert torch.cuda.is_available()"
+Assert-LastExit "nvidia-smi"
+& $Python -c "import torch, json; print(json.dumps({'torch':torch.__version__,'cuda_runtime':torch.version.cuda,'cuda':torch.cuda.is_available(),'device':torch.cuda.get_device_name(0) if torch.cuda.is_available() else None},indent=2)); assert torch.cuda.is_available()"
+Assert-LastExit "CUDA PyTorch preflight"
 & $Python (Join-Path $PSScriptRoot "gpu_risk_model.py") --self-test --device cuda
-Write-Host "=== Generate diverse engine-distribution positions ==="
-& $Python (Join-Path $PSScriptRoot "generate_training_positions.py") --engine $OpponentEngine --output $all --games $Games --threads 1 --hash 32
-& $Python (Join-Path $PSScriptRoot "split_positions.py") --input $all --train $trainPos --holdout $holdPos --holdout-frac 0.20
-Write-Host "=== Mine train labels (shallow reply probe vs stronger opponent truth + P09 risk/regret) ==="
+Assert-LastExit "GPU scorer self-test"
+
+if (Test-Path $all) {
+  $n=(Get-Content $all | Measure-Object -Line).Lines
+  Write-Host "=== Reusing $n generated positions ==="
+} else {
+  Write-Host "=== Generate diverse engine-distribution positions ==="
+  & $Python (Join-Path $PSScriptRoot "generate_training_positions.py") --engine $OpponentEngine --output $all --games $Games --threads 1 --hash 32
+  Assert-LastExit "position generation"
+}
+if ((Test-Path $trainPos) -and (Test-Path $holdPos)) {
+  $nt=(Get-Content $trainPos | Measure-Object -Line).Lines; $nh=(Get-Content $holdPos | Measure-Object -Line).Lines
+  Write-Host "=== Reusing frozen split: train=$nt holdout=$nh ==="
+} else {
+  & $Python (Join-Path $PSScriptRoot "split_positions.py") --input $all --train $trainPos --holdout $holdPos --holdout-frac 0.20
+  Assert-LastExit "prospective split"
+}
+
+Write-Host "=== Mine/resume train labels (shallow reply probe vs stronger opponent truth + P09 risk/regret) ==="
 & $Python (Join-Path $PSScriptRoot "mine_finite_compute.py") --engine $Engine --opponent-engine $OpponentEngine --positions $trainPos --output $trainRows --reply-nodes $ReplyNodes --opponent-label-nodes $OpponentLabelNodes --fast-nodes $FastNodes --deep-nodes $DeepNodes --multipv 4 --threads $Threads --hash $Hash
-Write-Host "=== Mine untouched prospective holdout ==="
+Assert-LastExit "train-label mining"
+Write-Host "=== Mine/resume untouched prospective holdout ==="
 & $Python (Join-Path $PSScriptRoot "mine_finite_compute.py") --engine $Engine --opponent-engine $OpponentEngine --positions $holdPos --output $holdRows --reply-nodes $ReplyNodes --opponent-label-nodes $OpponentLabelNodes --fast-nodes $FastNodes --deep-nodes $DeepNodes --multipv 4 --threads $Threads --hash $Hash
+Assert-LastExit "holdout mining"
 Write-Host "=== Train leakage-resistant three-head advisor ==="
 & $Python (Join-Path $PSScriptRoot "train_risk_model.py") $trainRows --prospective $holdRows --output $model --metrics-output $metrics --device cuda --hidden 48 --epochs 160 --patience 20
 if ($LASTEXITCODE -ne 0) { Write-Warning "Promotion gates failed. Checkpoint was saved for research but MUST NOT be used as champion."; exit $LASTEXITCODE }
@@ -38,6 +60,7 @@ Write-Host "=== Prove correct ponder hits buy useful work ==="
 if ($LASTEXITCODE -ne 0) { Write-Warning "Warm-search advantage gate failed. Hybrid remains experimental."; exit $LASTEXITCODE }
 Write-Host "=== Checkpoint and warm-search gates passed ==="
 & $Python (Join-Path $PSScriptRoot "gpu_risk_model.py") --device cuda --checkpoint $model
+Assert-LastExit "checkpoint load"
 Write-Host "MODEL=$model"
 Write-Host "METRICS=$metrics"
 Write-Host "WARM_BENCH=$warm"
