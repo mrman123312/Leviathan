@@ -10,59 +10,44 @@ param(
   [int]$OpponentLabelNodes = 50000,
   [int]$PonderMs = 2000,
   [int]$OwnMs = 250,
-  [string]$Python = "python",
-  [string]$OutDir = "local_results/hybrid/p18-one-shot"
+  [ValidateSet('auto','cuda','dml','cpu')][string]$Device = 'dml',
+  [string]$Python = 'python',
+  [string]$OutDir = 'local_results/hybrid/p18-one-shot'
 )
-$ErrorActionPreference = "Stop"
-function Assert-LastExit([string]$Stage) {
-  if ($LASTEXITCODE -ne 0) { throw "$Stage failed with exit code $LASTEXITCODE" }
+$ErrorActionPreference='Stop'
+function Run-Native([string]$Stage,[scriptblock]$Command){ & $Command; if($LASTEXITCODE-ne 0){ throw "$Stage failed with exit code $LASTEXITCODE" } }
+$root=Resolve-Path (Join-Path $PSScriptRoot '../..');$out=Join-Path $root $OutDir;New-Item -ItemType Directory -Force -Path $out | Out-Null
+$all=Join-Path $out 'positions-all-v3.jsonl';$trainPos=Join-Path $out 'positions-train-v3.jsonl';$holdPos=Join-Path $out 'positions-holdout-v3.jsonl';$trainRows=Join-Path $out 'train-v3.jsonl';$holdRows=Join-Path $out 'prospective-v3.jsonl';$model=Join-Path $out 'p18.3.pt';$metrics=Join-Path $out 'p18.3.metrics.json';$warm=Join-Path $out 'warm-advantage-v3.json'
+Write-Host '=== P18.3 accelerator preflight ===' -ForegroundColor Cyan
+Run-Native 'NVIDIA preflight' { nvidia-smi }
+if($Device -eq 'dml'){
+  Run-Native 'DirectML PyTorch preflight' { & $Python -c "import json,torch,torch_directml; d=torch_directml.device(); x=torch.tensor([[1.,2.],[3.,4.]]).to(d); y=(x@x).cpu(); print(json.dumps({'torch':torch.__version__,'accelerator':'DirectML','device':str(d),'probe':y.tolist()},indent=2))" }
+}else{
+  Run-Native 'PyTorch accelerator preflight' { & $Python -c "import json,torch; dev='$Device'; ok=(dev=='cpu') or (dev=='auto') or (dev=='cuda' and torch.cuda.is_available()); print(json.dumps({'torch':torch.__version__,'requested':dev,'cuda_available':torch.cuda.is_available()},indent=2)); assert ok" }
 }
-$root = Resolve-Path (Join-Path $PSScriptRoot "../..")
-$out = Join-Path $root $OutDir
-New-Item -ItemType Directory -Force -Path $out | Out-Null
-$all = Join-Path $out "positions-all.txt"; $trainPos = Join-Path $out "positions-train.txt"; $holdPos = Join-Path $out "positions-holdout.txt"
-$trainRows = Join-Path $out "train.jsonl"; $holdRows = Join-Path $out "prospective.jsonl"; $model = Join-Path $out "p18.2.pt"; $metrics = Join-Path $out "p18.2.metrics.json"; $warm = Join-Path $out "warm-advantage.json"
-Write-Host "=== P18.2 one-shot preflight ==="
-& nvidia-smi
-Assert-LastExit "nvidia-smi"
-& $Python -c "import torch, json; print(json.dumps({'torch':torch.__version__,'cuda_runtime':torch.version.cuda,'cuda':torch.cuda.is_available(),'device':torch.cuda.get_device_name(0) if torch.cuda.is_available() else None},indent=2)); assert torch.cuda.is_available()"
-Assert-LastExit "CUDA PyTorch preflight"
-& $Python (Join-Path $PSScriptRoot "gpu_risk_model.py") --self-test --device cuda
-Assert-LastExit "GPU scorer self-test"
+Run-Native 'Advisor accelerator self-test' { & $Python (Join-Path $PSScriptRoot 'gpu_risk_model.py') --self-test --device $Device }
 
-if (Test-Path $all) {
-  $n=(Get-Content $all | Measure-Object -Line).Lines
-  Write-Host "=== Reusing $n generated positions ==="
-} else {
-  Write-Host "=== Generate diverse engine-distribution positions ==="
-  & $Python (Join-Path $PSScriptRoot "generate_training_positions.py") --engine $OpponentEngine --output $all --games $Games --threads 1 --hash 32
-  Assert-LastExit "position generation"
-}
-if ((Test-Path $trainPos) -and (Test-Path $holdPos)) {
-  $nt=(Get-Content $trainPos | Measure-Object -Line).Lines; $nh=(Get-Content $holdPos | Measure-Object -Line).Lines
-  Write-Host "=== Reusing frozen split: train=$nt holdout=$nh ==="
-} else {
-  & $Python (Join-Path $PSScriptRoot "split_positions.py") --input $all --train $trainPos --holdout $holdPos --holdout-frac 0.20
-  Assert-LastExit "prospective split"
-}
+if(-not (Test-Path $all)){
+  Write-Host '=== Generate game-grouped engine-distribution positions ===' -ForegroundColor Cyan
+  Run-Native 'Position generation' { & $Python (Join-Path $PSScriptRoot 'generate_training_positions.py') --engine $OpponentEngine --output $all --games $Games --threads 1 --hash 32 --grouped-jsonl }
+}else{ $n=(Get-Content $all | Measure-Object -Line).Lines;Write-Host "=== Reusing $n P18.3 grouped positions ===" -ForegroundColor Green }
+if((-not (Test-Path $trainPos)) -or (-not (Test-Path $holdPos))){
+  Run-Native 'Whole-game prospective split' { & $Python (Join-Path $PSScriptRoot 'split_positions.py') --input $all --train $trainPos --holdout $holdPos --holdout-frac 0.20 }
+}else{ $nt=(Get-Content $trainPos | Measure-Object -Line).Lines;$nh=(Get-Content $holdPos | Measure-Object -Line).Lines;Write-Host "=== Reusing frozen whole-game split: train=$nt holdout=$nh ===" -ForegroundColor Green }
 
-Write-Host "=== Mine/resume train labels (shallow reply probe vs stronger opponent truth + P09 risk/regret) ==="
-& $Python (Join-Path $PSScriptRoot "mine_finite_compute.py") --engine $Engine --opponent-engine $OpponentEngine --positions $trainPos --output $trainRows --reply-nodes $ReplyNodes --opponent-label-nodes $OpponentLabelNodes --fast-nodes $FastNodes --deep-nodes $DeepNodes --multipv 4 --threads $Threads --hash $Hash
-Assert-LastExit "train-label mining"
-Write-Host "=== Mine/resume untouched prospective holdout ==="
-& $Python (Join-Path $PSScriptRoot "mine_finite_compute.py") --engine $Engine --opponent-engine $OpponentEngine --positions $holdPos --output $holdRows --reply-nodes $ReplyNodes --opponent-label-nodes $OpponentLabelNodes --fast-nodes $FastNodes --deep-nodes $DeepNodes --multipv 4 --threads $Threads --hash $Hash
-Assert-LastExit "holdout mining"
-Write-Host "=== Train leakage-resistant three-head advisor ==="
-& $Python (Join-Path $PSScriptRoot "train_risk_model.py") $trainRows --prospective $holdRows --output $model --metrics-output $metrics --device cuda --hidden 48 --epochs 160 --patience 20
-if ($LASTEXITCODE -ne 0) { Write-Warning "Promotion gates failed. Checkpoint was saved for research but MUST NOT be used as champion."; exit $LASTEXITCODE }
-Write-Host "=== Prove correct ponder hits buy useful work ==="
-& $Python (Join-Path $PSScriptRoot "benchmark_warm_advantage.py") --engine $Engine --dataset $holdRows --output $warm --ponder-ms $PonderMs --own-ms $OwnMs --threads $Threads --hash $Hash --limit 48
-if ($LASTEXITCODE -ne 0) { Write-Warning "Warm-search advantage gate failed. Hybrid remains experimental."; exit $LASTEXITCODE }
-Write-Host "=== Checkpoint and warm-search gates passed ==="
-& $Python (Join-Path $PSScriptRoot "gpu_risk_model.py") --device cuda --checkpoint $model
-Assert-LastExit "checkpoint load"
-Write-Host "MODEL=$model"
-Write-Host "METRICS=$metrics"
-Write-Host "WARM_BENCH=$warm"
-Write-Host "Launch UCI proxy with:"
-Write-Host "$Python tools/hybrid/leviathan_hybrid_uci_v2.py --engine `"$Engine`" --opponent-engine `"$OpponentEngine`" --model `"$model`" --gpu-device cuda --threads $Threads --hash $Hash --max-scouts 4 --anneal-seconds 2.0 --min-final-scouts 2"
+Write-Host '=== Mine/resume TRAIN labels ===' -ForegroundColor Cyan
+Run-Native 'Training label mining' { & $Python (Join-Path $PSScriptRoot 'mine_finite_compute.py') --engine $Engine --opponent-engine $OpponentEngine --positions $trainPos --output $trainRows --reply-nodes $ReplyNodes --opponent-label-nodes $OpponentLabelNodes --fast-nodes $FastNodes --deep-nodes $DeepNodes --multipv 4 --threads $Threads --hash $Hash }
+Write-Host '=== Mine/resume untouched PROSPECTIVE labels ===' -ForegroundColor Cyan
+Run-Native 'Prospective label mining' { & $Python (Join-Path $PSScriptRoot 'mine_finite_compute.py') --engine $Engine --opponent-engine $OpponentEngine --positions $holdPos --output $holdRows --reply-nodes $ReplyNodes --opponent-label-nodes $OpponentLabelNodes --fast-nodes $FastNodes --deep-nodes $DeepNodes --multipv 4 --threads $Threads --hash $Hash }
+
+Write-Host '=== Train leakage-resistant three-head advisor ===' -ForegroundColor Cyan
+& $Python (Join-Path $PSScriptRoot 'train_risk_model.py') $trainRows --prospective $holdRows --output $model --metrics-output $metrics --device $Device --hidden 48 --epochs 160 --patience 20
+if($LASTEXITCODE-ne 0){ Write-Warning 'Prospective model gates failed. Checkpoint saved for research only.'; exit $LASTEXITCODE }
+Write-Host '=== Prove correct ponder hits buy useful work ===' -ForegroundColor Cyan
+& $Python (Join-Path $PSScriptRoot 'benchmark_warm_advantage.py') --engine $Engine --dataset $holdRows --output $warm --ponder-ms $PonderMs --own-ms $OwnMs --threads $Threads --hash $Hash --limit 48
+if($LASTEXITCODE-ne 0){ Write-Warning 'Warm-search advantage gate failed. Hybrid remains experimental.'; exit $LASTEXITCODE }
+Write-Host '=== Checkpoint and warm-search gates PASSED ===' -ForegroundColor Green
+Run-Native 'Checkpoint accelerator load' { & $Python (Join-Path $PSScriptRoot 'gpu_risk_model.py') --device $Device --checkpoint $model }
+Write-Host "MODEL=$model";Write-Host "METRICS=$metrics";Write-Host "WARM_BENCH=$warm"
+Write-Host 'Launch UCI proxy with:' -ForegroundColor Cyan
+Write-Host "$Python tools/hybrid/leviathan_hybrid_uci_v2.py --engine `"$Engine`" --opponent-engine `"$OpponentEngine`" --model `"$model`" --gpu-device auto --threads $Threads --hash $Hash --max-scouts 4 --anneal-seconds 2.0 --min-final-scouts 2"
