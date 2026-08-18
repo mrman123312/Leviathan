@@ -10,12 +10,12 @@ $baselineDir=Get-ChildItem $Root -Directory | Sort-Object LastWriteTime -Descend
 if(-not $baselineDir){ throw 'No stockfish-baseline.exe found under LeviathanHardwareResults.' }
 $base=Join-Path $baselineDir.FullName 'stockfish-baseline.exe';$work=Join-Path $Root 'p18.2-one-shot-work'
 if(Test-Path (Join-Path $work '.git')){
-  Write-Host '=== UPDATE CURRENT P18.3 SOURCE (PRESERVE LOCAL RESULTS) ===' -ForegroundColor Cyan
+  Write-Host '=== UPDATE CURRENT P18.4 SOURCE (PRESERVE LOCAL RESULTS) ===' -ForegroundColor Cyan
   git -C $work fetch --depth 1 origin agent/p18-hybrid-cpu-gpu-multiponder | Out-Host;Assert-LastExit 'git fetch'
   git -C $work reset --hard FETCH_HEAD | Out-Host;Assert-LastExit 'git reset'
 }else{
   if(Test-Path $work){Remove-Item -Recurse -Force $work}
-  Write-Host '=== CLONE CURRENT P18.3 / P09 SOURCE ===' -ForegroundColor Cyan
+  Write-Host '=== CLONE CURRENT P18.4 / P09 SOURCE ===' -ForegroundColor Cyan
   git clone --depth 1 --branch agent/p18-hybrid-cpu-gpu-multiponder https://github.com/mrman123312/Leviathan.git $work | Out-Host;Assert-LastExit 'git clone'
 }
 
@@ -29,14 +29,13 @@ if(Test-Path $dmlProbePy){
   if($LASTEXITCODE-eq 0){$dmlHealthy=$true}
 }
 if((Test-Path $dmlVenv) -and -not $dmlHealthy){ Write-Host "Removing incomplete DirectML environment: $dmlVenv" -ForegroundColor Yellow;Remove-Item -Recurse -Force $dmlVenv -ErrorAction SilentlyContinue }
-# Failed pip wheel extractions can be multiple GB. Remove only pip-owned temporary directories.
 if(Test-Path $env:TEMP){
   Get-ChildItem $env:TEMP -Directory -ErrorAction SilentlyContinue | Where-Object { $_.Name -like 'pip-unpack-*' -or $_.Name -like 'pip-install-*' -or $_.Name -like 'pip-ephem-wheel-cache-*' -or $_.Name -like 'pip-build-env-*' } | ForEach-Object {
     try{ Remove-Item -Recurse -Force $_.FullName -ErrorAction Stop;Write-Host "Removed pip temp: $($_.Name)" }catch{}
   }
 }
 $after=Free-GB $Root;Write-Host "Free after cleanup:  $after GB" -ForegroundColor Green
-if($after -lt 3.0){ throw "C: still has only $after GB free. P18.3 needs at least 3 GB temporary headroom for the DirectML environment. Free some disk space and rerun; chess results under $work\local_results were preserved." }
+if($after -lt 3.0){ throw "C: still has only $after GB free. P18.4 needs at least 3 GB temporary headroom. Free some disk space and rerun; chess results under $work\local_results were preserved." }
 
 $bash='C:\msys64\usr\bin\bash.exe';$compiler='C:\msys64\ucrt64\bin\x86_64-w64-mingw32-c++.exe'
 if(-not (Test-Path $bash)){throw 'MSYS2 bash missing'};if(-not (Test-Path $compiler)){throw 'MSYS2 UCRT64 compiler missing'}
@@ -70,8 +69,8 @@ if(-not $dmlReady){
 Assert-LastExit 'DirectML verification'
 
 Write-Host "P09 engine: $cand" -ForegroundColor Green;Write-Host "Stockfish baseline: $base" -ForegroundColor Green;Write-Host "P18 GPU Python: $venvPy" -ForegroundColor Green
-Write-Host '=== START/RESUME P18.3 TRAIN + WHOLE-GAME PROSPECTIVE HOLDOUT + WARM-SEARCH GATE ===' -ForegroundColor Cyan
+Write-Host '=== START/RESUME P18.4 TRAIN + WHOLE-GAME HOLDOUT + COVERAGE + WARM-SEARCH GATES ===' -ForegroundColor Cyan
 $runner=Join-Path $work 'tools\hybrid\run-hybrid-one-shot.ps1'
 & $runner -Engine $cand -OpponentEngine $base -Threads 8 -Hash 128 -Games 80 -Python $venvPy -Device dml -OutDir 'local_results/hybrid/p18-one-shot'
-if($LASTEXITCODE-ne 0){throw 'P18.3 one-shot campaign failed a gate. Copy the console output back into ChatGPT.'}
-Write-Host "`nP18.3 ONE-SHOT COMPLETE" -ForegroundColor Green;Write-Host "Work tree: $work" -ForegroundColor Green;Write-Host "Results: $(Join-Path $work 'local_results\hybrid\p18-one-shot')" -ForegroundColor Green
+if($LASTEXITCODE-ne 0){throw 'P18.4 one-shot campaign failed a gate. Copy the console output back into ChatGPT.'}
+Write-Host "`nP18.4 ONE-SHOT COMPLETE" -ForegroundColor Green;Write-Host "Work tree: $work" -ForegroundColor Green;Write-Host "Results: $(Join-Path $work 'local_results\hybrid\p18-one-shot')" -ForegroundColor Green
