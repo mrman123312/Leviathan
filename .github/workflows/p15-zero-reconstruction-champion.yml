@@ -1,0 +1,166 @@
+name: P15 Zero Reconstruction Champion
+
+on:
+  push:
+    branches: [agent/p15-zero-reconstruction-champion]
+    paths: ['.github/workflows/p15-zero-reconstruction-champion.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  speed:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with: {ref: 3404fa2ea9b4fe75236e2584be9da3416e646ec2, path: control, fetch-depth: 1}
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with: {ref: 3404fa2ea9b4fe75236e2584be9da3416e646ec2, path: cand, fetch-depth: 1}
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with: {ref: leviathan/fundamentals-ultra-lab, path: harness, fetch-depth: 1}
+
+      - name: Materialize identical static P09 in control and candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat > /tmp/static.py <<'PY'
+          from pathlib import Path
+          import sys
+          root=Path(sys.argv[1]); p=root/'src/leviathan_fundamentals.h';s=p.read_text()
+          old='inline bool ready() { return state().enabled && state().authority > 0; }'; assert s.count(old)==1;s=s.replace(old,'inline constexpr bool ready() { return true; }',1)
+          old='''inline bool zugzwang_risk(const Position& pos) {
+    if (!ready() || !state().zugzwangGuard)
+        return false;
+
+    // Conservative detector: sparse positions with very little non-pawn
+    // mobility are where null-move assumptions are structurally least safe.
+    return pos.count<ALL_PIECES>() <= 9 && non_pawn_count(pos) <= 2;
+}'''
+          new='''inline bool zugzwang_risk(const Position& pos) {
+    return pos.count<ALL_PIECES>() <= 9 && non_pawn_count(pos) <= 2;
+}''';assert s.count(old)==1;s=s.replace(old,new,1)
+          old='    if (!ready() || !state().sacrificeRescue)\n        return false;\n\n';assert s.count(old)==1;s=s.replace(old,'',1)
+          old='    if (!ready())\n        return 0;\n\n';assert s.count(old)==1;s=s.replace(old,'',1)
+          for a,b in [('state().forcingBuyback','384'),('state().recaptureBuyback','256'),('state().passerBuyback','320'),('state().endgameBuyback','128')]:assert s.count(a)>=1;s=s.replace(a,b,1)
+          start='    // Authority 2 is the funding mechanism. v2.1 deliberately avoids\n';end='        delta += state().quietOverdrive * lateness * depthScale / 48;\n    }\n\n';i=s.find(start);j=s.find(end,i);assert i>=0 and j>=0;j+=len(end);s=s[:i]+'    // Static Authority-1 champion: Authority-2 path unreachable.\n\n'+s[j:]
+          old='''inline int quiet_ordering_bonus(const Position& pos, Move move) {
+    if (!ready() || !state().rule50Pressure || pos.rule50_count() < 70)
+        return 0;
+
+    // Captures are scored in another MovePicker stage. Push pawn moves upward
+    // when the fifty-move counter is dangerous because they reset it.
+    return pawn_move(pos, move) ? state().rule50PawnBonus : 0;
+}''';new='''inline int quiet_ordering_bonus(const Position& pos, Move move) {
+    if (pos.rule50_count() < 70)
+        return 0;
+    return pawn_move(pos, move) ? 3072 : 0;
+}''';assert s.count(old)==1;p.write_text(s.replace(old,new,1))
+          m=root/'src/movepick.cpp';s=m.read_text();old='''    const bool leviathanRule50Ready = Type == QUIETS && Leviathan::Fundamentals::ready()
+                                      && Leviathan::Fundamentals::state().rule50Pressure
+                                      && pos.rule50_count() >= 70;''';new='''    const bool leviathanRule50Ready = Type == QUIETS && pos.rule50_count() >= 70;''';assert s.count(old)==1;m.write_text(s.replace(old,new,1))
+          PY
+          python3 /tmp/static.py control
+          python3 /tmp/static.py cand
+
+      - name: Remove redundant piece reconstruction only in candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          h=Path('cand/src/leviathan_fundamentals.h');s=h.read_text()
+          anchor='''inline int lmr_adjustment(const Position& pos,
+                          Move move,
+                          Square prevSq,
+                          Depth depth,
+                          int moveCount,
+                          bool pvNode,
+                          bool capture,
+                          bool givesCheck) {'''
+          i=s.find(anchor); assert i>=0
+          end=s.find('\n}\n\ninline int quiet_ordering_bonus',i); assert end>=0
+          replacement='''inline int champion_lmr_adjustment(const Position& pos,
+                                   Move move,
+                                   Square prevSq,
+                                   int moveCount,
+                                   bool capture,
+                                   bool givesCheck,
+                                   Piece movedPiece) {
+    int delta = 0;
+    if (givesCheck)
+        delta -= 384;
+    if (recapture(move, prevSq, capture))
+        delta -= 256;
+    const bool advancedPawn = type_of(movedPiece) == PAWN
+                           && relative_rank(color_of(movedPiece), move.to_sq()) >= RANK_6;
+    if (move.type_of() == PROMOTION || advancedPawn)
+        delta -= 320;
+    if (low_material(pos) && (moveCount <= 4 || capture || givesCheck))
+        delta -= 128;
+    return std::clamp(delta, -2048, 768);
+}'''
+          s=s[:i]+replacement+s[end+2:]
+          h.write_text(s)
+
+          p=Path('cand/src/search.cpp');s=p.read_text()
+          old='''        r += Leviathan::Fundamentals::lmr_adjustment(
+          pos, move, prevSq, depth, moveCount, PvNode, capture, givesCheck);'''
+          new='''        r += Leviathan::Fundamentals::champion_lmr_adjustment(
+          pos, move, prevSq, moveCount, capture, givesCheck, movedPiece);'''
+          assert s.count(old)==1,(s.count(old));p.write_text(s.replace(old,new,1))
+
+          m=Path('cand/src/movepick.cpp');s=m.read_text()
+          old='''            if (leviathanRule50Ready)
+                m.value += Leviathan::Fundamentals::quiet_ordering_bonus(pos, m);'''
+          new='''            if (leviathanRule50Ready && pt == PAWN)
+                m.value += 3072;'''
+          assert s.count(old)==1;m.write_text(s.replace(old,new,1))
+          PY
+          git -C cand diff --check
+          git -C cand diff -- src/leviathan_fundamentals.h src/search.cpp src/movepick.cpp | tee p15.patch
+
+      - name: Build controls and candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          make -C control/src net; make -C control/src clean; make -C control/src -j2 ARCH=x86-64-avx2 build
+          cp control/src/stockfish control/src/control_a; cp control/src/stockfish control/src/control_b
+          cp control/src/nn-ab28990d4ea3.nnue cand/src/
+          make -C cand/src clean; make -C cand/src -j2 ARCH=x86-64-avx2 build
+          cat > active.json <<'EOF'
+          {"Threads":1,"Hash":64,"Leviathan Fundamentals":true,"Leviathan Fundamentals Authority":1,"Leviathan Quiet Overdrive":0,"Leviathan Risk":false,"Leviathan Policy":false,"Leviathan MetaSearch":false,"Leviathan Specialist":false,"Leviathan Atlas":false,"Leviathan Search DSL":false}
+          EOF
+
+      - name: Exact behavior plus 41-round calibrated timing
+        run: |
+          set -euo pipefail
+          python3 harness/tools/lossless_pair_benchmark.py --control-a control/src/control_a --control-b control/src/control_b --candidate cand/src/stockfish --options active.json --rounds 41 --output p15.json | tee p15.log
+
+      - name: Summarize
+        run: |
+          python3 - <<'PY'
+          import json,os
+          d=json.load(open('p15.json'));sig=d['signatures'];r=d['results'];exact=True
+          for c in ('default','depth11','nodes50k'):
+            exact &= sig['control_a'][c]['nodes']==sig['candidate'][c]['nodes'] and sig['control_a'][c]['behavior_sha256']==sig['candidate'][c]['behavior_sha256']
+          x=r['candidate'];a=r['control_b'];out={'schema':'LV_P15_ZERO_RECONSTRUCTION_V1','exact_behavior':exact,'aa_median':a['median_speedup'],'aa_ci':a['bootstrap_median_95pct_ci'],'candidate_median':x['median_speedup'],'candidate_geo':x['geometric_mean_speedup'],'candidate_ci':x['bootstrap_median_95pct_ci'],'faster_rounds':x['faster_rounds'],'rounds':x['rounds'],'provisional_win':bool(exact and x['bootstrap_median_95pct_ci'][0]>1.0)}
+          open('p15-summary.json','w').write(json.dumps(out,indent=2)+'\n');print(json.dumps(out,indent=2))
+          if not exact:raise SystemExit('behavior mismatch')
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: p15-${{ github.sha }}
+          path: [p15.json, p15.log, p15-summary.json, p15.patch]
+          retention-days: 30
+      - name: Commit durable result
+        if: always()
+        run: |
+          set -euo pipefail
+          test -s p15-summary.json || exit 0
+          git clone -q --depth 1 --branch agent/p15-zero-reconstruction-champion "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" record
+          mkdir -p record/experiments; cp p15-summary.json record/experiments/p15-zero-reconstruction-champion-latest.json
+          cd record; git config user.name 'github-actions[bot]'; git config user.email '41898282+github-actions[bot]@users.noreply.github.com'; git add experiments/p15-zero-reconstruction-champion-latest.json
+          if ! git diff --cached --quiet; then git commit -m 'P15: record zero-reconstruction evidence'; git push; fi
