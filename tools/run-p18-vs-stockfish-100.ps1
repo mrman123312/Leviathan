@@ -5,7 +5,7 @@ function Free-GB([string]$Path){
   return [math]::Round($d.Free/1GB,2)
 }
 
-$RepoCommit='d9f4678ac274abb8608745744f1542a2908f88d1'
+$RepoCommit='2d80c5178d56424fe09cc8204c633b230d828835'
 $Root=Join-Path $HOME 'LeviathanHardwareResults'
 $Work=Join-Path $Root 'p18.2-one-shot-work'
 New-Item -ItemType Directory -Force -Path $Root | Out-Null
