@@ -1,0 +1,111 @@
+name: P12c EP Main Bundle
+on:
+  push:
+    branches: [agent/p12c-ep-main-bundle]
+    paths: ['.github/workflows/p12c-ep-main-bundle.yml']
+  workflow_dispatch:
+permissions: {contents: write}
+jobs:
+  test:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 80
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with: {ref: 3404fa2ea9b4fe75236e2584be9da3416e646ec2, path: cand, fetch-depth: 1}
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with: {ref: 3404fa2ea9b4fe75236e2584be9da3416e646ec2, path: base, fetch-depth: 1}
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          repository: official-stockfish/Stockfish
+          ref: 5062aee519a1ba262d472d8ab139851ced56573e
+          path: oracle
+          fetch-depth: 1
+      - name: Materialize main-search EP accounting
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path('cand/src/search.cpp');s=p.read_text()
+          a="                Piece capturedPiece = pos.piece_on(move.to_sq());\n                int   captHist = captureHistory[movedPiece][move.to_sq()][type_of(capturedPiece)];"
+          b="                Piece capturedPiece = move.type_of() == EN_PASSANT ? make_piece(~us, PAWN) : pos.piece_on(move.to_sq());\n                int   captHist = captureHistory[movedPiece][move.to_sq()][type_of(capturedPiece)];"
+          assert s.count(a)==1;s=s.replace(a,b,1)
+          a="        capturedPiece = type_of(pos.piece_on(bestMove.to_sq()));\n        captureHistory[movedPiece][bestMove.to_sq()][capturedPiece] << bonus * 1427 / 1024;"
+          b="        capturedPiece = bestMove.type_of() == EN_PASSANT ? PAWN : type_of(pos.piece_on(bestMove.to_sq()));\n        captureHistory[movedPiece][bestMove.to_sq()][capturedPiece] << bonus * 1427 / 1024;"
+          assert s.count(a)==1;s=s.replace(a,b,1)
+          a="        movedPiece    = pos.moved_piece(move);\n        capturedPiece = type_of(pos.piece_on(move.to_sq()));\n        captureHistory[movedPiece][move.to_sq()][capturedPiece] << -malus * 1489 / 1024;"
+          b="        movedPiece    = pos.moved_piece(move);\n        capturedPiece = move.type_of() == EN_PASSANT ? PAWN : type_of(pos.piece_on(move.to_sq()));\n        captureHistory[movedPiece][move.to_sq()][capturedPiece] << -malus * 1489 / 1024;"
+          assert s.count(a)==1;p.write_text(s.replace(a,b,1))
+          p=Path('cand/src/movepick.cpp');s=p.read_text();a='        const Piece     capturedPiece = pos.piece_on(to);';b='        const Piece     capturedPiece = m.type_of() == EN_PASSANT ? make_piece(~us, PAWN) : pos.piece_on(to);';assert s.count(a)==1;p.write_text(s.replace(a,b,1))
+          PY
+          git -C cand diff --check
+      - name: Build
+        run: |
+          set -euo pipefail
+          for d in base cand oracle; do make -C "$d/src" net; make -C "$d/src" clean; make -C "$d/src" -j2 ARCH=x86-64-avx2 build; done
+          python3 -m pip install --disable-pip-version-check 'python-chess>=1.999,<2'
+      - name: Test fixed adversarial EP corpus
+        run: |
+          set -euo pipefail
+          mkdir result
+          cat > result/fens.txt <<'EOF'
+          r1bqk2r/p2nbpp1/1pp1pn2/3p2Pp/P2P4/2NBP2P/2PBQP2/R3K1NR w KQkq h6 0 15
+          rnbqkb1r/3n2pp/2ppp3/pp2Pp2/3P4/P1NB1NP1/1PP2P1P/R1BQK2R w KQkq f6 0 9
+          rnbqk2r/3nb1pp/2ppp3/pp2Pp2/3P3P/P1NB1NP1/1PP2P2/R1BQK2R w KQkq f6 0 10
+          rnbqkb1r/pp2pp1p/5np1/2pP4/8/4P3/PP1PBPPP/RNBQK1NR w KQkq c6 0 5
+          rnbqkb1r/ppp2p1p/5np1/3Pp3/8/4P3/PP1PBPPP/RNBQK1NR w KQkq e6 0 5
+          rnbqkb1r/1p2pp1p/p4np1/2pP4/8/4P2P/PP1PBPP1/RNBQK1NR w KQkq c6 0 6
+          rnbqkb1r/1pp2p1p/p4np1/3Pp3/8/4P2P/PP1PBPP1/RNBQK1NR w KQkq e6 0 6
+          r1bqkb1r/1pp1pppp/2n2n2/3p4/pPPP4/5NP1/P2NPP1P/R1BQKB1R b KQkq b3 0 6
+          r2qkb1r/1pp1pppp/2n2n2/3p4/pPPP2b1/4PNP1/P2N1P1P/R1BQKB1R b KQkq b3 0 7
+          rnbqkb1r/p3pppp/3p1n2/1pP5/2P5/5N2/PP2PPPP/RNBQKB1R w KQkq b6 0 5
+          rnb1kb1r/p2qpppp/3p1n2/1pP5/2P5/1P3N2/P1Q1PPPP/RNB1KB1R w KQkq b6 0 8
+          rnb1kb1r/p2q1ppp/3ppn2/1pP5/2P5/1P3NP1/P1Q1PP1P/RNB1KB1R w KQkq b6 0 9
+          r1bqkb1r/pppp1ppp/5n2/3Pp3/1nP1P3/8/PP3PPP/RNBQKBNR w KQkq e6 0 5
+          r1bqkb1r/pp1ppppp/5n2/2pP4/1nP1P3/8/PP3PPP/RNBQKBNR w KQkq c6 0 5
+          r1bqkb1r/pppp1ppp/8/3Pp3/1nP1n3/P7/1P3PPP/RNBQKBNR w KQkq e6 0 6
+          rnbqkbnr/pp3ppp/2p5/3p4/3PpP2/2N5/PPP1P1PP/R1BQKBNR b KQkq f3 0 5
+          rnbqkb1r/pp3ppp/2p2n2/3p4/3PpP2/2N3P1/PPP1P2P/R1BQKBNR b KQkq f3 0 6
+          rnbqkb1r/1p3ppp/2p2n2/p2p4/3PpP2/2N3P1/PPP1P1BP/R1BQK1NR b KQkq f3 0 7
+          r1bqkbnr/pp1n1p1p/3p2p1/2pPp3/2P5/P5P1/1P2PP1P/RNBQKBNR w KQkq e6 0 6
+          r1bqk1nr/pp1n1pbp/3p2p1/2pPp3/2P5/P4NP1/1P2PP1P/RNBQKB1R w KQkq e6 0 7
+          r1bqk1nr/1p1n1pbp/p2p2p1/2pPp3/2P1P3/P4NP1/1P3P1P/RNBQKB1R w KQkq e6 0 8
+          r1bqk2r/1p1n1pbp/p2p1np1/2pPp3/2P1P3/P4NP1/1P1N1P1P/R1BQKB1R w KQkq e6 0 9
+          r1b1k2r/1pqn1pbp/p2p1np1/2pPp3/2P1P3/P4NP1/1P1N1P1P/1RBQKB1R w Kq e6 0 10
+          rn1qk2r/ppp1p1bp/4b3/5p2/2PpN3/5P2/PP1P2PP/R1BQKBNR b KQkq c3 0 8
+          EOF
+          sed -i 's/^          //' result/fens.txt
+          cat > result/test.py <<'PY'
+          import chess,chess.engine,json,statistics
+          from pathlib import Path
+          F=[x.strip() for x in open('result/fens.txt') if x.strip()]; C=100000;O=900000;G=350000
+          def cfg(e):
+            o={}
+            for k,v in [('Threads',1),('Hash',64),('Leviathan Fundamentals',True),('Leviathan Fundamentals Authority',1),('Leviathan Quiet Overdrive',0)]:
+              if k in e.options:o[k]=v
+            for k in ['Leviathan Risk','Leviathan Policy','Leviathan MetaSearch','Leviathan Specialist','Leviathan Atlas','Leviathan Search DSL']:
+              if k in e.options:o[k]=False
+            if o:e.configure(o)
+          def cp(i,c):
+            s=i.get('score');return None if s is None else s.pov(c).score(mate_score=100000)
+          b=chess.engine.SimpleEngine.popen_uci('base/src/stockfish');c=chess.engine.SimpleEngine.popen_uci('cand/src/stockfish');o=chess.engine.SimpleEngine.popen_uci('oracle/src/stockfish');g1=chess.engine.SimpleEngine.popen_uci('oracle/src/stockfish');g2=chess.engine.SimpleEngine.popen_uci('oracle/src/stockfish');cfg(b);cfg(c)
+          for e in(o,g1,g2):e.configure({'Threads':1,'Hash':64})
+          R=[]
+          try:
+            for i,f in enumerate(F):
+              p=chess.Board(f);col=p.turn;oi=o.analyse(p,chess.engine.Limit(nodes=O),game=('o',i));os=cp(oi,col);om=oi['pv'][0];bm=b.play(p,chess.engine.Limit(nodes=C),game=('b',i)).move;cm=c.play(p,chess.engine.Limit(nodes=C),game=('c',i)).move;bg=cp(g1.analyse(p,chess.engine.Limit(nodes=G),root_moves=[bm],game=('g1',i)),col);cg=cp(g2.analyse(p,chess.engine.Limit(nodes=G),root_moves=[cm],game=('g2',i)),col);br=max(0,os-bg);cr=max(0,os-cg);R.append({'fen':f,'oracle':om.uci(),'base':bm.uci(),'candidate':cm.uci(),'base_regret':br,'candidate_regret':cr,'improvement_cp':br-cr,'ep':[m.uci() for m in p.legal_moves if p.is_en_passant(m)]});print(i+1,bm,cm,br-cr,flush=True)
+          finally:
+            for e in(b,c,o,g1,g2):e.quit()
+          ds=[r['improvement_cp'] for r in R];S={'schema':'LV_P12C_EP_MAIN_BUNDLE_V1','positions':len(R),'changed_roots':sum(r['base']!=r['candidate'] for r in R),'base_mean_regret_cp':statistics.fmean(r['base_regret'] for r in R),'candidate_mean_regret_cp':statistics.fmean(r['candidate_regret'] for r in R),'mean_improvement_cp':statistics.fmean(ds),'better':sum(x>0 for x in ds),'tie':sum(x==0 for x in ds),'worse':sum(x<0 for x in ds),'largest_rescue_cp':max(ds),'largest_harm_cp':min(ds),'ep_choices_base':sum(r['base'] in r['ep'] for r in R),'ep_choices_candidate':sum(r['candidate'] in r['ep'] for r in R)};Path('result/rows.json').write_text(json.dumps(R,indent=2));Path('result/summary.json').write_text(json.dumps(S,indent=2));print(json.dumps(S,indent=2))
+          PY
+          python3 result/test.py
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with: {name: p12c-${{ github.sha }}, path: result/, retention-days: 30}
+      - name: Commit result or failure marker
+        if: always()
+        run: |
+          set -euo pipefail
+          git clone -q --depth 1 --branch agent/p12c-ep-main-bundle "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" record
+          mkdir -p record/experiments
+          if [ -s result/summary.json ]; then cp result/summary.json record/experiments/p12c-ep-main-bundle-latest.json; else printf '{"schema":"LV_P12C_EP_MAIN_BUNDLE_V1","status":"execution_failed"}\n' > record/experiments/p12c-ep-main-bundle-latest.json; fi
+          cd record;git config user.name github-actions[bot];git config user.email 41898282+github-actions[bot]@users.noreply.github.com;git add experiments/p12c-ep-main-bundle-latest.json;if ! git diff --cached --quiet;then git commit -m 'P12c: record EP main bundle result';git push;fi
