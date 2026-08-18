@@ -23,6 +23,12 @@ Write-Host '=== RECOVER SPACE FROM FAILED P18 ML BOOTSTRAPS ===' -ForegroundColo
 $before=Free-GB $Root;Write-Host "Free before cleanup: $before GB"
 $oldCuda=Join-Path $Root 'p18-cuda-venv'
 if(Test-Path $oldCuda){ Write-Host "Removing obsolete failed CUDA environment: $oldCuda" -ForegroundColor Yellow;Remove-Item -Recurse -Force $oldCuda -ErrorAction SilentlyContinue }
+$dmlVenv=Join-Path $Root 'p18-dml-venv';$dmlProbePy=Join-Path $dmlVenv 'Scripts\python.exe';$dmlHealthy=$false
+if(Test-Path $dmlProbePy){
+  & $dmlProbePy -c "import torch,torch_directml; d=torch_directml.device(); x=torch.tensor([1.]).to(d); assert float((x*x).sum().cpu())==1.0" 2>$null
+  if($LASTEXITCODE-eq 0){$dmlHealthy=$true}
+}
+if((Test-Path $dmlVenv) -and -not $dmlHealthy){ Write-Host "Removing incomplete DirectML environment: $dmlVenv" -ForegroundColor Yellow;Remove-Item -Recurse -Force $dmlVenv -ErrorAction SilentlyContinue }
 # Failed pip wheel extractions can be multiple GB. Remove only pip-owned temporary directories.
 if(Test-Path $env:TEMP){
   Get-ChildItem $env:TEMP -Directory -ErrorAction SilentlyContinue | Where-Object { $_.Name -like 'pip-unpack-*' -or $_.Name -like 'pip-install-*' -or $_.Name -like 'pip-ephem-wheel-cache-*' -or $_.Name -like 'pip-build-env-*' } | ForEach-Object {
@@ -51,12 +57,8 @@ if((Test-Path $cand) -and $priorTree -eq $currentTree){
 }
 
 Write-Host '=== PREPARE LIGHTWEIGHT DIRECTML GPU ENVIRONMENT ===' -ForegroundColor Cyan
-$hostPython=(Get-Command python -ErrorAction Stop).Source;$venv=Join-Path $Root 'p18-dml-venv';$venvPy=Join-Path $venv 'Scripts\python.exe'
-$dmlReady=$false
-if(Test-Path $venvPy){
-  & $venvPy -c "import torch,torch_directml; d=torch_directml.device(); x=torch.tensor([1.,2.]).to(d); print('existing DirectML',torch.__version__,str(d),float((x*x).sum().cpu()));" 2>$null
-  if($LASTEXITCODE-eq 0){$dmlReady=$true}
-}
+$hostPython=(Get-Command python -ErrorAction Stop).Source;$venv=$dmlVenv;$venvPy=Join-Path $venv 'Scripts\python.exe'
+$dmlReady=$dmlHealthy
 if(-not $dmlReady){
   if(Test-Path $venv){ Write-Host 'Removing incomplete DirectML environment from failed install...' -ForegroundColor Yellow;Remove-Item -Recurse -Force $venv }
   & $hostPython -m venv $venv;Assert-LastExit 'DML virtual environment creation'
