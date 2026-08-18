@@ -1,0 +1,206 @@
+name: P11 P01 Champion Factorial
+
+on:
+  push:
+    branches: [agent/p11-p01-champion-factorial]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  screen:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 80
+    strategy:
+      fail-fast: false
+      matrix:
+        variant: [lean, static, both]
+    env:
+      VARIANT: ${{ matrix.variant }}
+    steps:
+      - name: Checkout exact P01 candidate
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: 3404fa2ea9b4fe75236e2584be9da3416e646ec2
+          path: cand
+          fetch-depth: 1
+
+      - name: Checkout exact P01 controls
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: 3404fa2ea9b4fe75236e2584be9da3416e646ec2
+          path: base
+          fetch-depth: 1
+
+      - name: Checkout hardened benchmark harness
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: leviathan/fundamentals-ultra-lab
+          path: harness
+          fetch-depth: 1
+
+      - name: Materialize variant directly on P01
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+
+          variant=os.environ['VARIANT']
+          lean=variant in ('lean','both')
+          static=variant in ('static','both')
+
+          if lean:
+              p=Path('cand/src/search.cpp'); s=p.read_text()
+              old="    const bool leviathanRiskReady  = Leviathan::Control::risk_ready();\n    const bool leviathanDslReady   = Leviathan::DSL::ready();\n    const bool leviathanTraceReady = Leviathan::Trace::ready();"
+              new="    // Champion-only build: disabled experimental organs are compile-time false.\n    constexpr bool leviathanRiskReady  = false;\n    constexpr bool leviathanDslReady   = false;\n    constexpr bool leviathanTraceReady = false;"
+              if s.count(old)!=1: raise SystemExit('lean search anchor mismatch')
+              p.write_text(s.replace(old,new,1))
+
+              p=Path('cand/src/movepick.cpp'); s=p.read_text()
+              old="    const bool leviathanPolicyReady = Type == QUIETS && Leviathan::Policy::ready();\n    const bool leviathanAtlasReady  = Type == QUIETS && Leviathan::Atlas::ready();"
+              new="    constexpr bool leviathanPolicyReady = false;\n    constexpr bool leviathanAtlasReady  = false;"
+              if s.count(old)!=1: raise SystemExit('lean movepick anchor mismatch')
+              p.write_text(s.replace(old,new,1))
+
+          if static:
+              p=Path('cand/src/leviathan_fundamentals.h'); s=p.read_text()
+
+              old="inline bool ready() { return state().enabled && state().authority > 0; }"
+              new="inline constexpr bool ready() { return true; }"
+              if s.count(old)!=1: raise SystemExit('static ready anchor mismatch')
+              s=s.replace(old,new,1)
+
+              old="""inline bool zugzwang_risk(const Position& pos) {
+    if (!ready() || !state().zugzwangGuard)
+        return false;
+
+    // Conservative detector: sparse positions with very little non-pawn
+    // mobility are where null-move assumptions are structurally least safe.
+    return pos.count<ALL_PIECES>() <= 9 && non_pawn_count(pos) <= 2;
+}"""
+              new="""inline bool zugzwang_risk(const Position& pos) {
+    return pos.count<ALL_PIECES>() <= 9 && non_pawn_count(pos) <= 2;
+}"""
+              if s.count(old)!=1: raise SystemExit('static zugzwang anchor mismatch')
+              s=s.replace(old,new,1)
+
+              old="    if (!ready() || !state().sacrificeRescue)\n        return false;\n\n"
+              if s.count(old)!=1: raise SystemExit('static rescue anchor mismatch')
+              s=s.replace(old,"",1)
+
+              old="    if (!ready())\n        return 0;\n\n"
+              if s.count(old)!=1: raise SystemExit('static lmr-ready anchor mismatch')
+              s=s.replace(old,"",1)
+              for a,b in [
+                  ('state().forcingBuyback','384'),
+                  ('state().recaptureBuyback','256'),
+                  ('state().passerBuyback','320'),
+                  ('state().endgameBuyback','128')]:
+                  if s.count(a)<1: raise SystemExit(f'missing constant anchor {a}')
+                  s=s.replace(a,b,1)
+
+              start="    // Authority 2 is the funding mechanism. v2.1 deliberately avoids\n"
+              end="        delta += state().quietOverdrive * lateness * depthScale / 48;\n    }\n\n"
+              i=s.find(start)
+              if i<0: raise SystemExit('static authority2 start missing')
+              j=s.find(end,i)
+              if j<0: raise SystemExit('static authority2 end missing')
+              j += len(end)
+              s=s[:i] + "    // Champion profile is fixed at Authority 1; Authority-2 overdrive is unreachable.\n\n" + s[j:]
+
+              old="""inline int quiet_ordering_bonus(const Position& pos, Move move) {
+    if (!ready() || !state().rule50Pressure || pos.rule50_count() < 70)
+        return 0;
+
+    // Captures are scored in another MovePicker stage. Push pawn moves upward
+    // when the fifty-move counter is dangerous because they reset it.
+    return pawn_move(pos, move) ? state().rule50PawnBonus : 0;
+}"""
+              new="""inline int quiet_ordering_bonus(const Position& pos, Move move) {
+    if (pos.rule50_count() < 70)
+        return 0;
+    return pawn_move(pos, move) ? 3072 : 0;
+}"""
+              if s.count(old)!=1: raise SystemExit('static rule50 anchor mismatch')
+              p.write_text(s.replace(old,new,1))
+
+              p=Path('cand/src/movepick.cpp'); s=p.read_text()
+              old="    const bool leviathanRule50Ready = Type == QUIETS && Leviathan::Fundamentals::ready()\n                                      && Leviathan::Fundamentals::state().rule50Pressure\n                                      && pos.rule50_count() >= 70;"
+              new="    const bool leviathanRule50Ready = Type == QUIETS && pos.rule50_count() >= 70;"
+              if s.count(old)!=1: raise SystemExit('static movepick rule50 anchor mismatch')
+              p.write_text(s.replace(old,new,1))
+
+          for f in ('cand/src/search.cpp','cand/src/movepick.cpp','cand/src/leviathan_fundamentals.h'):
+              if Path(f).exists():
+                  pass
+          PY
+          git -C cand diff --check
+          git -C cand diff -- src/search.cpp src/movepick.cpp src/leviathan_fundamentals.h | tee "p11-${VARIANT}.patch"
+          test -s "p11-${VARIANT}.patch"
+
+      - name: Build P01 controls and candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          make -C base/src net
+          make -C base/src clean
+          make -C base/src -j2 ARCH=x86-64-avx2 build
+          cp base/src/stockfish base/src/control_a
+          cp base/src/stockfish base/src/control_b
+          cp base/src/nn-ab28990d4ea3.nnue cand/src/
+          make -C cand/src clean
+          make -C cand/src -j2 ARCH=x86-64-avx2 build
+          cat > active.json <<'EOF'
+          {"Threads":1,"Hash":64,"Leviathan Fundamentals":true,"Leviathan Fundamentals Authority":1,"Leviathan Quiet Overdrive":0,"Leviathan Risk":false,"Leviathan Policy":false,"Leviathan MetaSearch":false,"Leviathan Specialist":false,"Leviathan Atlas":false,"Leviathan Search DSL":false}
+          EOF
+
+      - name: Exact behavior and calibrated speed replication
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 harness/tools/lossless_pair_benchmark.py \
+            --control-a base/src/control_a \
+            --control-b base/src/control_b \
+            --candidate cand/src/stockfish \
+            --options active.json \
+            --rounds 31 \
+            --output "p11-${VARIANT}.json" | tee "p11-${VARIANT}.log"
+
+      - name: Gate and summarize
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json,os
+          v=os.environ['VARIANT']; d=json.load(open(f'p11-{v}.json'))
+          sig=d['signatures']; r=d['results']; exact=True
+          for case in ('default','depth11','nodes50k'):
+              a=sig['control_a'][case]; c=sig['candidate'][case]
+              exact &= a['nodes']==c['nodes'] and a['behavior_sha256']==c['behavior_sha256']
+          c=r['candidate']; a=r['control_b']
+          out={
+            'variant':v,'exact_behavior':exact,
+            'aa_median':a['median_speedup'],'aa_ci':a['bootstrap_median_95pct_ci'],
+            'candidate_median':c['median_speedup'],'candidate_geo':c['geometric_mean_speedup'],
+            'candidate_ci':c['bootstrap_median_95pct_ci'],
+            'faster_rounds':c['faster_rounds'],'rounds':c['rounds'],
+            'provisional_win': bool(exact and c['bootstrap_median_95pct_ci'][0] > 1.0)
+          }
+          open(f'p11-{v}-summary.json','w').write(json.dumps(out,indent=2)+'\n')
+          print(json.dumps(out,indent=2))
+          if not exact: raise SystemExit('BEHAVIOR_MISMATCH')
+          PY
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: p11-${{ matrix.variant }}-${{ github.sha }}
+          path: |
+            p11-${{ matrix.variant }}.patch
+            p11-${{ matrix.variant }}.json
+            p11-${{ matrix.variant }}.log
+            p11-${{ matrix.variant }}-summary.json
+          retention-days: 30
