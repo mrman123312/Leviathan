@@ -11,8 +11,6 @@
 
 #include <algorithm>
 #include <atomic>
-#include <cstdlib>
-#include <string>
 
 #include "position.h"
 #include "types.h"
@@ -32,7 +30,7 @@ struct State {
 
     bool zugzwangGuard = true;
     bool sacrificeRescue = true;
-    bool rule50Pressure = true;
+    static constexpr bool rule50Pressure = true;
 };
 
 inline State& state() {
@@ -40,8 +38,8 @@ inline State& state() {
     return s;
 }
 
-// Kept for source/API compatibility with the research binary. The race hot
-// path below does not branch on these mutable fields.
+// Compatibility setters remain for the UCI/research surface. Race-hot decisions
+// below are compile-time fixed; changes to these fields do not alter that profile.
 inline void set_enabled(bool v) { state().enabled = v; }
 inline void set_authority(int v) { state().authority = std::clamp(v, 0, 2); }
 inline void set_forcing_buyback(int v) { state().forcingBuyback = std::clamp(v, 0, 2048); }
@@ -52,7 +50,7 @@ inline void set_quiet_overdrive(int v) { state().quietOverdrive = std::clamp(v, 
 inline void set_rule50_pawn_bonus(int v) { state().rule50PawnBonus = std::clamp(v, 0, 16384); }
 inline void set_zugzwang_guard(bool v) { state().zugzwangGuard = v; }
 inline void set_sacrifice_rescue(bool v) { state().sacrificeRescue = v; }
-inline void set_rule50_pressure(bool v) { state().rule50Pressure = v; }
+inline void set_rule50_pressure(bool) {}
 
 inline constexpr bool ready() { return true; }
 
