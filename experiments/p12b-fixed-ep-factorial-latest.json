@@ -1,0 +1,8 @@
+{
+  "schema": "LV_P12B_FIXED_EP_FACTORIAL_V1",
+  "p01_sha": "3404fa2ea9b4fe75236e2584be9da3416e646ec2",
+  "workflow_sha": "05a4aac9e34674729146ada706a6aac5bba5e026",
+  "variants": [],
+  "best_targeted": null,
+  "rule": "targeted EP evidence only; broad promotion requires prospective non-EP regression and game evidence"
+}
