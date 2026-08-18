@@ -1,0 +1,133 @@
+name: P18 NNUE Disagreement Diagnostic
+
+on:
+  push:
+    branches: [agent/p18-nnue-disagreement-diagnostic]
+    paths: ['.github/workflows/p18-nnue-disagreement-diagnostic.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 95
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with: {ref: 3404fa2ea9b4fe75236e2584be9da3416e646ec2, path: p01, fetch-depth: 1}
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          repository: official-stockfish/Stockfish
+          ref: 5062aee519a1ba262d472d8ab139851ced56573e
+          path: sf
+          fetch-depth: 1
+      - name: Build exact engines
+        run: |
+          set -euo pipefail
+          for d in p01 sf; do make -C "$d/src" net; make -C "$d/src" clean; make -C "$d/src" -j2 ARCH=x86-64-avx2 build; done
+          python3 -m pip install --disable-pip-version-check 'python-chess>=1.999,<2'
+      - name: Generate and diagnose 120 fresh positions
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir result
+          cat > result/diagnose.py <<'PY'
+          import json,math,random,re,statistics,subprocess
+          from pathlib import Path
+          import chess,chess.engine
+          SEED=2026081718910;TARGET=120;SHALLOW=50000;ORACLE=600000;GRADE=250000
+          def cfg(e):
+            o={}
+            for k,v in [('Threads',1),('Hash',64),('Leviathan Fundamentals',True),('Leviathan Fundamentals Authority',1),('Leviathan Quiet Overdrive',0)]:
+              if k in e.options:o[k]=v
+            for k in ['Leviathan Risk','Leviathan Policy','Leviathan MetaSearch','Leviathan Specialist','Leviathan Atlas','Leviathan Search DSL']:
+              if k in e.options:o[k]=False
+            if o:e.configure(o)
+          def cp(i,c):
+            s=i.get('score');return None if s is None else s.pov(c).score(mate_score=100000)
+          class EvalTrace:
+            def __init__(self,path):
+              self.p=subprocess.Popen([path],stdin=subprocess.PIPE,stdout=subprocess.PIPE,text=True,bufsize=1)
+              self.send('uci');self.until('uciok');self.send('setoption name Threads value 1');self.send('setoption name Hash value 64');self.send('setoption name Leviathan Fundamentals value true');self.send('setoption name Leviathan Fundamentals Authority value 1');self.send('setoption name Leviathan Quiet Overdrive value 0');self.send('isready');self.until('readyok')
+            def send(self,s):self.p.stdin.write(s+'\n');self.p.stdin.flush()
+            def until(self,x):
+              while True:
+                l=self.p.stdout.readline()
+                if not l:raise RuntimeError('engine closed')
+                if x in l:return l
+            def score(self,fen):
+              self.send('position fen '+fen);self.send('eval');used=None
+              while True:
+                l=self.p.stdout.readline()
+                if not l:raise RuntimeError('engine closed during eval')
+                if '<-- this bucket is used' in l:
+                  nums=re.findall(r'[+-]?\d+\.\d+',l)
+                  if len(nums)>=3:used=(float(nums[0]),float(nums[1]),float(nums[2]))
+                if l.startswith('Final evaluation:'):break
+              if used is None:raise RuntimeError('used NNUE bucket not found')
+              return {'psqt_pawns':used[0],'positional_pawns':used[1],'total_pawns':used[2],'disagreement_pawns':abs(used[0]-used[1])}
+            def close(self):
+              try:self.send('quit');self.p.wait(timeout=5)
+              except Exception:self.p.kill()
+          def ranks(xs):
+            order=sorted(range(len(xs)),key=lambda i:xs[i]);r=[0.0]*len(xs);i=0
+            while i<len(order):
+              j=i+1
+              while j<len(order) and xs[order[j]]==xs[order[i]]:j+=1
+              v=(i+j-1)/2+1
+              for k in range(i,j):r[order[k]]=v
+              i=j
+            return r
+          def pearson(x,y):
+            mx=statistics.fmean(x);my=statistics.fmean(y);a=sum((u-mx)*(v-my) for u,v in zip(x,y));b=math.sqrt(sum((u-mx)**2 for u in x)*sum((v-my)**2 for v in y));return a/b if b else 0.0
+          def auc(scores,labels):
+            pos=sum(labels);neg=len(labels)-pos
+            if not pos or not neg:return None
+            rs=ranks(scores);return (sum(r for r,l in zip(rs,labels) if l)-pos*(pos+1)/2)/(pos*neg)
+          rng=random.Random(SEED);gen=chess.engine.SimpleEngine.popen_uci('sf/src/stockfish');sh=chess.engine.SimpleEngine.popen_uci('p01/src/stockfish');oo=chess.engine.SimpleEngine.popen_uci('sf/src/stockfish');gg=chess.engine.SimpleEngine.popen_uci('sf/src/stockfish');tr=EvalTrace('p01/src/stockfish')
+          for e in (gen,oo,gg):e.configure({'Threads':1,'Hash':64})
+          cfg(sh);fens=[];seen=set();attempt=0
+          try:
+            while len(fens)<TARGET and attempt<500:
+              attempt+=1;b=chess.Board();plies=rng.choice([8,12,16,20,24,28,32,36])
+              for ply in range(plies):
+                if b.is_game_over():break
+                infos=gen.analyse(b,chess.engine.Limit(nodes=1400),multipv=min(5,b.legal_moves.count()),game=('w',attempt,ply));infos=infos if isinstance(infos,list) else [infos]
+                rr=[(x['pv'][0],int(x['score'].pov(b.turn).score(mate_score=100000) or 0)) for x in infos if x.get('pv')]
+                if not rr:break
+                best=rr[0][1];vi=[x for x in rr if best-x[1]<=120] or rr[:1];b.push(rng.choice(vi)[0])
+              if b.is_game_over():continue
+              key=' '.join(b.fen().split()[:4])
+              if key in seen:continue
+              sc=cp(gen.analyse(b,chess.engine.Limit(nodes=7000),game=('f',attempt)),b.turn)
+              if sc is not None and abs(sc)<=300 and b.legal_moves.count()>=8:seen.add(key);fens.append(b.fen())
+            if len(fens)<TARGET:raise RuntimeError(f'only {len(fens)} positions')
+            rows=[]
+            for i,fen in enumerate(fens):
+              b=chess.Board(fen);col=b.turn;sig=tr.score(fen);oi=oo.analyse(b,chess.engine.Limit(nodes=ORACLE),game=('o',i));os=cp(oi,col);om=oi.get('pv',[None])[0]
+              sr=sh.play(b,chess.engine.Limit(nodes=SHALLOW),info=chess.engine.INFO_ALL,game=('s',i));sm=sr.move;sg=cp(gg.analyse(b,chess.engine.Limit(nodes=GRADE),root_moves=[sm],game=('g',i)),col);reg=max(0,os-sg) if os is not None and sg is not None else 0
+              rows.append({'fen':fen,**sig,'oracle_move':om.uci() if om else None,'shallow_move':sm.uci(),'move_mismatch':bool(om and sm!=om),'regret_cp':reg,'shallow_depth':sr.info.get('depth'),'shallow_nodes':sr.info.get('nodes')});print(i+1,sig['disagreement_pawns'],reg,flush=True)
+          finally:
+            for e in (gen,sh,oo,gg):e.quit()
+            tr.close()
+          x=[r['disagreement_pawns'] for r in rows];y=[r['regret_cp'] for r in rows];m=[int(r['move_mismatch']) for r in rows];bad=[int(r['regret_cp']>=20) for r in rows];idx=sorted(range(len(rows)),key=lambda i:x[i]);q=max(1,len(rows)//5);lo=idx[:q];hi=idx[-q:]
+          out={'schema':'LV_P18_NNUE_DISAGREEMENT_DIAGNOSTIC_V1','positions':len(rows),'spearman_disagreement_vs_regret':pearson(ranks(x),ranks(y)),'pearson_disagreement_vs_regret':pearson(x,y),'auc_move_mismatch':auc(x,m),'auc_regret_ge_20cp':auc(x,bad),'mean_regret_cp':statistics.fmean(y),'top_quintile_mean_regret_cp':statistics.fmean(y[i] for i in hi),'bottom_quintile_mean_regret_cp':statistics.fmean(y[i] for i in lo),'top_quintile_mismatch_rate':statistics.fmean(m[i] for i in hi),'bottom_quintile_mismatch_rate':statistics.fmean(m[i] for i in lo),'disagreement_median_pawns':statistics.median(x),'regret_ge_20_count':sum(bad),'rule':'diagnostic only; no search mutation unless disagreement prospectively predicts error materially better than generic metadata routers'}
+          Path('result/fens.txt').write_text('\n'.join(fens)+'\n');Path('result/rows.json').write_text(json.dumps(rows,indent=2)+'\n');Path('result/summary.json').write_text(json.dumps(out,indent=2)+'\n');print(json.dumps(out,indent=2))
+          PY
+          python3 result/diagnose.py
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: p18-${{ github.sha }}
+          path: result/
+          retention-days: 30
+      - name: Commit durable result
+        if: always()
+        run: |
+          set -euo pipefail
+          test -s result/summary.json || exit 0
+          git clone -q --depth 1 --branch agent/p18-nnue-disagreement-diagnostic "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" record
+          mkdir -p record/experiments;cp result/summary.json record/experiments/p18-nnue-disagreement-diagnostic-latest.json
+          cd record;git config user.name 'github-actions[bot]';git config user.email '41898282+github-actions[bot]@users.noreply.github.com';git add experiments/p18-nnue-disagreement-diagnostic-latest.json
+          if ! git diff --cached --quiet;then git commit -m 'P18: record NNUE disagreement diagnostic';git push;fi
