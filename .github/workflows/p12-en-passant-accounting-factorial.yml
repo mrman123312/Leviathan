@@ -1,0 +1,255 @@
+name: P12 En Passant Accounting Factorial
+
+on:
+  push:
+    branches: [agent/p12-en-passant-accounting-factorial]
+    paths: ['.github/workflows/p12-en-passant-accounting-factorial.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  corpus:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 40
+    steps:
+      - name: Checkout pinned Stockfish generator
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          repository: official-stockfish/Stockfish
+          ref: 5062aee519a1ba262d472d8ab139851ced56573e
+          path: oracle
+          fetch-depth: 1
+      - name: Build generator and create fixed EP corpus
+        run: |
+          set -euo pipefail
+          make -C oracle/src net
+          make -C oracle/src clean
+          make -C oracle/src -j2 ARCH=x86-64-avx2 build
+          python3 -m pip install --disable-pip-version-check 'python-chess>=1.999,<2'
+          mkdir corpus
+          cat > corpus/generate.py <<'PY'
+          import random
+          from pathlib import Path
+          import chess,chess.engine
+          SEED=2026081708910; TARGET=36
+          def cp(info,color):
+              s=info.get('score'); return None if s is None else s.pov(color).score(mate_score=100000)
+          def eps(b): return [m for m in b.legal_moves if b.is_en_passant(m)]
+          def creates_ep(b,m):
+              if b.piece_type_at(m.from_square)!=chess.PAWN or abs(m.to_square-m.from_square)!=16:return None
+              x=b.copy(stack=False);x.push(m);return x if eps(x) else None
+          rng=random.Random(SEED); e=chess.engine.SimpleEngine.popen_uci('oracle/src/stockfish');e.configure({'Threads':1,'Hash':64})
+          out=[];seen=set();attempt=0
+          try:
+            while len(out)<TARGET and attempt<1600:
+              attempt+=1;b=chess.Board();target=rng.choice([10,14,18,22,26,30,34])
+              for ply in range(target):
+                if b.is_game_over():break
+                hs=[]
+                for m in list(b.legal_moves):
+                  x=creates_ep(b,m)
+                  if x is not None:hs.append((m,x))
+                rng.shuffle(hs)
+                for m,x in hs[:4]:
+                  key=' '.join(x.fen().split()[:4])
+                  if key in seen:continue
+                  info=e.analyse(x,chess.engine.Limit(nodes=8000),game=('f',attempt,ply,m.uci()));sc=cp(info,x.turn)
+                  if sc is not None and abs(sc)<=300 and x.legal_moves.count()>=6:
+                    seen.add(key);out.append(x.fen());print(len(out),sc,[z.uci() for z in eps(x)],flush=True)
+                    if len(out)>=TARGET:break
+                if len(out)>=TARGET:break
+                infos=e.analyse(b,chess.engine.Limit(nodes=1400),multipv=min(6,b.legal_moves.count()),game=('w',attempt,ply))
+                if not isinstance(infos,list):infos=[infos]
+                rr=[(z['pv'][0],int(z['score'].pov(b.turn).score(mate_score=100000) or 0)) for z in infos if z.get('pv')]
+                if not rr:break
+                best=rr[0][1]; viable=[z for z in rr if best-z[1]<=130] or rr[:1];b.push(rng.choice(viable)[0])
+            if len(out)<TARGET:raise RuntimeError(f'only {len(out)} positions')
+            Path('corpus/fens.txt').write_text('\n'.join(out)+'\n')
+          finally:e.quit()
+          PY
+          python3 corpus/generate.py
+          sha256sum corpus/fens.txt | tee corpus/fens.sha256
+      - uses: actions/upload-artifact@v4
+        with:
+          name: p12-ep-corpus-${{ github.sha }}
+          path: corpus/fens.txt
+          retention-days: 30
+
+  test:
+    needs: corpus
+    runs-on: ubuntu-22.04
+    timeout-minutes: 95
+    strategy:
+      fail-fast: false
+      matrix:
+        variant: [prune, order, history, qsearch, all]
+    env:
+      VARIANT: ${{ matrix.variant }}
+    steps:
+      - name: Checkout exact P01 candidate
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: 3404fa2ea9b4fe75236e2584be9da3416e646ec2
+          path: cand
+          fetch-depth: 1
+      - name: Checkout exact P01 baseline
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: 3404fa2ea9b4fe75236e2584be9da3416e646ec2
+          path: base
+          fetch-depth: 1
+      - name: Checkout pinned Stockfish oracle
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          repository: official-stockfish/Stockfish
+          ref: 5062aee519a1ba262d472d8ab139851ced56573e
+          path: oracle
+          fetch-depth: 1
+      - uses: actions/download-artifact@v4
+        with:
+          name: p12-ep-corpus-${{ github.sha }}
+          path: corpus
+
+      - name: Materialize one accounting surface
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+          v=os.environ['VARIANT']; prune=v in ('prune','all'); order=v in ('order','all'); hist=v in ('history','all'); qs=v in ('qsearch','all')
+
+          if prune:
+            p=Path('cand/src/search.cpp');s=p.read_text()
+            old="                Piece capturedPiece = pos.piece_on(move.to_sq());\n                int   captHist = captureHistory[movedPiece][move.to_sq()][type_of(capturedPiece)];"
+            new="                Piece capturedPiece = move.type_of() == EN_PASSANT\n                                        ? make_piece(~us, PAWN)\n                                        : pos.piece_on(move.to_sq());\n                int   captHist = captureHistory[movedPiece][move.to_sq()][type_of(capturedPiece)];"
+            if s.count(old)!=1:raise SystemExit('prune anchor mismatch')
+            p.write_text(s.replace(old,new,1))
+
+          if order:
+            p=Path('cand/src/movepick.cpp');s=p.read_text()
+            old="        const Piece     capturedPiece = pos.piece_on(to);"
+            new="        const Piece     capturedPiece = m.type_of() == EN_PASSANT\n                                            ? make_piece(~us, PAWN)\n                                            : pos.piece_on(to);"
+            if s.count(old)!=1:raise SystemExit('order anchor mismatch')
+            p.write_text(s.replace(old,new,1))
+
+          if hist:
+            p=Path('cand/src/search.cpp');s=p.read_text()
+            old="        capturedPiece = type_of(pos.piece_on(bestMove.to_sq()));\n        captureHistory[movedPiece][bestMove.to_sq()][capturedPiece] << bonus * 1427 / 1024;"
+            new="        capturedPiece = bestMove.type_of() == EN_PASSANT ? PAWN\n                                                            : type_of(pos.piece_on(bestMove.to_sq()));\n        captureHistory[movedPiece][bestMove.to_sq()][capturedPiece] << bonus * 1427 / 1024;"
+            if s.count(old)!=1:raise SystemExit('history best anchor mismatch')
+            s=s.replace(old,new,1)
+            old="        movedPiece    = pos.moved_piece(move);\n        capturedPiece = type_of(pos.piece_on(move.to_sq()));\n        captureHistory[movedPiece][move.to_sq()][capturedPiece] << -malus * 1489 / 1024;"
+            new="        movedPiece    = pos.moved_piece(move);\n        capturedPiece = move.type_of() == EN_PASSANT ? PAWN : type_of(pos.piece_on(move.to_sq()));\n        captureHistory[movedPiece][move.to_sq()][capturedPiece] << -malus * 1489 / 1024;"
+            if s.count(old)!=1:raise SystemExit('history searched anchor mismatch')
+            p.write_text(s.replace(old,new,1))
+
+          if qs:
+            p=Path('cand/src/search.cpp');s=p.read_text()
+            old="                const Value leviathanCaptureCeiling =\n                  futilityBase + PieceValue[pos.piece_on(move.to_sq())];"
+            new="                const Value leviathanCapturedValue = move.type_of() == EN_PASSANT\n                  ? PawnValue : PieceValue[pos.piece_on(move.to_sq())];\n                const Value leviathanCaptureCeiling = futilityBase + leviathanCapturedValue;"
+            if s.count(old)!=1:raise SystemExit('qsearch anchor mismatch')
+            p.write_text(s.replace(old,new,1))
+          PY
+          git -C cand diff --check
+          git -C cand diff -- src/search.cpp src/movepick.cpp | tee "p12-${VARIANT}.patch"
+
+      - name: Build engines
+        run: |
+          set -euo pipefail
+          for d in base cand oracle; do
+            make -C "$d/src" net
+            make -C "$d/src" clean
+            make -C "$d/src" -j2 ARCH=x86-64-avx2 build
+          done
+          python3 -m pip install --disable-pip-version-check 'python-chess>=1.999,<2'
+
+      - name: Grade targeted EP corpus
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir result
+          cat > result/test.py <<'PY'
+          import json,os,statistics
+          from pathlib import Path
+          import chess,chess.engine
+          CHOICE_NODES=100000;ORACLE_NODES=900000;GRADE_NODES=350000
+          fens=[x.strip() for x in open('corpus/fens.txt') if x.strip()]
+          def cfg(e):
+            o={};
+            for k,val in [('Threads',1),('Hash',64),('Leviathan Fundamentals',True),('Leviathan Fundamentals Authority',1),('Leviathan Quiet Overdrive',0)]:
+              if k in e.options:o[k]=val
+            for k in ['Leviathan Risk','Leviathan Policy','Leviathan MetaSearch','Leviathan Specialist','Leviathan Atlas','Leviathan Search DSL']:
+              if k in e.options:o[k]=False
+            if o:e.configure(o)
+          def cp(i,c):
+            s=i.get('score');return None if s is None else s.pov(c).score(mate_score=100000)
+          def eps(b):return [m for m in b.legal_moves if b.is_en_passant(m)]
+          base=chess.engine.SimpleEngine.popen_uci('base/src/stockfish');cand=chess.engine.SimpleEngine.popen_uci('cand/src/stockfish')
+          ob=chess.engine.SimpleEngine.popen_uci('oracle/src/stockfish');gb=chess.engine.SimpleEngine.popen_uci('oracle/src/stockfish');gc=chess.engine.SimpleEngine.popen_uci('oracle/src/stockfish')
+          cfg(base);cfg(cand)
+          for e in (ob,gb,gc):e.configure({'Threads':1,'Hash':64})
+          rows=[]
+          try:
+            for i,fen in enumerate(fens):
+              b=chess.Board(fen);col=b.turn; em=[m.uci() for m in eps(b)]
+              oi=ob.analyse(b,chess.engine.Limit(nodes=ORACLE_NODES),game=('o',i));os=cp(oi,col);om=oi.get('pv',[None])[0]
+              order=[('base',base),('cand',cand)] if i%2==0 else [('cand',cand),('base',base)];ch={}
+              for n,e in order:
+                r=e.play(b,chess.engine.Limit(nodes=CHOICE_NODES),info=chess.engine.INFO_ALL,game=(n,i));ch[n]=r.move
+              bm,cm=ch['base'],ch['cand']
+              bg=cp(gb.analyse(b,chess.engine.Limit(nodes=GRADE_NODES),root_moves=[bm],game=('gb',i)),col)
+              cg=cp(gc.analyse(b,chess.engine.Limit(nodes=GRADE_NODES),root_moves=[cm],game=('gc',i)),col)
+              reg=lambda g:max(0,os-g) if os is not None and g is not None else None
+              br,cr=reg(bg),reg(cg);delta=br-cr
+              rows.append({'fen':fen,'ep_moves':em,'oracle_move':om.uci() if om else None,'base_move':bm.uci(),'cand_move':cm.uci(),'base_regret':br,'cand_regret':cr,'improvement_cp':delta})
+              print(i+1,bm,cm,delta,flush=True)
+          finally:
+            for e in (base,cand,ob,gb,gc):e.quit()
+          ds=[r['improvement_cp'] for r in rows];changed=[r for r in rows if r['base_move']!=r['cand_move']]
+          out={'variant':os.environ['VARIANT'],'positions':len(rows),'changed_roots':len(changed),'base_mean_regret_cp':statistics.mean(r['base_regret'] for r in rows),'candidate_mean_regret_cp':statistics.mean(r['cand_regret'] for r in rows),'mean_improvement_cp':statistics.mean(ds),'median_improvement_cp':statistics.median(ds),'better':sum(x>0 for x in ds),'tie':sum(x==0 for x in ds),'worse':sum(x<0 for x in ds),'largest_rescue_cp':max(ds),'largest_harm_cp':min(ds),'ep_choices_base':sum(r['base_move'] in r['ep_moves'] for r in rows),'ep_choices_candidate':sum(r['cand_move'] in r['ep_moves'] for r in rows)}
+          Path('result/rows.json').write_text(json.dumps(rows,indent=2)+'\n');Path('result/summary.json').write_text(json.dumps(out,indent=2)+'\n');print(json.dumps(out,indent=2))
+          PY
+          python3 result/test.py
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: p12-${{ matrix.variant }}-${{ github.sha }}
+          path: |
+            result/
+            p12-${{ matrix.variant }}.patch
+          retention-days: 30
+
+  aggregate:
+    needs: test
+    if: always()
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: agent/p12-en-passant-accounting-factorial
+          fetch-depth: 1
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: p12-*-${{ github.sha }}
+          path: p12-results
+      - name: Record durable evidence
+        run: |
+          set -euo pipefail
+          mkdir -p experiments
+          python3 - <<'PY'
+          import glob,json,os
+          rows=[]
+          for f in sorted(glob.glob('p12-results/p12-*/result/summary.json')):
+            try:rows.append(json.load(open(f)))
+            except Exception as e:rows.append({'file':f,'error':str(e)})
+          best=max(rows,key=lambda r:r.get('mean_improvement_cp',-1e9),default=None)
+          out={'schema':'LV_P12_EP_ACCOUNTING_FACTORIAL_V1','p01_sha':'3404fa2ea9b4fe75236e2584be9da3416e646ec2','workflow_sha':os.environ.get('GITHUB_SHA'),'variants':rows,'best_targeted':best,'rule':'targeted evidence only; promotion requires a positive causal EP signal plus fresh broad regression/game evidence'}
+          open('experiments/p12-en-passant-accounting-factorial-latest.json','w').write(json.dumps(out,indent=2)+'\n');print(json.dumps(out,indent=2))
+          PY
+          git config user.name 'github-actions[bot]';git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add experiments/p12-en-passant-accounting-factorial-latest.json
+          if ! git diff --cached --quiet; then git commit -m 'P12: record en-passant accounting evidence';git push origin HEAD:agent/p12-en-passant-accounting-factorial;fi
