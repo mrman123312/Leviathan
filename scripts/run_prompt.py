@@ -160,13 +160,19 @@ def load_local(args: argparse.Namespace) -> tuple[Any, Any]:
         model_dir,
         trust_remote_code=args.trust_remote_code,
     )
-    model = AutoModelForCausalLM.from_pretrained(
-        model_dir,
-        device_map=args.device_map,
-        torch_dtype="auto",
-        trust_remote_code=args.trust_remote_code,
-        low_cpu_mem_usage=True,
-    )
+    model_kwargs: dict[str, Any] = {
+        "device_map": args.device_map,
+        "dtype": "auto",
+        "trust_remote_code": args.trust_remote_code,
+        "low_cpu_mem_usage": True,
+    }
+    if args.mop0_reference:
+        # Keep the donor baseline and our Python tile wrapper on the same explicit
+        # expert implementation. Grouped/deepgemm kernels are the later speed path;
+        # the reference path must be inspectable and not silently bypassed.
+        model_kwargs["experts_implementation"] = "eager"
+
+    model = AutoModelForCausalLM.from_pretrained(model_dir, **model_kwargs)
     model.eval()
 
     if args.mop0_reference:
@@ -175,7 +181,7 @@ def load_local(args: argparse.Namespace) -> tuple[Any, Any]:
         report = install_mop0_reference(model, tile_width=args.tile_width)
         print(
             "MoP-0 reference installed: "
-            f"{report.wrapped_experts} local routed experts across "
+            f"{report.wrapped_experts} routed experts across "
             f"{report.moe_modules} MoE modules. This path is a parity oracle, not a speed path.",
             file=sys.stderr,
         )
