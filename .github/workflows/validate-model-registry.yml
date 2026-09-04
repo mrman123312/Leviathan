@@ -5,9 +5,13 @@ on:
     paths:
       - 'spec/model-registry.toml'
       - 'spec/omega-transplant.toml'
+      - 'spec/deepseek-v4-mop.toml'
+      - 'spec/architecture.yaml'
       - 'scripts/validate_model_registry.py'
+      - 'scripts/prepare_deepseek_v4_mop.py'
       - 'src/leviathan/model_registry.py'
       - 'src/leviathan/transplant.py'
+      - 'src/leviathan/deepseek_v4_mop.py'
       - 'tests/**'
       - 'pyproject.toml'
       - '.github/workflows/validate-model-registry.yml'
@@ -15,9 +19,13 @@ on:
     paths:
       - 'spec/model-registry.toml'
       - 'spec/omega-transplant.toml'
+      - 'spec/deepseek-v4-mop.toml'
+      - 'spec/architecture.yaml'
       - 'scripts/validate_model_registry.py'
+      - 'scripts/prepare_deepseek_v4_mop.py'
       - 'src/leviathan/model_registry.py'
       - 'src/leviathan/transplant.py'
+      - 'src/leviathan/deepseek_v4_mop.py'
       - 'tests/**'
       - 'pyproject.toml'
       - '.github/workflows/validate-model-registry.yml'
@@ -35,7 +43,7 @@ jobs:
           python-version: '3.11'
       - name: Install Leviathan
         run: python -m pip install -e .
-      - name: Validate model registry and Omega references
+      - name: Validate model registry, Omega references and V4 MoP contract
         run: python scripts/validate_model_registry.py
       - name: Run Omega unit tests
         run: python -m unittest discover -s tests -v
