@@ -163,7 +163,7 @@ A key lifetime-learning mechanism is converting expensive successful trajectorie
 
 ```text
 first encounter:
-  large reasoner + search + many tools
+  more active parameters/passes + search state + tools
 
 repeated verified encounters:
   abstract common structure

@@ -82,7 +82,7 @@ model learns patterns that fool its reward model or chooses the weakest verifier
 Defense:
 - verifier independence scoring,
 - formal/deterministic checks where possible,
-- verifier rotation/ensembles,
+- multiple independent external measurements where justified,
 - adversarial evaluation,
 - do not allow the learner to modify final promotion criteria.
 
@@ -93,7 +93,7 @@ Failure:
 generator and critic share the same blind spot.
 
 Defense:
-- different model families/data when possible,
+- external evaluators built from different model families/data when necessary,
 - deterministic tools,
 - formal systems,
 - real measurements,
@@ -226,13 +226,14 @@ Defense:
 
 Failure:
 
-router picks models/experts that are mathematically strong but cause severe cluster congestion or communication stalls.
+router picks internal parameter bases or precision modes that are mathematically strong
+but cause severe cluster congestion or communication stalls.
 
 Defense:
 - include hardware load in routing utility,
-- admission control,
+- admission control inside the one-model serving path,
 - load-aware expert biases,
-- fallback model portfolio.
+- safe budget reduction or explicit halt instead of a hidden model portfolio.
 
 ## 19. Information-gain obsession
 

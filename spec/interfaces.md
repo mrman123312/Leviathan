@@ -2,6 +2,83 @@
 
 This file defines conceptual contracts between Leviathan modules. The goal is to avoid hiding system state inside opaque prompts.
 
+## Unified agent envelope
+
+```python
+GoalFrame(
+    id: str,                         # digest of the immutable fields
+    original: str,
+    success_criteria: tuple[str, ...],
+    constraints: tuple[str, ...],
+    risk_budget: float,
+)
+
+AgentSnapshot(
+    agent_id: str,
+    model_id: str,
+    kernel_manifest: KernelManifest,
+    goal: GoalFrame,
+    policy_digest: str,
+    cycle: int,
+    status: str,
+    observation_ids: tuple[str, ...],
+    event_count: int,
+    episode_count: int,
+)
+```
+
+Only the unified agent owns mutable task state. It passes an immutable snapshot with
+the original goal restored to exactly one cognitive model.
+
+## Single cognitive kernel
+
+```python
+CognitiveKernel(
+    model_id: str,
+    manifest: KernelManifest,          # exact one-model resource counts
+    infer(context: CognitiveContext) -> InferenceTrace,
+)
+
+CognitiveContext(
+    agent_id: str,
+    goal_id: str,
+    observation: object,
+    meta: MetaSnapshot,
+    allowed_modes: frozenset[CognitiveMode],
+    refinement_budget: int,
+)
+
+InferenceTrace(
+    status: Literal['decided', 'budget_exhausted', 'no_decision'],
+    decision: CognitiveCandidate | None,
+    confidence: float,
+    uncertainty: float,
+    refinement_steps: int,
+    forward_passes: int,
+    active_parameters: int,
+    total_parameters: int,
+    route_entropy: float,
+)
+```
+
+The kernel boundary is singular. Parameter bases may be selected as tensor slices
+inside its forward pass, but they have no IDs, private state, model interface, messages,
+votes, goals, outputs, optimizers or checkpoints. The kernel cannot execute, certify
+itself, promote learning, or modify the goal/policy. `budget_exhausted`, `no_decision`,
+invalid output and exceptions stop before the action gateway.
+`LeviathanAgent` rejects a manifest with any count other than the contract in
+`spec/one-agent.yaml`, including any nonzero `independent_internal_models` count.
+
+The current trainable operator is:
+
+```python
+y = x @ W_base + bias + sum(gate[e] * ((x @ A[e]) @ B[e]))
+```
+
+`UnifiedMoP` owns every term, one loss and one optimizer state. `B` is zero-initialized
+for exact insertion parity. Adaptive recurrence is not part of the interface contract;
+if admitted later, it must reuse the same parameters and shared latent state.
+
 ## Belief
 
 ```python
@@ -143,6 +220,29 @@ Action(
     authorization_class: str,
 )
 ```
+
+Before an external action, the agent freezes it into an authority-bound contract:
+
+```python
+ActionContract(
+    id: str,
+    agent_id: str,
+    goal_id: str,
+    policy_digest: str,
+    candidate_id: str,
+    mode: CognitiveMode,
+    payload: object,
+    expected_observation: object,
+    preconditions: tuple[str, ...],
+    risk: float,
+    reversible: bool,
+    authorization_class: str,
+    verifier: str | None,
+)
+```
+
+The prediction record is emitted before this contract reaches the executor. The
+executor receives no mutable agent state.
 
 ## Verification
 

@@ -94,6 +94,8 @@ Availability, licensing and repository IDs can change. Before any large download
 
 ## Teacher-ensemble rule
 
+The teacher set is an offline data-production and evaluation mechanism, not the agent.
+Runtime cognition has one student checkpoint and never calls this set as a committee.
 The teacher set is not an authority hierarchy.
 
 Agreement among teachers increases confidence only when paired with an independent verifier appropriate to the task. Disagreement is routed into evidence gathering, execution, formal checking, experiment, or curriculum generation.

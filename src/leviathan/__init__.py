@@ -1,6 +1,38 @@
 """Leviathan research scaffold."""
 
-from .controller import BaselineMetaController, UtilityWeights, should_continue_deliberating, utility
+from .agent import (
+    ActionContract,
+    ActionExecutor,
+    ActionOutcome,
+    AgentEvent,
+    AgentObservation,
+    AgentPolicy,
+    AgentSnapshot,
+    AgentStatus,
+    AgentTurnResult,
+    Episode,
+    GoalFrame,
+    LeviathanAgent,
+    OutcomeVerifier,
+)
+from .controller import (
+    BaselineMetaController,
+    UtilityWeights,
+    should_continue_deliberating,
+    utility,
+)
+from .kernel import (
+    CognitiveCandidate,
+    CognitiveContext,
+    CognitiveKernel,
+    InferenceStatus,
+    InferenceTrace,
+    KernelManifest,
+    MetaSnapshot,
+    ScriptedKernel,
+)
+from .mop import AdamOptimizer, MoPConfig, MoPForward, UnifiedMoP
+from .mop_kernel import VectorMoPKernel, VectorObservation
 from .trust import PromotionThresholds, candidate_trust, may_promote, verification_trust
 from .types import (
     Belief,
@@ -15,17 +47,44 @@ from .types import (
 )
 
 __all__ = [
+    "ActionContract",
+    "ActionExecutor",
+    "ActionOutcome",
+    "AdamOptimizer",
+    "AgentEvent",
+    "AgentObservation",
+    "AgentPolicy",
+    "AgentSnapshot",
+    "AgentStatus",
+    "AgentTurnResult",
     "BaselineMetaController",
     "Belief",
+    "CognitiveCandidate",
+    "CognitiveContext",
+    "CognitiveKernel",
     "CognitiveMode",
+    "Episode",
+    "GoalFrame",
+    "InferenceStatus",
+    "InferenceTrace",
+    "KernelManifest",
     "LearningCandidate",
+    "LeviathanAgent",
+    "MetaSnapshot",
     "MetaState",
+    "MoPConfig",
+    "MoPForward",
     "ModeEstimate",
+    "OutcomeVerifier",
     "PromotionThresholds",
     "Provenance",
     "ProvenanceKind",
+    "ScriptedKernel",
     "UncertaintyKind",
+    "UnifiedMoP",
     "UtilityWeights",
+    "VectorMoPKernel",
+    "VectorObservation",
     "Verification",
     "candidate_trust",
     "may_promote",

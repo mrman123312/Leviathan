@@ -105,6 +105,8 @@ rule = "simulated outcomes never receive grounded-reality trust without external
 members = ["kimi-k3", "glm-5.3", "qwen3.8-2.4t-a95b", "deepseek-v4-pro-0813", "glm-5.3-flash"]
 consensus_policy = "verifier_weighted_not_majority_vote"
 disagreement_policy = "route_to_verification_or_curriculum"
+runtime_inference = false
+distill_into_single_student_checkpoint = true
 
 [evaluation]
 metrics = [

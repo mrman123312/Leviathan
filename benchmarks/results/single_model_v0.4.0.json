@@ -1,0 +1,136 @@
+{
+  "ablation_conclusion": "post-hoc pruning failed; dense warmup followed by sparse training passed",
+  "decision": "promote_staged_sparse_operator; do_not_claim_numpy_latency_win",
+  "environment": {
+    "machine": "x86_64",
+    "numpy": "2.3.5",
+    "platform": "linux",
+    "python": "3.12.13"
+  },
+  "latency": {
+    "dense_batch512_us": 52.894,
+    "mop_all_batch512_us": 764.2725,
+    "mop_top2_batch512_us": 343.2805
+  },
+  "latency_protocol": {
+    "batch_size": 512,
+    "model_seed": 29,
+    "statistic": "median_microseconds",
+    "timed_repeats": 300,
+    "warmup_repeats": 30
+  },
+  "metrics": {
+    "dense_composition_mse": {
+      "mean": 1.0346580771176717,
+      "std": 0.1013024533307507
+    },
+    "dense_macs": {
+      "mean": 566.0,
+      "std": 0.0
+    },
+    "dense_parameters": {
+      "mean": 591.0,
+      "std": 0.0
+    },
+    "dense_test_mse": {
+      "mean": 0.3343879120440457,
+      "std": 0.08211813568702891
+    },
+    "mop_parameters": {
+      "mean": 582.0,
+      "std": 0.0
+    },
+    "mop_top2_active_parameters": {
+      "mean": 258.0,
+      "std": 0.0
+    },
+    "mop_top2_macs": {
+      "mean": 256.0,
+      "std": 0.0
+    },
+    "posthoc_all_test_mse": {
+      "mean": 0.02163022148959926,
+      "std": 0.005532825412477877
+    },
+    "posthoc_route_entropy": {
+      "mean": 1.5023490450297001,
+      "std": 0.04684225162683574
+    },
+    "posthoc_top2_test_mse": {
+      "mean": 0.8344156956837742,
+      "std": 0.2331858757167802
+    },
+    "staged_all_test_mse": {
+      "mean": 0.10428356940175604,
+      "std": 0.032533096667246575
+    },
+    "staged_route_entropy": {
+      "mean": 1.043803669222077,
+      "std": 0.08978035917196253
+    },
+    "staged_top1_test_mse": {
+      "mean": 0.16541666522644724,
+      "std": 0.0752934713072212
+    },
+    "staged_top2_composition_mse": {
+      "mean": 0.3013263498869752,
+      "std": 0.11081432996154282
+    },
+    "staged_top2_test_mse": {
+      "mean": 0.00939660547832815,
+      "std": 0.0014309696657352903
+    }
+  },
+  "next_experiment": "place the routed update inside one nonlinear sequence block, implement a fused kernel, and compare on real sequence tasks; recurrence remains disabled until that gate passes",
+  "nonlinear_negative_control": {
+    "dense_nonlinear_test_mse": {
+      "mean": 0.010026697932986836,
+      "std": 0.0028590628397449597
+    },
+    "mop_nonlinear_test_mse": {
+      "mean": 0.11512490842802138,
+      "std": 0.03193980126713967
+    }
+  },
+  "parity": {
+    "full_svd_max_abs_error": 2.609024107869118e-15,
+    "zero_insert_max_abs_error": 0.0
+  },
+  "promotion_gates": {
+    "matched_total_parameters": true,
+    "staged_top2_beats_dense_mse": true,
+    "staged_top2_beats_full_route_mse": true,
+    "staged_top2_beats_posthoc_pruning": true,
+    "staged_top2_improves_composition_mse": true,
+    "top2_uses_at_most_60_percent_dense_macs": true,
+    "zero_insertion_parity": true
+  },
+  "scope": "conditional low-rank operator; not an AGI or language benchmark",
+  "seeds": [
+    7,
+    17,
+    29
+  ],
+  "single_model_invariant": {
+    "checkpoints": 1,
+    "independent_internal_models": 0,
+    "losses": 1,
+    "optimizers": 1,
+    "parameter_owners": 1,
+    "routers": 1
+  },
+  "systems_observations": {
+    "measured_numpy_latency_improved": false,
+    "top2_active_mac_fraction_vs_dense": 0.45229681978798586,
+    "top2_active_parameter_fraction": 0.44329896907216493,
+    "top2_numpy_latency_ratio_vs_dense": 6.48997050705184
+  },
+  "task_shape": {
+    "basis_count": 8,
+    "context_dim": 8,
+    "input_dim": 12,
+    "output_dim": 6,
+    "rank": 3
+  },
+  "training_steps_per_seed": 1200
+}

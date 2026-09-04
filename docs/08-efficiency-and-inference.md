@@ -202,13 +202,13 @@ The strongest lifetime efficiency mechanism is learning.
 First encounter:
 - search,
 - tool use,
-- large reasoner,
+- more active bases or shared-weight passes,
 - many tokens.
 
 Repeated encounter:
 - compiled procedural skill,
 - retrieval,
-- smaller model,
+- fewer active bases in the same model,
 - fewer actions.
 
 Eventually:

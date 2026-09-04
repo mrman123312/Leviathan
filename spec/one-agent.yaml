@@ -1,0 +1,256 @@
+version: "0.2"
+project: Leviathan
+runtime: single_model_agent
+
+definition:
+  identity: one_stable_agent_id
+  goal_state: one_externally_anchored_goal_frame
+  cognitive_model_count: 1
+  cognitive_state: one_serialized_shared_state
+  output: one_decision_distribution
+  action_authority: one_guarded_gateway
+  external_measurement: executor_and_verifier_are_not_cognitive_models
+
+single_model_contract:
+  exact_counts:
+    parameter_owners: 1
+    shared_cognitive_states: 1
+    routers: 1
+    objectives: 1
+    optimizers: 1
+    checkpoints: 1
+    independent_internal_models: 0
+  forbidden_internal_semantics:
+    - model_identities
+    - private_goals
+    - private_memories
+    - natural_language_messages
+    - proposals
+    - votes
+    - peer_recruitment
+    - coalitions
+    - independent_objectives
+    - independent_checkpoints
+  allowed_structure:
+    - ordinary_layers
+    - attention_heads
+    - tensorized_parameter_bases
+    - one_router_inside_the_model
+    - deterministic_search_state
+    - repeated_application_of_shared_weights
+  decision_test: >-
+    If a component can be separately prompted, independently optimized, independently
+    checkpointed, or can maintain a private task state, it is another model and is not
+    allowed inside the Leviathan cognitive boundary.
+
+invariants:
+  - id: immutable_goal
+    rule: "The cognitive model and learner MUST NOT rewrite the original goal or its constraints."
+  - id: one_cognitive_call_boundary
+    rule: "Each agent cycle MUST invoke exactly one CognitiveKernel and consume one InferenceTrace."
+  - id: single_effect_authority
+    rule: "Only the agent envelope may issue a goal-bound action contract."
+  - id: bounded_compute
+    rule: "Every model invocation and outer agent cycle MUST have explicit hard limits."
+  - id: no_decision_stops_action
+    rule: "Budget exhaustion, invalid output, or model failure MUST stop before action."
+  - id: prediction_before_action
+    rule: "Every external action MUST record an expected observation before execution."
+  - id: verifier_independence
+    rule: "Same-model self-evaluation alone MUST NOT authorize durable learning."
+  - id: negative_evidence_veto
+    rule: "One eligible independent negative verification MUST block successful promotion."
+  - id: learning_is_reversible
+    rule: "Parametric changes MUST be versioned, evaluated, and rollbackable."
+  - id: learner_not_governor
+    rule: "The learner MUST NOT control constitution, verifier thresholds, deployment, signing, or rollback."
+
+cognitive_kernel:
+  input:
+    - immutable_goal_reference
+    - shared_serialized_state
+    - provenance_tagged_observation
+    - metacognitive_features
+    - allowed_cognitive_modes
+    - refinement_budget
+  output:
+    - one_candidate_or_no_decision
+    - confidence
+    - uncertainty
+    - refinement_steps
+    - forward_passes
+    - active_parameter_count
+    - total_parameter_count
+    - route_entropy
+  may_not:
+    - access_executor_directly
+    - certify_its_own_output
+    - alter_goal_or_policy
+    - authorize_deployment
+
+tensorized_mixture_of_parameters:
+  status: executable_proof_operator
+  equation: "y = x W_base + b + sum_e g_e(c) (x A_e) B_e"
+  ownership: one_UnifiedMoP_object
+  basis_definition: tensor_slices_without_identity_state_or_callable_interface
+  router_definition: one_differentiable_layer_inside_the_same_model
+  output_definition: one_weighted_transformation_not_an_ensemble_vote
+  initialization:
+    basis_up: zero
+    guarantee: exact_base_function_parity
+  training:
+    parameter_state: one_dictionary
+    loss: one_mean_square_objective_in_current_experiment
+    optimizer: one_Adam_state_over_all_parameters
+    checkpoint: one_npz_file
+  adaptive_compute:
+    current: top_k_tensor_selection
+    posthoc_pruning: rejected_by_benchmark
+    promoted_schedule: dense_warmup_then_top2_training
+    recurrent_refinement: disabled_pending_nonlinear_sequence_gate
+
+outer_cycle:
+  order:
+    - assert_goal_and_policy_integrity
+    - receive_provenance_tagged_observation
+    - restore_immutable_goal_into_meta_state
+    - determine_admissible_cognitive_modes
+    - invoke_the_one_cognitive_kernel
+    - stop_on_failure_budget_exhaustion_or_no_decision
+    - return_internal_decision_or_build_action_contract
+    - enforce_risk_authority_reversibility_and_preconditions
+    - record_prediction
+    - execute_through_external_effect_port
+    - collect_independent_measurement
+    - close_episode
+    - record_verified_learning_evidence
+
+authority:
+  unified_agent_envelope:
+    owns:
+      - stable_identity
+      - immutable_goal_reference
+      - cycle_budget
+      - append_only_journal
+      - episodes
+      - action_contracts
+      - risk_and_authority_gate
+    does_not_own:
+      - independent_measurement_truth
+      - constitution_changes
+      - deployment_promotion
+  cognitive_model:
+    owns:
+      - one_parameter_state
+      - one_shared_latent_state
+      - one_inference_result
+    does_not_own:
+      - action_execution
+      - verification_eligibility
+      - unreviewed_online_core_updates
+  external_executor:
+    receives:
+      - frozen_action_contract
+    cannot_receive:
+      - mutable_agent_state
+  independent_verifier:
+    classification: measurement_boundary_not_collaborating_agent
+    receives:
+      - frozen_action_contract
+      - action_outcome
+    output:
+      - provenance_tagged_verification
+
+benchmark:
+  artifact: benchmarks/results/single_model_v0.4.0.json
+  scope: conditional_low_rank_operator_not_language_or_agi
+  seeds: [7, 17, 29]
+  steps_per_seed: 1200
+  matched_total_parameters:
+    unified_mop: 582
+    dense_mlp: 591
+  parity:
+    zero_insert_max_abs_error: 0.0
+    full_svd_max_abs_error: 2.609024107869118e-15
+  held_out_mse:
+    dense_mlp: 0.3343879120440457
+    posthoc_top2: 0.8344156956837742
+    staged_top2: 0.00939660547832815
+  unseen_composition_mse:
+    dense_mlp: 1.0346580771176717
+    staged_top2: 0.3013263498869752
+  nonlinear_negative_control_mse:
+    dense_mlp: 0.010026697932986836
+    staged_top2: 0.11512490842802138
+  systems:
+    top2_active_parameter_fraction: 0.44329896907216493
+    top2_active_mac_fraction_vs_dense: 0.45229681978798586
+    top2_numpy_latency_ratio_vs_dense: 6.48997050705184
+  conclusion:
+    promote: staged_sparse_low_rank_operator_only
+    reject:
+      - posthoc_sparsification
+      - numpy_wall_clock_speedup_claim
+      - whole_model_capability_claim
+      - recurrence_before_sequence_evidence
+
+learning:
+  implemented_now:
+    offline_operator_training:
+      - exact_explicit_gradients
+      - one_optimizer
+      - one_checkpoint
+    runtime_evidence:
+      - append_only_events
+      - closed_cycle_episode
+      - independently_verified_learning_evidence
+  deliberately_not_implemented:
+    - autonomous_semantic_promotion
+    - live_core_weight_update
+    - parameter_birth_merge_or_prune
+    - self_authorized_deployment
+
+recursive_research_rungs:
+  - id: R0
+    name: strict_single_model_boundary
+    state: implemented
+  - id: R1
+    name: function_preserving_parameter_basis
+    state: passed_synthetic_gate
+    depends_on: [R0]
+  - id: R2
+    name: staged_sparse_parameter_routing
+    state: passed_algorithmic_gate_failed_wall_clock_gate
+    depends_on: [R1]
+  - id: R3
+    name: nonlinear_sequence_block
+    state: next
+    depends_on: [R2]
+  - id: R4
+    name: fused_sparse_runtime
+    state: next
+    depends_on: [R2]
+  - id: R5
+    name: shared_state_recurrent_refinement
+    state: gated
+    depends_on: [R3, R4]
+  - id: R6
+    name: epistemic_state_and_novel_environment_learning
+    state: planned
+    depends_on: [R3]
+  - id: R7
+    name: verified_memory_and_reversible_plasticity
+    state: research
+    depends_on: [R6]
+  - id: R8
+    name: canonical_leviathan_latent
+    state: research_lab_wall
+    depends_on: [R5, R6, R7]
+
+stop_rules:
+  - "Do not add recurrence if one pass wins at matched compute."
+  - "Do not claim sparse speed from MAC estimates when measured latency loses."
+  - "Do not generalize a conditional low-rank win across nonlinear tasks."
+  - "Do not add separately trained specialist models inside the agent."
+  - "Do not let any learned component own goal, verifier, and deployment authority together."
+  - "If a rung fails, retain the last simpler passing rung and test a different route."

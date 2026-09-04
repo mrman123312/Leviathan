@@ -1,6 +1,11 @@
 # Open-Stack Blueprint
 
-This file maps Leviathan's conceptual modules to public projects that can be used as research references or experimental components. It is **not** a claim that these components are plug-compatible or that connecting them produces AGI.
+This file maps Leviathan's conceptual modules to public projects that can be used as
+offline donors, research references or isolated experiments. It is **not** a runtime
+wiring diagram. Connecting these projects would create a collection of models, not the
+one Leviathan model. A mechanism reaches runtime only after it is implemented or
+distilled inside one substrate and one checkpoint. Deterministic stores, tools,
+executors and measurement systems may remain external under frozen contracts.
 
 ## 1. Foundation reasoner
 
@@ -49,6 +54,11 @@ Research split:
 - use latent predictors where exact pixels are unnecessary,
 - use generative world models when visual/physical detail matters,
 - maintain a separate symbolic/semantic belief state regardless.
+
+During research, an external world model is a simulator tool whose outputs remain
+labelled hypothetical evidence. It cannot join the deployed cognitive path as a second
+stateful model. A promoted world-model mechanism must become a head or state transition
+inside the one Leviathan checkpoint.
 
 ## 4. Persistent memory
 
@@ -237,10 +247,11 @@ The key research requirement is provenance: simulated success must never silentl
 
 ## 18. Minimal first implementation
 
-A practical first research stack should be much smaller than the full architecture:
+A practical first research stack should be much smaller than the full architecture and
+must still have only one cognitive checkpoint:
 
 ```text
-open reasoner
+one open reasoner checkpoint
 + vLLM/SGLang
 + structured belief state
 + Letta/Mem0-style memory
@@ -250,6 +261,11 @@ open reasoner
 + procedural skill store
 + meta-controller
 ```
+
+The belief store, memory index, registry, sandbox and verifier interface in this list
+are typed infrastructure. They do not infer competing answers. The metacognitive policy
+must end as a head of the same reasoner; a temporary deterministic baseline is allowed
+only as an auditable governance scaffold.
 
 Do **not** begin with continual core-weight learning. First prove that the system can:
 
