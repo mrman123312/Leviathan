@@ -21,7 +21,21 @@ A capable system should learn:
 9. what deserves to change plastic parameters,
 10. and what is trustworthy enough to enter slow core-weight consolidation.
 
-The resulting system looks less like one giant chatbot and more like a **hierarchical cognitive operating system**.
+The resulting system looks less like one giant chatbot and more like a **hierarchical cognitive operating system** built around one evolving semantic model.
+
+## One-model invariant
+
+Leviathan means **one cognitive model**, not a committee of LLMs pretending to be one agent.
+
+Parameterized cells, cognitive operators, memories, hypotheses and verifiers are components/state of the same system. The canonical architecture keeps:
+
+- one global cognitive state,
+- one semantic model identity,
+- one parameter ownership system,
+- one learning/promotion boundary,
+- one final output/action stream.
+
+The repository validator rejects parameter-cell or cognitive-kernel specs that introduce an independent subagent committee.
 
 ## Three-loop architecture
 
@@ -31,19 +45,13 @@ Leviathan separates cognition into three timescales.
 
 `perception -> state update -> compute routing -> prediction -> action`
 
-This layer borrows ideas from BLT, LongCat, Step 3.5 Flash, Qwen3-Omni, GUI-Actor, ShowUI, pi/openpi, RDT and related systems.
-
 ### 2. Deliberative loop
 
-`belief state -> hypotheses -> plan/search/simulate -> tool or environment action -> verification -> replan`
-
-This layer borrows from reasoning-RL systems, world models, AlphaEvolve-style population search, MiniMax-style trajectory optimization, external tools, formal verifiers and persistent agent state.
+`belief state -> hypotheses -> plan/search/simulate -> action -> verification -> evidence update -> replan`
 
 ### 3. Consolidation loop
 
-`experience -> verify -> rank -> episodic memory -> semantic abstraction -> procedural skill -> plastic update -> slow core consolidation`
-
-This layer borrows from Letta, Mem0, Voyager, Absolute Zero Reasoner and continual-learning research.
+`experience -> verify -> episodic memory -> semantic/procedural abstraction -> plastic candidate -> protected consolidation`
 
 ## Leviathan Ω model layer
 
@@ -51,7 +59,7 @@ Leviathan is an **architecture soup, not a naive weight soup**. Unrelated giant-
 
 ### Canonical pretrained core
 
-**DeepSeek-V4-Pro-Base is now the canonical Leviathan semantic substrate.** Qwen3-30B-A3B-Base remains in the project as a cheaper development/regression control, but it is no longer the model that defines the primary architecture experiment.
+**DeepSeek-V4-Pro-Base is the canonical Leviathan semantic substrate.** Qwen3-30B-A3B-Base remains a cheaper development/regression control, but it no longer defines the primary architecture experiment.
 
 The canonical V4 integration is intentionally the **full checkpoint**, not a reduced layer sample:
 
@@ -75,15 +83,78 @@ With 128 intermediate channels per tile:
 - 384 x 24 = **9,216 routed parameter tiles per layer**,
 - the inherited 6-expert route expands to **144 tiles per token** at the parity stage.
 
-At initialization, every selected expert is still reconstructed from **all** of its 24 tiles. Independent cross-expert tile routing is disabled until logit/hidden-state parity and protected benchmark gates pass. Only after parity may the router learn finer parameter composition and attempt to reduce active tiles.
+At initialization, every selected expert is still reconstructed from **all** of its 24 tiles. Independent cross-expert tile routing is disabled until logit/hidden-state parity and protected benchmark gates pass.
 
 Mathematical sparsity alone is not success. A lower-active-tile candidate is accepted only if **measured wall-clock efficiency** improves without capability, retention, calibration or safety loss.
 
 See `spec/deepseek-v4-mop.toml`, `docs/15-deepseek-v4-mop-r4.md` and `docs/16-deepseek-v4-mop-integration.md`.
 
+### Mixture of Parameterized Cells — L1.5
+
+The 128-channel tile is now treated as an **ancestral cell body**, not the final primitive.
+
+The safe insertion rule is:
+
+`Cell_i(h) = Tile_i(h) + alpha_i * Refine_i(h, control_i)`, with `alpha_i = 0` at insertion.
+
+`src/leviathan/parameter_cells.py` adds an executable reference membrane around packed V4 expert tiles. A cell can emit:
+
+- multidimensional confidence,
+- abstention probability,
+- a low-dimensional proposal message,
+- an associative recruitment query,
+- a low-rank refinement proposal.
+
+Those signals are observational at insertion. The original V4 route and shared expert remain authoritative until later gates are trained and demonstrated.
+
+The machine-readable progression in `spec/parameter-cells.toml` is:
+
+`MoP-0 exact tiles -> MoP-1 independent tile routing -> MoP-2 confidence/abstention -> MoP-3 proposal messages -> MoP-4 one communication round -> MoP-5 disagreement recruitment -> MoP-6 local state -> MoP-7 verified coalitions -> MoP-8 transactional local plasticity -> MoP-9 grow/split/merge/prune`.
+
+Sparse communication and associative recruitment have executable reference primitives. Persistent local state, local plasticity and cell lifecycle remain gated future stages; they are not falsely marked complete.
+
+See `docs/18-parameter-ecology-and-embodiment.md`.
+
+### Single-model cognitive kernel
+
+`src/leviathan/cognitive_kernel.py` turns the high-level architecture into an explicit reference execution structure:
+
+`Representation Compiler -> Cognitive Program Compiler -> Dynamic Cognitive Graph -> Hypothesis/Prediction -> Evidence Update -> Learning Router -> Cognitive Compilation`
+
+The reference kernel currently provides:
+
+- problem-dependent representation plans (symbolic, procedural, causal, spatial, concept/event, graph),
+- explicit cognitive instructions rather than hiding state in prompts,
+- bounded acyclic dependency graphs,
+- hypothesis and prediction records before outcomes,
+- independence-discounted evidence updates,
+- structured goal state,
+- conservative learning destinations,
+- protected core-consolidation gates,
+- repeated-verified-trajectory skill compilation,
+- append-only cognitive events and causal-accountability records.
+
+It owns exactly one semantic model id. It is a transparent baseline architecture that later learned policies must beat, not a claim that the learned representation compiler, world model or metacognitive policy already exists.
+
+`src/leviathan/memory_ecology.py` adds an executable L5 baseline: append-only persistent memory journal, separate current belief state vs history, contradiction-aware revisions, episodic/semantic/procedural tiers, and verification-gated promotion.
+
+### Architecture embodiment gates
+
+Every L0-L10 layer is tracked separately through:
+
+`Specification -> Executable -> Integrated -> Learned -> Demonstrated`
+
+A layer is not called achieved until all five gates pass. The ledger is `spec/architecture-maturity.toml`; `scripts/show_architecture_status.py` prints the live status.
+
+Current development order is deliberately leverage-first rather than numerically bottom-to-top:
+
+`L1 -> L1.5 -> L2 -> L5 -> L8 -> L6 -> L7 -> L9 -> L4 -> L3 -> L0 -> L10`.
+
+L10 remains last because moving primary cognition into a new canonical latent begins crossing the pretrained-function-preservation wall.
+
 ### Prompt runtime
 
-R4 now has an executable prompt path rather than only a transplant specification.
+R4 has an executable prompt path rather than only a transplant specification.
 
 Prompt an already-served OpenAI-compatible V4 instance:
 
@@ -137,8 +208,8 @@ The reference executor is a correctness oracle, not a speed claim: it reconstruc
 - **OLMo 3 32B Base** — transparent scientific control.
 - **MiMo-V2.5-Pro-Base** — frontier efficiency substrate/donor.
 - **Mistral Large 3 Base** — multimodal base donor.
-- **GLM-5.3-Flash / Kimi K3 / Step / Qwen-family architectures** — efficiency and sequence-compute donors.
-- **Kimi K3 / GLM-5.3 / Qwen3.8 / DeepSeek post-trained checkpoints** — teacher ensemble for trajectory distillation and disagreement-driven curriculum.
+- **GLM/Kimi/Step/Qwen-family architectures** — architecture/efficiency lessons and compatible donors where justified.
+- post-trained frontier checkpoints — teachers only where a distillation/evaluation experiment explicitly needs them.
 
 Every architectural graft must initially preserve the pretrained function:
 
@@ -148,37 +219,59 @@ See `docs/12-omega-model-soup.md` and `docs/13-weight-transplantation.md`.
 
 ## Repository map
 
-- `docs/00-source-ledger.md` — every system we learned from, with openness status and the lesson extracted.
-- `docs/01-157-lessons.md` — the full numbered lesson library from the conversation corpus.
-- `docs/02-master-principles.md` — the lessons compressed into reusable architecture principles.
-- `docs/03-cognitive-architecture.md` — the full proposed Leviathan architecture.
-- `docs/04-meta-controller.md` — the learned controller that decides *how to think*.
-- `docs/05-world-belief-model.md` — persistent belief state, uncertainty, dynamics, provenance and active experimentation.
-- `docs/06-memory-and-continual-learning.md` — working/episodic/semantic/procedural/parametric memory and safe consolidation.
-- `docs/07-verification-and-credit.md` — verifier hierarchy, prediction error, causal credit assignment and anti-reward-hacking design.
-- `docs/08-efficiency-and-inference.md` — token, model, context, trajectory and serving efficiency.
-- `docs/09-open-stack-blueprint.md` — practical mapping from Leviathan modules to available open/open-weight projects.
-- `docs/10-roadmap-and-gaps.md` — staged implementation path and remaining research blockers.
-- `docs/11-failure-modes.md` — drift, forgetting, simulator bias, verifier corruption, goal drift and other failure classes.
-- `docs/12-omega-model-soup.md` — substrate/donor/teacher roles and the target Leviathan Ω neural stack.
-- `docs/13-weight-transplantation.md` — compatibility classes and function-preserving architecture migration.
-- `docs/14-omega-source-addendum.md` — model-source provenance and role notes.
-- `docs/15-deepseek-v4-mop-r4.md` — R4 execution protocol, MoP-0 parity, benchmark/efficiency gates and success definition.
-- `docs/16-deepseek-v4-mop-integration.md` — canonical full-V4 integration boundary and handoff to later Leviathan layers.
-- `docs/17-prompt-and-mop0-runtime.md` — prompt shell, local reference executor and prompt-level parity procedure.
+- `docs/00-source-ledger.md` — source/evidence ledger.
+- `docs/01-157-lessons.md` — numbered lesson library.
+- `docs/02-master-principles.md` — architecture principles.
+- `docs/03-cognitive-architecture.md` — full proposed cognitive architecture.
+- `docs/04-meta-controller.md` — metacognitive controller.
+- `docs/05-world-belief-model.md` — belief/world-state design.
+- `docs/06-memory-and-continual-learning.md` — memory and learning hierarchy.
+- `docs/07-verification-and-credit.md` — verification and causal credit.
+- `docs/08-efficiency-and-inference.md` — runtime efficiency.
+- `docs/09-open-stack-blueprint.md` — open implementation mapping.
+- `docs/10-roadmap-and-gaps.md` — roadmap/research blockers.
+- `docs/11-failure-modes.md` — failure classes.
+- `docs/12-omega-model-soup.md` — donor/substrate/teacher roles.
+- `docs/13-weight-transplantation.md` — function-preserving migration.
+- `docs/14-omega-source-addendum.md` — source provenance notes.
+- `docs/15-deepseek-v4-mop-r4.md` — DeepSeek V4 MoP protocol.
+- `docs/16-deepseek-v4-mop-integration.md` — V4 integration boundary.
+- `docs/17-prompt-and-mop0-runtime.md` — prompt/parity runtime.
+- `docs/18-parameter-ecology-and-embodiment.md` — parameterized-cell architecture and embodiment gates.
 - `spec/architecture.yaml` — machine-readable cognitive module graph and trust rules.
-- `spec/interfaces.md` — proposed data contracts between modules.
-- `spec/model-registry.toml` — model/checkpoint metadata and download policy.
-- `spec/omega-transplant.toml` — machine-readable Omega transplantation plan.
-- `spec/deepseek-v4-mop.toml` — canonical full-V4 fingerprint, MoP phases and acceptance gates.
-- `scripts/fetch_model_assets.py` — guarded metadata/checkpoint acquisition utility.
-- `scripts/prepare_deepseek_v4_mop.py` — validate a pinned local V4 checkpoint and emit the combined checkpoint/R4 MoP manifest.
-- `scripts/run_prompt.py` — raw/interactive V4 prompt runner for endpoint or local Transformers execution.
-- `scripts/check_mop0_prompt_parity.py` — run one prompt through original V4 and MoP-0 and measure logit drift.
-- `scripts/validate_model_registry.py` — stdlib-only registry/Omega/V4 validator.
-- `models/README.md` — local checkpoint storage and reproducibility rules.
-- `src/leviathan/` — research scaffold for the controller, trust system, transplant state machine and V4 MoP/runtime plan.
-- `vendor/` — pinned upstream Git submodules for the public source projects studied.
+- `spec/interfaces.md` — shared data contracts.
+- `spec/model-registry.toml` — model/checkpoint metadata.
+- `spec/omega-transplant.toml` — transplantation plan.
+- `spec/deepseek-v4-mop.toml` — canonical V4 fingerprint/MoP gates.
+- `spec/parameter-cells.toml` — MoP-0..MoP-9 cell ecology.
+- `spec/cognitive-kernel.toml` — one-model cognitive pipeline/governance invariants.
+- `spec/architecture-maturity.toml` — five-gate L0-L10 embodiment ledger.
+- `src/leviathan/parameter_cells.py` — zero-gated cell membrane, communication/recruitment and coalition primitives.
+- `src/leviathan/cognitive_kernel.py` — compiled one-model cognitive architecture.
+- `src/leviathan/memory_ecology.py` — persistent epistemic memory/belief-state baseline.
+- `scripts/show_architecture_status.py` — print architecture maturity and MoP roadmap.
+- `scripts/fetch_model_assets.py` — guarded model acquisition.
+- `scripts/prepare_deepseek_v4_mop.py` — pinned V4 checkpoint preflight/manifest.
+- `scripts/run_prompt.py` — raw/interactive V4 prompt runner.
+- `scripts/check_mop0_prompt_parity.py` — original V4 vs MoP-0 logit comparison.
+- `scripts/validate_model_registry.py` — registry plus architecture invariant validator.
+- `models/README.md` — local checkpoint storage/reproducibility rules.
+
+## Inspect the architecture
+
+Validate all machine-readable invariants:
+
+```bash
+python scripts/validate_model_registry.py
+```
+
+Print the live L0-L10 and MoP-0..9 status:
+
+```bash
+python scripts/show_architecture_status.py
+```
+
+The status command is intentionally conservative: executable reference code raises an `Executable` gate, but no layer reaches `Demonstrated` without empirical evidence.
 
 ## Model assets
 
@@ -188,12 +281,6 @@ List the registry:
 
 ```bash
 python scripts/fetch_model_assets.py --list
-```
-
-Validate the registry, Omega references and V4 MoP constants:
-
-```bash
-python scripts/validate_model_registry.py
 ```
 
 Install optional model-download support:
@@ -247,27 +334,15 @@ Throughout the repository:
 - **CLOSED / LESSON ONLY** — the core system is proprietary; only publicly disclosed behavior or architecture lessons are used.
 - **SYNTHESIS** — an architectural inference created by combining lessons across projects. It is not attributed to a single source.
 
-## The central design rule
+## Central design rule
 
 > **Do not spend the same kind of computation everywhere.**
 
-Representation resolution, active parameters, reasoning depth, search breadth, tool use, modality, memory mechanism, learning mechanism and verification strength should all be selected according to uncertainty, expected value, risk, cost and available evidence.
-
-## The missing center
-
-The strongest synthesis from all of the systems studied is a learned **metacognitive controller**. Its job is not to solve the task directly. Its job is to choose the cognitive algorithm:
-
-`recall | direct | reason | retrieve | search | simulate | experiment | parallelize | evolve | invoke-skill | ask | act`
-
-A conceptual objective is:
-
-`mode* = argmax(expected success gain + information gain - compute cost - latency - risk)`
-
-DeepSeek V4 supplies the canonical pretrained semantic engine. It does **not** replace the belief state, metacognitive controller, verifier hierarchy, memory system, causal credit assignment or governance boundary. Those remain the mechanisms that turn a foundation model into the larger Leviathan research architecture.
+Representation resolution, active parameters/cells, reasoning depth, search breadth, memory mechanism, learning mechanism, verification strength, precision and hardware path should be selected according to uncertainty, expected value, risk, cost and evidence.
 
 ## Non-claims
 
-Leviathan does **not** claim that converting V4 MoE routing into parameter tiles creates AGI. The main unsolved problems remain open-world verification, long-horizon causal credit assignment, stable lifelong belief state, safe parametric consolidation, cross-domain metacognition, simulator grounding, calibration after self-modification and governance of a self-improving learner.
+Leviathan does **not** claim that converting V4 MoE routing into parameter tiles/cells creates AGI. Executable reference architecture is not the same thing as learned capability. Major open work still includes learned independent cell routing, calibrated disagreement, integrated persistent memory, grounded theory-building world models, long-horizon causal credit, learned metacognitive algorithm synthesis, safe lifelong plasticity, real wall-clock sparse-cell efficiency, and the later canonical latent migration.
 
 ## Origin
 
