@@ -13,7 +13,7 @@ readme = "README.md"
 models = ["huggingface_hub>=0.27"]
 inference = [
   "torch>=2.7",
-  "transformers>=4.57.1",
+  "transformers>=5.8.1",
   "accelerate>=1.2",
   "safetensors>=0.5",
 ]
