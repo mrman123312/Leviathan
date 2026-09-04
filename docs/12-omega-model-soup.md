@@ -8,48 +8,72 @@ Leviathan is not a weight merge. It is a staged architecture-transplantation pro
 
 `maximum verified capability / (active compute × memory traffic × latency × learning instability)`
 
-The model stack is therefore split into four roles rather than forcing one checkpoint to do everything.
+The system uses one canonical pretrained cognitive core plus external donors, teachers, tools and verifiers. Donors and teachers do not become a runtime civilization of foundation models pretending to be one model.
 
-## Role A — primary semantic substrate
+## Role A — canonical semantic substrate
 
-### Preferred frontier substrate: DeepSeek-V4-Pro-Base
+### DeepSeek-V4-Pro-Base
 
-Role: inherit large-scale language, code, mathematics and semantic representations from a true base checkpoint, then grow Leviathan modules around it.
+**DeepSeek-V4-Pro-Base is the canonical pretrained semantic core for the current Leviathan experiment.**
 
-Why it is preferred at frontier scale:
+Role: inherit large-scale language, code, mathematics and semantic representations from a true base checkpoint, then evolve the same model into the Leviathan substrate without discarding its pretrained function.
+
+Why it is preferred:
 
 - true base/pretraining checkpoint rather than only chat behavior;
-- very large sparse MoE capacity with far lower active compute than total parameter count;
+- 1.6T-class sparse capacity with much lower active compute than total parameters;
 - long-context architecture;
-- existing MTP/sparse-attention lineage relevant to Leviathan;
+- existing sparse routing and future-prediction lineage relevant to Leviathan;
 - permissive license relative to many frontier-weight releases;
-- enough pretrained knowledge that Leviathan does not need to relearn language and world regularities from scratch.
+- enough pretrained knowledge that Leviathan does not need to relearn language and world regularities from scratch;
+- expert structure that can be decomposed into finer parameter tiles without first inventing specialization from random initialization.
 
-The core rule is **inherit first, mutate second**. The initial Leviathan system must reproduce the base model's function before expensive original paths are retired.
+The core rule remains **inherit first, mutate second**. The initial Leviathan representation must reproduce the base model's function before original paths are relaxed or retired.
 
-### Preferred experimental substrate: Qwen3-30B-A3B-Base
+The exact canonical V4 fingerprint and Mixture-of-Parameters migration are specified in `spec/deepseek-v4-mop.toml` and `docs/15-deepseek-v4-mop-integration.md`.
 
-Role: development-scale surgery.
+### Qwen3-30B-A3B-Base — development control
 
-Use it to test:
+Qwen remains useful, but it is no longer the canonical substrate.
 
-- zero-gated module insertion;
-- expert expansion;
-- persistent-state channels;
-- memory experts;
-- heterogeneous expert routing;
-- MTP extensions;
-- continual adapters;
-- verifier-conditioned learning;
-- regression and rollback tooling.
+Role:
 
-Architecture experiments should fail here before they are ever attempted on a trillion-parameter checkpoint.
+- cheaper architecture-surgery control;
+- fast regression reproduction;
+- interface tests;
+- zero-gated module tests;
+- memory/controller plumbing;
+- training-loop debugging before expensive V4 runs.
+
+A Qwen result is not a substitute for a canonical full-V4 result. The V4 experiment has an explicit full-checkpoint fingerprint so reduced models cannot be reported as Leviathan Ω-L.
 
 ### Scientific control: OLMo 3 32B Base
 
 Role: transparent control model for measuring architectural effects against a substantially open training lineage.
 
 Use OLMo when the research question is not simply "does this improve the model?" but "where in training should this mechanism be introduced, and what changed?"
+
+## Mixture-of-Parameters as the V4 substrate migration
+
+DeepSeek V4 begins with routed experts. Leviathan does not immediately throw away this routing.
+
+The first conversion decomposes each routed expert's 3072-wide SwiGLU intermediate space into contiguous 128-channel tiles:
+
+- `3072 / 128 = 24` tiles per expert;
+- `384 * 24 = 9,216` routed tiles per layer;
+- the inherited 6-expert route expands to `6 * 24 = 144` routed tiles per token at the parity stage.
+
+At initialization:
+
+`selected expert -> every constituent tile of that expert`
+
+Therefore the original expert computation remains reconstructable. Independent tile composition across experts is disabled until parity passes.
+
+Only later does the router learn:
+
+`whole-expert routing -> tile routing -> cross-expert tile composition -> reduced active tile budget`
+
+A lower active-parameter count does not count as an efficiency win unless real wall-clock metrics also improve. This directly incorporates the R3 lesson that mathematical sparsity can be slower in practice when routing and memory movement dominate.
 
 ## Role B — efficiency-architecture donors
 
@@ -63,7 +87,7 @@ Primary lessons to transplant:
 - long-context KV-cache economy;
 - sparse MoE routing.
 
-Leviathan should test whether a mostly-local/periodic-global pattern can replace more expensive attention paths while preserving the inherited base function.
+Leviathan should test whether a mostly-local/periodic-global pattern can replace more expensive attention paths while preserving the inherited V4 function.
 
 ### GLM-5.3-Flash
 
@@ -75,7 +99,7 @@ Primary lessons:
 - native multimodal efficiency;
 - million-token operating regime.
 
-GLM-5.3-Flash is treated primarily as an **architecture and behavior donor**, not as the initial clean base substrate.
+GLM-5.3-Flash is treated primarily as an **architecture and behavior donor**, not as the clean canonical base substrate.
 
 ### Kimi K3
 
@@ -89,7 +113,7 @@ Primary lessons:
 - long-horizon agent training with persistent state;
 - vision-in-the-loop artifact correction.
 
-Kimi's 2.8T scale is not required to test these lessons. Reproduce the primitives at development scale first.
+Kimi's scale is not itself the feature to transplant. Reproduce useful mechanisms against the inherited V4 function and retain them only when quality-per-compute improves.
 
 ### Step 3.5 Flash / Qwen-family MTP
 
@@ -121,7 +145,7 @@ Primary lesson: semantic reasoning and modality realization should be separable.
 
 ## Role D — post-training teachers
 
-Teacher models are not necessarily the substrate. They are used to create, compare and verify trajectories.
+Teacher models are not the deployed cognitive substrate. They are offline training/evaluation resources used to create, compare and verify trajectories.
 
 Candidate teacher ensemble:
 
@@ -151,25 +175,27 @@ When teachers disagree, do **not** train on an arbitrary winner. Route the item 
 4. additional search/experimentation;
 5. a curriculum queue if uncertainty remains informative.
 
-High disagreement is a signal that the sample lies near the current capability frontier.
+High disagreement is a signal that the sample may lie near the current capability frontier. It is not itself truth.
 
 ## Heterogeneous experts
 
-A long-term Leviathan MoE should not require every expert to be an MLP.
+The long-term Leviathan routing substrate should not require every routed operation to remain a conventional MLP.
 
-Candidate expert classes:
+Candidate operation classes:
 
-- semantic FFN expert;
-- code expert;
-- mathematical expert;
-- memory-retrieval expert;
-- recurrent world-state expert;
-- causal-model expert;
-- planning expert;
-- simulation expert;
-- verifier-interface expert.
+- semantic FFN computation;
+- code computation;
+- mathematical computation;
+- memory retrieval;
+- recurrent world-state update;
+- causal-model operation;
+- planning operation;
+- simulation operation;
+- verifier interface.
 
-The router therefore evolves from "which MLP processes this token?" toward "which cognitive operation should process this state?"
+The router therefore evolves from "which expert MLP processes this token?" toward "which parameter/cognitive operation should process this state?"
+
+This migration must be gradual. Heterogeneous paths begin with zero route probability and do not replace inherited V4 computation until matched tests pass.
 
 ## Function-preserving transplantation
 
@@ -183,16 +209,19 @@ Initialize `alpha = 0`.
 
 Required sequence:
 
-1. load and freeze pretrained substrate;
-2. insert new modules with zero/identity effect;
-3. train only new parameters;
-4. demonstrate behavioral and perplexity parity;
-5. gradually increase gates;
-6. selectively unfreeze compatible old parameters;
-7. run continued pretraining/post-training;
-8. verify capability retention and calibration;
-9. shadow-evaluate candidate;
-10. only then retire redundant old paths.
+1. load and fingerprint the full pretrained V4 substrate;
+2. retain a restorable locked baseline;
+3. insert new modules with zero/identity effect;
+4. train only new parameters where possible;
+5. demonstrate logit/hidden-state/perplexity/behavior parity;
+6. gradually increase gates or routing freedom;
+7. selectively unfreeze the smallest necessary old parameter groups;
+8. run continued pretraining/post-training with replay and stability losses;
+9. verify capability retention and calibration;
+10. shadow-evaluate candidate;
+11. only then retire redundant old paths.
+
+For the MoP conversion, expert-channel tiling itself is the function-preserving representation step. Independent cross-expert tile routing is a later learned change.
 
 ## Architecture migration, not weight soup
 
@@ -211,12 +240,15 @@ Use one of four transfer methods instead:
 multimodal encoders
       |
       v
+DeepSeek-V4-derived Leviathan semantic core
+      |
+      v
 shared belief/state space <---- episodic + semantic memory
       |
       v
 metacognitive router
       |
-      +--> direct sparse core
+      +--> direct sparse/MoP core computation
       +--> procedural skill
       +--> retrieval
       +--> world simulation
@@ -241,55 +273,51 @@ causal credit assignment
       |
       +--> memory promotion
       +--> procedural compilation
-      +--> plastic adapter candidate
+      +--> plastic candidate
       +--> slow verified core consolidation
 ```
 
-## Development scale ladder
+The semantic core remains one model. External tools/verifiers/memory services are resources, not additional hidden cognitive models merged at runtime.
 
-### Ω-S0 — 3B–30B
+## Scale ladder and current experiment
 
-Prove interfaces and safety invariants.
+The scale ladder remains useful for cheap controls, but it no longer defines the canonical checkpoint.
 
-Success criteria:
+### Ω-S0 — 3B–30B controls
 
-- persistent belief state improves long tasks;
-- memory reduces repeated reasoning without accuracy loss;
-- meta-controller learns to select cognition modes;
-- verifier-aware routing improves calibration;
-- new modules can be added without measurable base-model regression.
+Use Qwen-class models to debug interfaces, training code and safety invariants cheaply.
 
-### Ω-S1 — 100B–300B sparse
+### Ω-S1 — 100B–300B sparse controls
 
-Prove:
+Use medium sparse models to stress distributed routing, adaptive expert count, recurrent/local/global hybrids, MTP extensions and plastic-module tooling.
 
-- heterogeneous experts;
-- adaptive expert count;
-- recurrent/local/global hybrid sequence processing;
-- MTP state/action prediction;
-- safe plastic adapters;
-- distributed serving efficiency.
+### Ω-S2 — ~1T controls
 
-### Ω-S2 — ~1T
+Use MiMo-class or equivalent true bases to test whether architecture effects survive giant sparse representations.
 
-Use MiMo-class or equivalent true base substrate to test whether architecture gains survive giant-scale sparse pretraining representations.
+### Ω-L — canonical
 
-### Ω-L — 1.6T+
+Use the **full DeepSeek-V4-Pro-Base** checkpoint as the canonical Leviathan neural-substrate experiment.
 
-Frontier transplantation into a DeepSeek-V4-Pro-Base-class substrate after the smaller architecture has passed retention, safety, calibration and efficiency gates.
+Smaller controls remain scientifically valuable, but a mechanism does not need to wait for every smaller rung if we intentionally choose to test it on Ω-L. Conversely, success on Ω-L does not excuse a failure to measure retention, calibration, safety or real efficiency.
 
 ## Non-negotiable evaluation dimensions
 
-No architecture change is accepted solely because benchmark accuracy rises.
+No architecture change is accepted solely because benchmark accuracy rises or active parameters fall.
 
 Track simultaneously:
 
 - task success;
 - calibration;
 - retention of old capability;
+- held-out language loss;
+- ARC-Easy canary behavior;
 - active parameters/token;
+- active tiles/token;
 - HBM bytes/token;
 - KV/state bytes/token;
+- routing/communication overhead;
+- single-stream and aggregate throughput;
 - reasoning tokens/success;
 - tool calls/success;
 - wall-clock time/success;
