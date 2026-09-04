@@ -31,12 +31,13 @@ jobs:
           python-version: '3.11'
       - name: Install Leviathan
         run: python -m pip install -e .
-      - name: Validate model registry, Omega references, and DeepSeek V4 MoP spec
+      - name: Validate model registry and architecture invariants
         run: python scripts/validate_model_registry.py
-      - name: Smoke-test prompt runtime CLIs
+      - name: Smoke-test runtime and architecture CLIs
         run: |
           python scripts/run_prompt.py --help >/dev/null
           python scripts/check_mop0_prompt_parity.py --help >/dev/null
+          python scripts/show_architecture_status.py >/dev/null
       - name: Run Leviathan unit tests
         run: python -m unittest discover -s tests -v
 
