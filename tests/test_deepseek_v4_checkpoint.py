@@ -26,6 +26,13 @@ CANONICAL_CONFIG = {
 }
 
 
+def canonical_weight_map() -> dict[str, str]:
+    return {
+        f"model.fake_parameter_{index}": f"model-{index:05d}-of-00064.safetensors"
+        for index in range(1, 65)
+    }
+
+
 class DeepSeekV4CheckpointTests(unittest.TestCase):
     def test_canonical_fingerprint_and_mop_route(self) -> None:
         fingerprint = DeepSeekV4Fingerprint.from_mapping(CANONICAL_CONFIG)
@@ -44,10 +51,13 @@ class DeepSeekV4CheckpointTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             DeepSeekV4Fingerprint.from_mapping(bad)
 
-    def test_full_checkpoint_requires_all_64_shards(self) -> None:
+    def test_full_checkpoint_requires_all_64_shards_and_valid_index(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             model_dir = Path(tmp)
-            (model_dir / "model.safetensors.index.json").write_text("{}", encoding="utf-8")
+            (model_dir / "model.safetensors.index.json").write_text(
+                json.dumps({"weight_map": canonical_weight_map()}),
+                encoding="utf-8",
+            )
             with self.assertRaises(FileNotFoundError):
                 verify_full_checkpoint_files(model_dir)
 
