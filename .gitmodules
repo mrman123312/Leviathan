@@ -1,0 +1,114 @@
+[submodule "vendor/world-models/nvidia-cosmos"]
+	path = vendor/world-models/nvidia-cosmos
+	url = https://github.com/NVIDIA/Cosmos.git
+[submodule "vendor/world-models/cosmos-predict2.5"]
+	path = vendor/world-models/cosmos-predict2.5
+	url = https://github.com/nvidia-cosmos/cosmos-predict2.5.git
+[submodule "vendor/world-models/vjepa2"]
+	path = vendor/world-models/vjepa2
+	url = https://github.com/facebookresearch/vjepa2.git
+[submodule "vendor/world-models/jepa-wms"]
+	path = vendor/world-models/jepa-wms
+	url = https://github.com/facebookresearch/jepa-wms.git
+[submodule "vendor/reasoning/deepseek-r1"]
+	path = vendor/reasoning/deepseek-r1
+	url = https://github.com/deepseek-ai/DeepSeek-R1.git
+[submodule "vendor/reasoning/qwen3"]
+	path = vendor/reasoning/qwen3
+	url = https://github.com/QwenLM/Qwen3.git
+[submodule "vendor/reasoning/kimi-k3"]
+	path = vendor/reasoning/kimi-k3
+	url = https://github.com/MoonshotAI/Kimi-K3.git
+[submodule "vendor/reasoning/step-3.5-flash"]
+	path = vendor/reasoning/step-3.5-flash
+	url = https://github.com/stepfun-ai/Step-3.5-Flash.git
+[submodule "vendor/reasoning/longcat-flash-thinking"]
+	path = vendor/reasoning/longcat-flash-thinking
+	url = https://github.com/meituan-longcat/LongCat-Flash-Thinking.git
+[submodule "vendor/reasoning/longcat-flash-chat"]
+	path = vendor/reasoning/longcat-flash-chat
+	url = https://github.com/meituan-longcat/LongCat-Flash-Chat.git
+[submodule "vendor/reasoning/k2-horizon-post-train"]
+	path = vendor/reasoning/k2-horizon-post-train
+	url = https://github.com/ifm-ai/horizon-post-train.git
+[submodule "vendor/reasoning/minimax-m2.5"]
+	path = vendor/reasoning/minimax-m2.5
+	url = https://github.com/MiniMax-AI/MiniMax-M2.5.git
+[submodule "vendor/learning/verl"]
+	path = vendor/learning/verl
+	url = https://github.com/verl-project/verl.git
+[submodule "vendor/learning/absolute-zero-reasoner"]
+	path = vendor/learning/absolute-zero-reasoner
+	url = https://github.com/LeapLabTHU/Absolute-Zero-Reasoner.git
+[submodule "vendor/memory/letta"]
+	path = vendor/memory/letta
+	url = https://github.com/letta-ai/letta.git
+[submodule "vendor/memory/mem0"]
+	path = vendor/memory/mem0
+	url = https://github.com/mem0ai/mem0.git
+[submodule "vendor/verification/deepseek-prover-v2"]
+	path = vendor/verification/deepseek-prover-v2
+	url = https://github.com/deepseek-ai/DeepSeek-Prover-V2.git
+[submodule "vendor/verification/skywork-reward"]
+	path = vendor/verification/skywork-reward
+	url = https://github.com/SkyworkAI/Skywork-Reward.git
+[submodule "vendor/verification/evpv-prm"]
+	path = vendor/verification/evpv-prm
+	url = https://github.com/Qwen-Applications/EVPV-PRM.git
+[submodule "vendor/robotics/openpi"]
+	path = vendor/robotics/openpi
+	url = https://github.com/Physical-Intelligence/openpi.git
+[submodule "vendor/robotics/lerobot"]
+	path = vendor/robotics/lerobot
+	url = https://github.com/huggingface/lerobot.git
+[submodule "vendor/robotics/rdt-1b"]
+	path = vendor/robotics/rdt-1b
+	url = https://github.com/thu-ml/RoboticsDiffusionTransformer.git
+[submodule "vendor/robotics/octo"]
+	path = vendor/robotics/octo
+	url = https://github.com/octo-models/octo.git
+[submodule "vendor/architecture/blt"]
+	path = vendor/architecture/blt
+	url = https://github.com/facebookresearch/blt.git
+[submodule "vendor/architecture/mamba"]
+	path = vendor/architecture/mamba
+	url = https://github.com/state-spaces/mamba.git
+[submodule "vendor/architecture/recurrentgemma"]
+	path = vendor/architecture/recurrentgemma
+	url = https://github.com/google-deepmind/recurrentgemma.git
+[submodule "vendor/multimodal/qwen3-omni"]
+	path = vendor/multimodal/qwen3-omni
+	url = https://github.com/QwenLM/Qwen3-Omni.git
+[submodule "vendor/gui/gui-actor"]
+	path = vendor/gui/gui-actor
+	url = https://github.com/microsoft/GUI-Actor.git
+[submodule "vendor/gui/showui"]
+	path = vendor/gui/showui
+	url = https://github.com/showlab/ShowUI.git
+[submodule "vendor/agents/voyager"]
+	path = vendor/agents/voyager
+	url = https://github.com/MineDojo/Voyager.git
+[submodule "vendor/agents/swe-agent"]
+	path = vendor/agents/swe-agent
+	url = https://github.com/SWE-agent/SWE-agent.git
+[submodule "vendor/agents/gorilla"]
+	path = vendor/agents/gorilla
+	url = https://github.com/ShishirPatil/gorilla.git
+[submodule "vendor/agents/ufo"]
+	path = vendor/agents/ufo
+	url = https://github.com/microsoft/UFO.git
+[submodule "vendor/inference/vllm"]
+	path = vendor/inference/vllm
+	url = https://github.com/vllm-project/vllm.git
+[submodule "vendor/inference/sglang"]
+	path = vendor/inference/sglang
+	url = https://github.com/sgl-project/sglang.git
+[submodule "vendor/inference/flash-attention"]
+	path = vendor/inference/flash-attention
+	url = https://github.com/Dao-AILab/flash-attention.git
+[submodule "vendor/inference/flashinfer"]
+	path = vendor/inference/flashinfer
+	url = https://github.com/flashinfer-ai/flashinfer.git
+[submodule "vendor/inference/tensorrt-llm"]
+	path = vendor/inference/tensorrt-llm
+	url = https://github.com/NVIDIA/TensorRT-LLM.git
