@@ -60,6 +60,7 @@ from .parameter_cells import (
     load_parameter_cell_spec,
     stage_sequence,
 )
+from .runtime import LeviathanRuntime, TaskCompletion, TaskSession
 from .trust import PromotionThresholds, candidate_trust, may_promote, verification_trust
 from .types import (
     Belief,
@@ -108,6 +109,7 @@ __all__ = [
     "LearningRoute",
     "LearningRouter",
     "LeviathanCognitiveKernel",
+    "LeviathanRuntime",
     "MemoryEcology",
     "MemoryKind",
     "MemoryRecord",
@@ -126,6 +128,8 @@ __all__ = [
     "RepresentationKind",
     "RepresentationPlan",
     "SkillCandidate",
+    "TaskCompletion",
+    "TaskSession",
     "UncertaintyKind",
     "UtilityWeights",
     "Verification",
