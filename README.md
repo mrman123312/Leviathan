@@ -29,9 +29,9 @@ Leviathan separates cognition into three timescales.
 
 ### 1. Fast cognitive loop
 
-`perception -> adaptive representation -> parameter/compute routing -> state update -> prediction -> action`
+`perception -> state update -> compute routing -> prediction -> action`
 
-The canonical R4 neural substrate is now the full `DeepSeek-V4-Pro-Base` pretraining checkpoint. Leviathan's Mixture-of-Parameters experiment begins by decomposing its routed experts into function-preserving, hardware-aligned parameter tiles before any attempt to reduce active compute.
+This layer borrows ideas from BLT, LongCat, Step 3.5 Flash, Qwen3-Omni, GUI-Actor, ShowUI, pi/openpi, RDT and related systems.
 
 ### 2. Deliberative loop
 
@@ -49,10 +49,41 @@ This layer borrows from Letta, Mem0, Voyager, Absolute Zero Reasoner and continu
 
 Leviathan is an **architecture soup, not a naive weight soup**. Unrelated giant-model tensors are not averaged together. Pretrained capability is transferred by direct compatible reuse, zero-gated grafts, latent projection bridges and distillation.
 
-Current role split:
+### Canonical pretrained core
 
-- **DeepSeek-V4-Pro-Base** — canonical R4 and Ω-L pretrained semantic substrate; the full-scale Mixture-of-Parameters target.
-- **Qwen3-30B-A3B-Base** — cheaper development/regression fallback, no longer the canonical R4 substrate.
+**DeepSeek-V4-Pro-Base is now the canonical Leviathan semantic substrate.** Qwen3-30B-A3B-Base remains in the project as a cheaper development/regression control, but it is no longer the model that defines the primary architecture experiment.
+
+The canonical V4 integration is intentionally the **full checkpoint**, not a reduced layer sample:
+
+- 61 hidden layers,
+- hidden size 7168,
+- 384 routed experts plus 1 shared expert,
+- 6 routed experts active per token in the inherited MoE route,
+- MoE intermediate width 3072,
+- 1,048,576-token configured maximum context,
+- 64 safetensors weight shards.
+
+`src/leviathan/deepseek_v4.py` rejects a config that does not match that fingerprint. A run may claim `full_checkpoint_verified=true` only after the local checkpoint contains the full 64-shard set and `model.safetensors.index.json`.
+
+### Mixture-of-Parameters migration
+
+The first V4 -> Leviathan MoP transformation is function-preserving.
+
+With 128 intermediate channels per tile:
+
+- 3072 / 128 = **24 tiles per routed expert**,
+- 384 x 24 = **9,216 routed parameter tiles per layer**,
+- the inherited 6-expert route expands to **144 tiles per token** at the parity stage.
+
+At initialization, every selected expert is still reconstructed from **all** of its 24 tiles. Independent cross-expert tile routing is disabled until logit/hidden-state parity and protected benchmark gates pass. Only after parity may the router learn finer parameter composition and attempt to reduce active tiles.
+
+Mathematical sparsity alone is not success. A lower-active-tile candidate is accepted only if **measured wall-clock efficiency** improves without capability, retention, calibration or safety loss.
+
+See `spec/deepseek-v4-mop.toml` and `docs/15-deepseek-v4-mop-integration.md`.
+
+### Other model roles
+
+- **Qwen3-30B-A3B-Base** — development/regression control.
 - **OLMo 3 32B Base** — transparent scientific control.
 - **MiMo-V2.5-Pro-Base** — frontier efficiency substrate/donor.
 - **Mistral Large 3 Base** — multimodal base donor.
@@ -63,9 +94,7 @@ Every architectural graft must initially preserve the pretrained function:
 
 `h' = F_pretrained(h) + alpha * G_new(h)`, with `alpha = 0` at insertion.
 
-For R4 MoP, the equivalent rule is even stricter: the first parameter-tile representation must exactly reconstruct each originally routed SwiGLU expert before independent tile routing is trained.
-
-See `docs/12-omega-model-soup.md`, `docs/13-weight-transplantation.md` and `docs/15-deepseek-v4-mop-r4.md`.
+See `docs/12-omega-model-soup.md` and `docs/13-weight-transplantation.md`.
 
 ## Repository map
 
@@ -83,31 +112,23 @@ See `docs/12-omega-model-soup.md`, `docs/13-weight-transplantation.md` and `docs
 - `docs/11-failure-modes.md` — drift, forgetting, simulator bias, verifier corruption, goal drift and other failure classes.
 - `docs/12-omega-model-soup.md` — substrate/donor/teacher roles and the target Leviathan Ω neural stack.
 - `docs/13-weight-transplantation.md` — compatibility classes and function-preserving architecture migration.
-- `docs/15-deepseek-v4-mop-r4.md` — full-scale R4 DeepSeek V4 Mixture-of-Parameters migration and benchmark gates.
+- `docs/14-omega-source-addendum.md` — model-source provenance and role notes.
+- `docs/15-deepseek-v4-mop-integration.md` — canonical full-V4 MoP migration and benchmark gates.
 - `spec/architecture.yaml` — machine-readable cognitive module graph and trust rules.
 - `spec/interfaces.md` — proposed data contracts between modules.
 - `spec/model-registry.toml` — model/checkpoint metadata and download policy.
 - `spec/omega-transplant.toml` — machine-readable Omega transplantation plan.
-- `spec/deepseek-v4-mop.toml` — pinned V4 architecture contract, parameter-tile geometry and R4 rejection gates.
+- `spec/deepseek-v4-mop.toml` — canonical full-V4 fingerprint, MoP phases and acceptance gates.
 - `scripts/fetch_model_assets.py` — guarded metadata/checkpoint acquisition utility.
-- `scripts/prepare_deepseek_v4_mop.py` — validates a pinned V4 config and emits the R4 transplant manifest without loading weights.
-- `scripts/validate_model_registry.py` — stdlib-only registry/reference/R4 invariant validator.
+- `scripts/prepare_deepseek_v4_mop.py` — validate a local V4 checkpoint and emit the MoP manifest.
+- `scripts/validate_model_registry.py` — stdlib-only registry/Omega/V4 validator.
 - `models/README.md` — local checkpoint storage and reproducibility rules.
-- `src/leviathan/deepseek_v4_mop.py` — exact V4 parameter-tile plan and checkpoint-config validation.
-- `src/leviathan/` — minimal research scaffold for the meta-controller, trust weighting and shared types.
+- `src/leviathan/` — research scaffold for the controller, trust system, transplant state machine and V4 MoP plan.
 - `vendor/` — pinned upstream Git submodules for the public source projects studied.
-
-## R4: full DeepSeek V4 Mixture-of-Parameters
-
-The current V4 routed expert has 3,072 SwiGLU intermediate channels. R4 starts with 128-channel tiles, producing 24 tiles per routed expert. Across 384 routed experts this is 9,216 routed tiles per layer. The original six-expert route expands to 144 tiles at MoP-0 and must reproduce the pretrained function before any sparsity is introduced.
-
-The first stage is deliberately **not** a speed claim. It is the exact bridge from pretrained MoE to parameter-level routing. Later stages may select fewer tiles only if protected capability, held-out language loss and real wall-clock/HBM measurements pass.
-
-ARC-Easy is a named canary and is reported separately for every R4 candidate. The 64-passage held-out WikiText gate may not be used for training or hyperparameter selection.
 
 ## Model assets
 
-Model weights are deliberately **not stored in Git**. The DeepSeek V4 checkpoint is a frontier-scale external asset and remains disabled for automatic download unless explicitly overridden.
+Model weights are deliberately **not stored in Git**. The canonical DeepSeek V4 Base checkpoint is multi-terabyte class.
 
 List the registry:
 
@@ -115,19 +136,10 @@ List the registry:
 python scripts/fetch_model_assets.py --list
 ```
 
-Validate the registry, Omega references and V4 MoP contract:
+Validate the registry, Omega references and V4 MoP constants:
 
 ```bash
 python scripts/validate_model_registry.py
-```
-
-Validate a pinned local V4 configuration and create the R4 manifest:
-
-```bash
-python scripts/prepare_deepseek_v4_mop.py \
-  --config /models/deepseek-v4-pro-base/config.json \
-  --revision <immutable-hugging-face-commit> \
-  --output models/fingerprints/deepseek-v4-r4.json
 ```
 
 Install optional model-download support:
@@ -136,7 +148,30 @@ Install optional model-download support:
 python -m pip install -e '.[models]'
 ```
 
-Metadata-only fetch remains the safe default. Full V4 weights require explicit `--weights`, `--allow-disabled`, sufficient storage/compute, and an immutable revision.
+Fetch V4 metadata only:
+
+```bash
+python scripts/fetch_model_assets.py deepseek-v4-pro-base --allow-disabled
+```
+
+Validate a downloaded V4 config without claiming the weights are present:
+
+```bash
+python scripts/prepare_deepseek_v4_mop.py --config-only
+```
+
+Validate the complete checkpoint and emit a manifest:
+
+```bash
+python scripts/prepare_deepseek_v4_mop.py --output runs/deepseek-v4-mop-manifest.json
+```
+
+Fetching all weights requires explicit opt-in and should use an immutable upstream revision:
+
+```bash
+python scripts/fetch_model_assets.py deepseek-v4-pro-base \
+  --weights --allow-disabled --revision <immutable-hugging-face-commit>
+```
 
 ## Evidence labels
 
@@ -154,8 +189,6 @@ Throughout the repository:
 
 Representation resolution, active parameters, reasoning depth, search breadth, tool use, modality, memory mechanism, learning mechanism and verification strength should all be selected according to uncertainty, expected value, risk, cost and available evidence.
 
-For R4 this has an extra systems rule: **mathematical sparsity is not efficiency unless real hardware measurements improve too.** If Mixture-of-Parameters activates fewer weights but makes V4 slower, that candidate is rejected.
-
 ## The missing center
 
 The strongest synthesis from all of the systems studied is a learned **metacognitive controller**. Its job is not to solve the task directly. Its job is to choose the cognitive algorithm:
@@ -166,13 +199,11 @@ A conceptual objective is:
 
 `mode* = argmax(expected success gain + information gain - compute cost - latency - risk)`
 
-The parameter router and the metacognitive controller are related but not identical: one decides how much/which neural capacity to activate, while the other decides what kind of cognition to perform.
+DeepSeek V4 supplies the canonical pretrained semantic engine. It does **not** replace the belief state, metacognitive controller, verifier hierarchy, memory system, causal credit assignment or governance boundary. Those remain the mechanisms that turn a foundation model into the larger Leviathan research architecture.
 
 ## Non-claims
 
-Leviathan does **not** claim that replacing V4's MoE router with Mixture-of-Parameters automatically improves the model, nor that wiring these projects together creates AGI. R4 keeps the original V4 MoE as the fallback and rejects MoP if it fails real capability/efficiency gates.
-
-The main unsolved problems remain open-world verification, long-horizon causal credit assignment, stable lifelong belief state, safe parametric consolidation, cross-domain metacognition, simulator grounding, calibration after self-modification and governance of a self-improving learner.
+Leviathan does **not** claim that converting V4 MoE routing into parameter tiles creates AGI. The main unsolved problems remain open-world verification, long-horizon causal credit assignment, stable lifelong belief state, safe parametric consolidation, cross-domain metacognition, simulator grounding, calibration after self-modification and governance of a self-improving learner.
 
 ## Origin
 

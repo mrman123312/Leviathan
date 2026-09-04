@@ -12,7 +12,7 @@ allow_remote_code_by_default = false
 [[models]]
 id = "deepseek-v4-pro-base"
 repo_id = "deepseek-ai/DeepSeek-V4-Pro-Base"
-role = "frontier_semantic_substrate"
+role = "canonical_semantic_substrate"
 stage = "base"
 license = "MIT"
 total_parameters_b = 1600.0
@@ -20,20 +20,20 @@ active_parameters_b = 49.0
 multimodal = false
 enabled_for_download = false
 priority = 1
-notes = "Canonical R4/Omega-L substrate. Full pretrained DeepSeek V4 target for MoP conversion; multi-terabyte class and explicit opt-in required."
+notes = "Canonical Leviathan pretrained core. Full-checkpoint experiments must pass spec/deepseek-v4-mop.toml fingerprint and 64-shard validation; explicit opt-in required for weights."
 
 [[models]]
 id = "qwen3-30b-a3b-base"
 repo_id = "Qwen/Qwen3-30B-A3B-Base"
-role = "development_fallback"
+role = "development_control"
 stage = "base"
 license = "Apache-2.0"
 total_parameters_b = 30.5
 active_parameters_b = 3.3
 multimodal = false
 enabled_for_download = true
-priority = 2
-notes = "Retained as a low-cost regression/development fallback; no longer the canonical R4 substrate."
+priority = 5
+notes = "Cheaper architecture-surgery and regression control. No longer the canonical Leviathan substrate."
 
 [[models]]
 id = "olmo3-32b-base"
@@ -45,7 +45,7 @@ total_parameters_b = 32.0
 active_parameters_b = 32.0
 multimodal = false
 enabled_for_download = true
-priority = 3
+priority = 6
 notes = "Transparent training-lineage control for measuring architecture effects."
 
 [[models]]

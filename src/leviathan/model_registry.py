@@ -39,6 +39,10 @@ class ModelSpec:
     def is_teacher(self) -> bool:
         return "teacher" in self.role
 
+    @property
+    def is_canonical_substrate(self) -> bool:
+        return self.role == "canonical_semantic_substrate"
+
 
 class ModelRegistry:
     """Read-only registry with explicit safety around giant checkpoint acquisition."""
@@ -79,6 +83,15 @@ class ModelRegistry:
 
     def teachers(self) -> tuple[ModelSpec, ...]:
         return tuple(model for model in self.all() if model.is_teacher)
+
+    def canonical_substrate(self) -> ModelSpec:
+        canonical = tuple(model for model in self.all() if model.is_canonical_substrate)
+        if len(canonical) != 1:
+            raise ValueError(
+                "Leviathan requires exactly one canonical semantic substrate; "
+                f"found {len(canonical)}"
+            )
+        return canonical[0]
 
     def require_download_permission(self, model_id: str, *, allow_disabled: bool = False) -> ModelSpec:
         model = self.get(model_id)

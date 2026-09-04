@@ -1,4 +1,8 @@
-version = "0.1"
+version = "0.2"
+name = "Leviathan DeepSeek V4 Mixture-of-Parameters"
+source_model = "deepseek-v4-pro-base"
+full_checkpoint_required = true
+single_cognitive_model = true
 
 [model]
 registry_id = "deepseek-v4-pro-base"
@@ -6,10 +10,28 @@ repo_id = "deepseek-ai/DeepSeek-V4-Pro-Base"
 stage = "base"
 role = "canonical_r4_and_omega_l_substrate"
 
-# Contract verified against the upstream DeepSeek-V4-Pro-Base config on 2026-09-04.
-# Experiments must still pin an immutable upstream revision and validate the local
-# config before loading weights.
+[verified_source_fingerprint]
+architecture = "DeepseekV4ForCausalLM"
+model_type = "deepseek_v4"
+num_hidden_layers = 61
+hidden_size = 7168
+moe_intermediate_size = 3072
+n_routed_experts = 384
+n_shared_experts = 1
+num_experts_per_tok = 6
+num_attention_heads = 128
+num_key_value_heads = 1
+head_dim = 512
+max_position_embeddings = 1048576
+num_nextn_predict_layers = 1
+hc_mult = 4
+vocab_size = 129280
+expert_dtype = "fp8"
+weight_block_size = [128, 128]
+weight_shards = 64
 
+# Duplicated into a typed contract for the strict preflight library. The validator
+# intentionally cross-checks the live checkpoint config rather than trusting docs.
 [architecture]
 model_type = "deepseek_v4"
 architecture_class = "DeepseekV4ForCausalLM"
@@ -31,6 +53,24 @@ vocab_size = 129280
 expert_dtype = "fp8"
 weight_block_size = [128, 128]
 
+[conversion]
+strategy = "function_preserving_swiglu_channel_tiling"
+tile_width = 128
+tiles_per_expert = 24
+routed_tiles_per_layer = 9216
+baseline_active_routed_tiles_per_token = 144
+preserve_shared_expert_path = true
+preserve_original_router_at_initialization = true
+independent_tile_routing_at_initialization = false
+retire_original_expert_route_before_parity = false
+scalar_parameter_routing = false
+expert_weight_averaging = false
+attention_changes_in_r4 = false
+residual_topology_changes_in_r4 = false
+
+[conversion.invariant]
+rule = "Each routed expert is decomposed into contiguous SwiGLU intermediate-channel tiles. The exact-parity route activates every tile belonging to each originally selected expert and sums their down-projection contributions, preserving the pretrained expert function before independent tile routing is trained."
+
 [mop]
 target = "routed_moe_ffn"
 tile_width = 128
@@ -41,32 +81,90 @@ expert_averaging = false
 attention_changes_in_r4 = false
 residual_topology_changes_in_r4 = false
 
-[phases.mop_0]
-name = "exact_parameter_tile_decomposition"
-train = false
-goal = "Represent every routed expert as exact channel tiles while preserving the original expert router and pretrained function."
-required = ["logit_parity", "hidden_state_parity", "no_checkpoint_retraining"]
+[phases]
+phase_0 = "lock_upstream_revision_and_baseline_fingerprint"
+phase_1 = "validate_full_61_layer_64_shard_checkpoint"
+phase_2 = "materialize_or_virtualize_128_channel_tiles_without_behavior_change"
+phase_3 = "prove_logit_and_hidden_state_parity_on_frozen_model"
+phase_4 = "train_tile_router_with_original_route_as_teacher"
+phase_5 = "allow_cross_expert_tile_composition"
+phase_6 = "reduce_active_tiles_only_when_quality_and_wall_clock_both_pass"
+phase_7 = "selective_unfreeze_with_replay_and_stability_losses"
+phase_8 = "full_capability_retention_calibration_safety_efficiency_evaluation"
+phase_9 = "shadow_then_promote_or_rollback"
 
-[phases.mop_1]
-name = "learn_tile_router_with_donor_frozen"
-train = true
-core_frozen = true
-goal = "Train tile-level routing while retaining the original expert path as the zero-loss reference."
-required = ["retention_pass", "router_calibration", "route_load_balance"]
+[parity_gate]
+pretraining_weights_frozen = true
+exact_route_required = true
+max_logit_drift = "numerical_precision_or_explained_kernel_precision"
+hidden_state_comparison = true
+benchmark_regression_allowed = false
 
-[phases.mop_2]
-name = "reduce_active_tiles"
-train = true
-goal = "Lower active parameter traffic only when capability and real wall-clock efficiency are preserved."
-sweep_tile_widths = [256, 128, 64]
-required = ["capability_pass", "retention_pass", "wall_clock_not_worse", "hbm_not_worse"]
+[retention_gate]
+wikitext_heldout_passages = 64
+heldout_must_never_enter_training = true
+wikitext_hard_max_loss_increase_fraction = 0.02
+wikitext_target_max_loss_increase_fraction = 0.0025
+protected_benchmarks = [
+  "ARC-Easy",
+  "ARC-Challenge",
+  "MMLU",
+  "MMLU-Pro",
+  "HellaSwag",
+  "WinoGrande",
+  "GSM8K",
+  "HumanEval",
+  "AGIEval",
+  "LongBench-V2",
+  "PIQA",
+  "OpenBookQA",
+  "BoolQ",
+  "BBH"
+]
+arc_easy_is_canary = true
+report_every_candidate = true
 
-[phases.mop_3]
-name = "retire_redundant_expert_routing"
-train = true
-goal = "Retire the original expert-level route only after the independent tile path passes every promotion gate."
-required = ["all_promotion_suites", "rollback_verified"]
+[efficiency_gate]
+required = true
+metrics = [
+  "active_parameters_per_token",
+  "active_tiles_per_token",
+  "single_stream_tokens_per_second",
+  "aggregate_tokens_per_second",
+  "time_to_first_token",
+  "inter_token_latency",
+  "hbm_bytes_per_token",
+  "hbm_bandwidth_utilization",
+  "gpu_utilization",
+  "communication_time",
+  "router_overhead",
+  "wall_clock_seconds_per_success"
+]
+rule = "Mathematical sparsity is insufficient. A reduced-active-tile candidate is accepted only if end-to-end measured wall-clock efficiency improves without capability, retention, calibration, or safety loss."
+reject_if_only_mathematical_sparsity_improves = true
+reject_if_real_latency_worsens = true
+fallback = "retain_original_deepseek_v4_moe"
 
+[architecture_hooks]
+expose_hidden_state = true
+expose_router_state = true
+expose_routing_uncertainty = true
+expose_active_parameter_count = true
+expose_active_parameter_tiles = true
+expose_hardware_cost = true
+belief_state_injection = "zero_gated_only"
+metacognitive_control = "external_control_plane_then_learned_hook"
+verifier_feedback = "logged_not_directly_trusted"
+continual_learning = "transactional_only"
+
+[governance]
+raw_experience_updates_core = false
+rollback_required = true
+independent_verification_required = true
+external_promotion_authority_required = true
+original_pretrained_checkpoint_retained = true
+
+# Compatibility views consumed by the strict transplant manifest helper.
 [evaluation.retention]
 wikitext_heldout_passages = 64
 heldout_must_never_enter_training = true
@@ -75,17 +173,7 @@ target_relative_public_language_loss_increase = 0.0025
 
 [evaluation.benchmarks]
 canary = ["arc_easy"]
-protected = [
-  "arc_easy",
-  "arc_challenge",
-  "hellaswag",
-  "piqa",
-  "boolq",
-  "openbookqa",
-  "mmlu",
-  "gsm8k",
-  "humaneval",
-]
+protected = ["arc_easy", "arc_challenge", "hellaswag", "piqa", "boolq", "openbookqa", "mmlu", "gsm8k", "humaneval"]
 report_every_candidate = true
 
 [evaluation.performance]
@@ -96,9 +184,3 @@ hbm_bytes_per_token_must_not_regress = true
 record_active_parameters_per_token = true
 record_gpu_utilization = true
 record_hbm_bandwidth_utilization = true
-
-[rejection]
-reject_if_only_mathematical_sparsity_improves = true
-reject_if_real_latency_worsens = true
-reject_if_any_protected_capability_has_unexplained_regression = true
-fallback = "retain_original_deepseek_v4_moe"
