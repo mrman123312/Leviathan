@@ -1,4 +1,4 @@
-version = "0.2"
+version = "0.3"
 name = "Leviathan architecture embodiment ledger"
 single_cognitive_model = true
 
@@ -34,7 +34,7 @@ demonstrated = "not_started"
 [layers."L1.5"]
 name = "parameter ecology"
 target_fundamental = "sparse ecology of expressive parameterized cells"
-evidence = "MoP-0 tiles plus inert confidence/message/recruitment membrane and packed-expert install path exist"
+evidence = "packed DeepSeek cell bodies now execute zero-gated peer communication, cross-expert associative routing, disagreement recruitment, and ephemeral local state; learned gates and full-V4 validation remain open"
 [layers."L1.5".gates]
 specification = "passed"
 executable = "passed"
@@ -56,7 +56,7 @@ demonstrated = "not_started"
 [layers.L3]
 name = "topology and routing"
 target_fundamental = "task-compiled conditional cognitive graph"
-evidence = "acyclic dynamic cognitive DAG with dependency blocking and bounded parallelism is executable; neural topology is not yet replaced"
+evidence = "acyclic dynamic cognitive DAG and a zero-gated arbitrary cross-expert cell-route reference are executable; learned neural topology replacement remains open"
 [layers.L3.gates]
 specification = "passed"
 executable = "passed"
@@ -78,10 +78,10 @@ demonstrated = "not_started"
 [layers.L5]
 name = "persistent state and memory"
 target_fundamental = "self-organizing epistemic memory and persistent belief state"
-evidence = "belief/provenance schemas and independence-discounted evidence update are executable; persistent memory ecology is not"
+evidence = "append-only persistent episodic/semantic/procedural memory, current-vs-history belief state, contradiction tracking, provenance, and verified promotion are executable and connected to LeviathanRuntime; learned self-organizing memory policy remains open"
 [layers.L5.gates]
 specification = "passed"
-executable = "partial"
+executable = "passed"
 integrated = "partial"
 learned = "not_started"
 demonstrated = "not_started"
@@ -111,7 +111,7 @@ demonstrated = "not_started"
 [layers.L8]
 name = "cognition and metacognition"
 target_fundamental = "algorithm-synthesizing metacognitive controller with cognitive compilation"
-evidence = "heuristic controller plus program compiler and repeated-verified-trajectory skill compiler exist; policy is not learned"
+evidence = "heuristic controller plus program compiler, cell-disagreement telemetry bridge, and repeated-verified-trajectory skill compiler exist; policy is not learned"
 [layers.L8.gates]
 specification = "passed"
 executable = "passed"
