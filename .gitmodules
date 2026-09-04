@@ -112,3 +112,60 @@
 [submodule "vendor/inference/tensorrt-llm"]
 	path = vendor/inference/tensorrt-llm
 	url = https://github.com/NVIDIA/TensorRT-LLM.git
+[submodule "vendor/learning/ttt-e2e"]
+	path = vendor/learning/ttt-e2e
+	url = https://github.com/test-time-training/e2e.git
+[submodule "vendor/representation/large-concept-model"]
+	path = vendor/representation/large-concept-model
+	url = https://github.com/facebookresearch/large_concept_model.git
+[submodule "vendor/representation/sonar"]
+	path = vendor/representation/sonar
+	url = https://github.com/facebookresearch/SONAR.git
+[submodule "vendor/multimodal/bagel"]
+	path = vendor/multimodal/bagel
+	url = https://github.com/ByteDance-Seed/Bagel.git
+[submodule "vendor/vision/sam3"]
+	path = vendor/vision/sam3
+	url = https://github.com/facebookresearch/sam3.git
+[submodule "vendor/multimodal/moshi"]
+	path = vendor/multimodal/moshi
+	url = https://github.com/kyutai-labs/moshi.git
+[submodule "vendor/architecture/dream"]
+	path = vendor/architecture/dream
+	url = https://github.com/DreamLM/Dream.git
+[submodule "vendor/architecture/llada"]
+	path = vendor/architecture/llada
+	url = https://github.com/ML-GSAI/LLaDA.git
+[submodule "vendor/learning/ttt-lm"]
+	path = vendor/learning/ttt-lm
+	url = https://github.com/test-time-training/ttt-lm-pytorch.git
+[submodule "vendor/multimodal/emu3"]
+	path = vendor/multimodal/emu3
+	url = https://github.com/baaivision/Emu3.git
+[submodule "vendor/multimodal/janus"]
+	path = vendor/multimodal/janus
+	url = https://github.com/deepseek-ai/Janus.git
+[submodule "vendor/multimodal/deepseek-ocr"]
+	path = vendor/multimodal/deepseek-ocr
+	url = https://github.com/deepseek-ai/DeepSeek-OCR.git
+[submodule "vendor/robotics/isaac-groot"]
+	path = vendor/robotics/isaac-groot
+	url = https://github.com/NVIDIA/Isaac-GR00T.git
+[submodule "vendor/inference/quest"]
+	path = vendor/inference/quest
+	url = https://github.com/mit-han-lab/Quest.git
+[submodule "vendor/inference/snapkv"]
+	path = vendor/inference/snapkv
+	url = https://github.com/FasterDecoding/SnapKV.git
+[submodule "vendor/inference/medusa"]
+	path = vendor/inference/medusa
+	url = https://github.com/FasterDecoding/Medusa.git
+[submodule "vendor/training/megatron-lm"]
+	path = vendor/training/megatron-lm
+	url = https://github.com/NVIDIA/Megatron-LM.git
+[submodule "vendor/training/torchtitan"]
+	path = vendor/training/torchtitan
+	url = https://github.com/pytorch/torchtitan.git
+[submodule "vendor/evaluation/lm-evaluation-harness"]
+	path = vendor/evaluation/lm-evaluation-harness
+	url = https://github.com/EleutherAI/lm-evaluation-harness.git
