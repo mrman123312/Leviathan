@@ -26,6 +26,13 @@ CANONICAL_CONFIG = {
 }
 
 
+def canonical_weight_map() -> dict[str, str]:
+    return {
+        f"model.fake_parameter_{index}": f"model-{index:05d}-of-00064.safetensors"
+        for index in range(1, 65)
+    }
+
+
 class DeepSeekV4Tests(unittest.TestCase):
     def test_canonical_fingerprint_and_tile_math(self) -> None:
         fingerprint = DeepSeekV4Fingerprint.from_mapping(CANONICAL_CONFIG)
@@ -35,6 +42,23 @@ class DeepSeekV4Tests(unittest.TestCase):
         self.assertEqual(plan.routed_tiles_per_layer, 9216)
         self.assertEqual(plan.baseline_active_routed_tiles_per_token, 144)
         self.assertEqual(plan.layers, 61)
+
+    def test_tensor_tile_coordinates_match_swiglu_axes(self) -> None:
+        fingerprint = DeepSeekV4Fingerprint.from_mapping(CANONICAL_CONFIG)
+        plan = MixtureOfParametersPlan.from_fingerprint(fingerprint)
+
+        first = plan.tile_spec(0, 0)
+        last = plan.tile_spec(383, 23)
+
+        self.assertEqual(first.global_tile_id, 0)
+        self.assertEqual(first.w1_row_bounds, (0, 128))
+        self.assertEqual(first.w3_row_bounds, (0, 128))
+        self.assertEqual(first.w2_column_bounds, (0, 128))
+
+        self.assertEqual(last.global_tile_id, 9215)
+        self.assertEqual(last.w1_row_bounds, (2944, 3072))
+        self.assertEqual(last.w3_row_bounds, (2944, 3072))
+        self.assertEqual(last.w2_column_bounds, (2944, 3072))
 
     def test_exact_route_expands_all_tiles_of_selected_experts(self) -> None:
         fingerprint = DeepSeekV4Fingerprint.from_mapping(CANONICAL_CONFIG)
@@ -58,11 +82,17 @@ class DeepSeekV4Tests(unittest.TestCase):
             manifest = build_manifest(root, require_weights=False)
             self.assertFalse(manifest.full_checkpoint_verified)
             self.assertEqual(manifest.model_id, "deepseek-v4-pro-base")
+            self.assertIn("tensor_tile_contract", manifest.as_dict())
 
-    def test_full_checkpoint_requires_all_64_shards(self) -> None:
+    def test_full_checkpoint_requires_all_64_shards_and_index_references(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            (root / "model.safetensors.index.json").write_text("{}", encoding="utf-8")
+            weight_map = canonical_weight_map()
+            (root / "model.safetensors.index.json").write_text(
+                json.dumps({"weight_map": weight_map}),
+                encoding="utf-8",
+            )
+
             for index in range(1, 64):
                 (root / f"model-{index:05d}-of-00064.safetensors").touch()
             with self.assertRaises(FileNotFoundError):
@@ -70,6 +100,15 @@ class DeepSeekV4Tests(unittest.TestCase):
 
             (root / "model-00064-of-00064.safetensors").touch()
             verify_full_checkpoint_files(root)
+
+            corrupted_map = dict(weight_map)
+            corrupted_map.pop("model.fake_parameter_64")
+            (root / "model.safetensors.index.json").write_text(
+                json.dumps({"weight_map": corrupted_map}),
+                encoding="utf-8",
+            )
+            with self.assertRaises(ValueError):
+                verify_full_checkpoint_files(root)
 
 
 if __name__ == "__main__":
