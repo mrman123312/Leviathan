@@ -17,6 +17,13 @@ class ModelRegistryTests(unittest.TestCase):
         self.assertGreaterEqual(len(registry.base_models()), 5)
         self.assertGreaterEqual(len(registry.teachers()), 4)
 
+    def test_deepseek_v4_is_the_single_canonical_substrate(self) -> None:
+        registry = ModelRegistry.from_toml()
+        model = registry.canonical_substrate()
+        self.assertEqual(model.id, "deepseek-v4-pro-base")
+        self.assertEqual(model.role, "canonical_semantic_substrate")
+        self.assertTrue(model.is_base)
+
     def test_frontier_download_requires_explicit_override(self) -> None:
         registry = ModelRegistry.from_toml()
         with self.assertRaises(PermissionError):
@@ -24,14 +31,14 @@ class ModelRegistryTests(unittest.TestCase):
         model = registry.require_download_permission(
             "deepseek-v4-pro-base", allow_disabled=True
         )
-        self.assertEqual(model.role, "frontier_semantic_substrate")
+        self.assertEqual(model.role, "canonical_semantic_substrate")
 
-    def test_active_fraction(self) -> None:
+    def test_deepseek_active_fraction_is_sparse(self) -> None:
         registry = ModelRegistry.from_toml()
-        model = registry.get("qwen3-30b-a3b-base")
+        model = registry.get("deepseek-v4-pro-base")
         self.assertIsNotNone(model.active_fraction)
         assert model.active_fraction is not None
-        self.assertLess(model.active_fraction, 0.2)
+        self.assertLess(model.active_fraction, 0.04)
 
     def test_duplicate_ids_rejected(self) -> None:
         content = textwrap.dedent(
