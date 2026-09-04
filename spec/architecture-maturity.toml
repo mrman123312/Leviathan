@@ -1,4 +1,4 @@
-version = "0.1"
+version = "0.2"
 name = "Leviathan architecture embodiment ledger"
 single_cognitive_model = true
 
@@ -34,7 +34,7 @@ demonstrated = "not_started"
 [layers."L1.5"]
 name = "parameter ecology"
 target_fundamental = "sparse ecology of expressive parameterized cells"
-evidence = "MoP-0 tiles exist; cell membrane/reference ecology is inserted inertly"
+evidence = "MoP-0 tiles plus inert confidence/message/recruitment membrane and packed-expert install path exist"
 [layers."L1.5".gates]
 specification = "passed"
 executable = "passed"
@@ -45,73 +45,73 @@ demonstrated = "not_started"
 [layers.L2]
 name = "transformation primitive"
 target_fundamental = "learned neural microprograms over heterogeneous operators"
-evidence = "pretrained Transformer blocks still own the actual state transition"
+evidence = "explicit cognitive operator/program compiler is executable; actual DeepSeek neural blocks still own state transitions"
 [layers.L2.gates]
 specification = "passed"
-executable = "partial"
-integrated = "not_started"
+executable = "passed"
+integrated = "partial"
 learned = "not_started"
 demonstrated = "not_started"
 
 [layers.L3]
 name = "topology and routing"
 target_fundamental = "task-compiled conditional cognitive graph"
-evidence = "conditional routing concepts exist; inherited topology remains primary"
+evidence = "acyclic dynamic cognitive DAG with dependency blocking and bounded parallelism is executable; neural topology is not yet replaced"
 [layers.L3.gates]
 specification = "passed"
-executable = "partial"
-integrated = "not_started"
+executable = "passed"
+integrated = "partial"
 learned = "not_started"
 demonstrated = "not_started"
 
 [layers.L4]
 name = "representation"
 target_fundamental = "problem-specific internal representation compiler"
-evidence = "contracts/specification only"
+evidence = "reference representation compiler selects symbolic/procedural/causal/spatial/concept plans; learned internal DSL invention is not implemented"
 [layers.L4.gates]
 specification = "passed"
-executable = "not_started"
-integrated = "not_started"
+executable = "passed"
+integrated = "partial"
 learned = "not_started"
 demonstrated = "not_started"
 
 [layers.L5]
 name = "persistent state and memory"
 target_fundamental = "self-organizing epistemic memory and persistent belief state"
-evidence = "belief/provenance schemas exist; persistent integrated cognitive state does not"
+evidence = "belief/provenance schemas and independence-discounted evidence update are executable; persistent memory ecology is not"
 [layers.L5.gates]
 specification = "passed"
 executable = "partial"
-integrated = "not_started"
+integrated = "partial"
 learned = "not_started"
 demonstrated = "not_started"
 
 [layers.L6]
 name = "prediction and world model"
 target_fundamental = "counterfactual theory-building causal world model"
-evidence = "architecture specified; no native executable theory-induction loop"
+evidence = "hypothesis/prediction/evidence interfaces and simulation program nodes are executable; theory induction and grounded learned dynamics remain open"
 [layers.L6.gates]
 specification = "passed"
-executable = "not_started"
-integrated = "not_started"
+executable = "partial"
+integrated = "partial"
 learned = "not_started"
 demonstrated = "not_started"
 
 [layers.L7]
 name = "learning and plasticity"
 target_fundamental = "evidence-directed learning router and audited self-improvement compiler"
-evidence = "trust/promotion/transplant control plane exists; lifelong learner does not"
+evidence = "least-dangerous-destination learning router and governed core-candidate gate are executable; no trained lifelong learner yet"
 [layers.L7.gates]
 specification = "passed"
-executable = "partial"
-integrated = "not_started"
+executable = "passed"
+integrated = "partial"
 learned = "not_started"
 demonstrated = "not_started"
 
 [layers.L8]
 name = "cognition and metacognition"
 target_fundamental = "algorithm-synthesizing metacognitive controller with cognitive compilation"
-evidence = "transparent heuristic controller exists; learned integrated controller does not"
+evidence = "heuristic controller plus program compiler and repeated-verified-trajectory skill compiler exist; policy is not learned"
 [layers.L8.gates]
 specification = "passed"
 executable = "passed"
@@ -122,11 +122,11 @@ demonstrated = "not_started"
 [layers.L9]
 name = "goals, agency, verification"
 target_fundamental = "governed evidence-driven agency with causal accountability"
-evidence = "governance/transplant contracts exist; autonomous executive loop does not"
+evidence = "structured GoalState, verification dependencies, append-only events and causal-accountability record exist; autonomous executive is not active"
 [layers.L9.gates]
 specification = "passed"
 executable = "partial"
-integrated = "not_started"
+integrated = "partial"
 learned = "not_started"
 demonstrated = "not_started"
 
