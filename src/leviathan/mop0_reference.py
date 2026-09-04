@@ -1,13 +1,16 @@
 """Executable DeepSeek V4 MoP-0 reference path.
 
-The optimized Leviathan kernel does not exist yet. This module therefore favors
-correctness over speed: each original routed expert is evaluated as 128-channel
-SwiGLU tiles, and every tile contribution is sent through the donor expert's
-unchanged w2 projection before the contributions are summed.
+Two V4 expert layouts are supported:
 
-Calling the full w2 once per tile is intentionally expensive. It avoids making
-assumptions about the donor's FP8 storage format and gives us a prompt-level parity
-oracle before building fused tile kernels.
+* DeepSeek's reference inference layout: a ModuleList of routed experts exposing
+  w1/w2/w3.
+* Hugging Face Transformers V4 layout: one packed DeepseekV4Experts module with
+  3-D gate_up_proj and down_proj expert tensors.
+
+The optimized Leviathan kernel does not exist yet. This module therefore favors
+correctness over speed and reconstructs every originally selected expert from all
+of its contiguous intermediate-channel tiles. It is a prompt-level parity oracle,
+not a serving-speed implementation.
 """
 
 from __future__ import annotations
@@ -58,19 +61,11 @@ class PromptParityResult:
 
 
 class MoP0ExpertWrapper(_BaseModule):
-    """Reference implementation of one exact routed-expert tile decomposition.
-
-    It preserves the donor's w1, w2, w3 modules and swiglu_limit. The only change is
-    that the activated intermediate vector is partitioned into contiguous tiles and
-    the final projection is accumulated tile by tile.
-    """
+    """Reference wrapper for DeepSeek's per-expert w1/w2/w3 layout."""
 
     def __init__(self, expert: Any, *, tile_width: int = 128) -> None:
         if nn is None:
-            raise RuntimeError(
-                "MoP-0 reference execution requires PyTorch; install Leviathan with "
-                "the inference extras"
-            )
+            raise RuntimeError("MoP-0 reference execution requires PyTorch")
         super().__init__()
         if tile_width <= 0:
             raise ValueError("tile_width must be positive")
@@ -106,8 +101,8 @@ class MoP0ExpertWrapper(_BaseModule):
             )
 
         output = None
-        # Deliberately use the original full w2 operation on a sparse/masked vector.
-        # That keeps this reference compatible with custom/quantized Linear modules.
+        # The donor's custom Linear may own quantization details that cannot safely be
+        # sliced yet. A sparse full-width input lets the unchanged w2 execute each tile.
         for start in range(0, intermediate_size, self.tile_width):
             stop = start + self.tile_width
             tile_input = torch.zeros_like(activated)
@@ -115,18 +110,114 @@ class MoP0ExpertWrapper(_BaseModule):
             contribution = self.expert.w2(tile_input.to(dtype))
             output = contribution if output is None else output + contribution
 
-        if output is None:  # Defensive only; V4 has a non-empty expert dimension.
+        if output is None:
             raise RuntimeError("MoP-0 expert produced no tiles")
         return output
 
 
+class MoP0PackedExpertsWrapper(_BaseModule):
+    """Reference wrapper for Transformers' packed DeepseekV4Experts layout.
+
+    Hugging Face stores all routed experts as:
+
+      gate_up_proj: [experts, 2 * intermediate, hidden]
+      down_proj:    [experts, hidden, intermediate]
+
+    The router is left untouched. For every routed token/expert pair we reproduce the
+    normal gate/up activation once, then evaluate down_proj in contiguous channel
+    slices and sum the slices before applying the original route weight.
+    """
+
+    def __init__(self, expert_bank: Any, *, tile_width: int = 128) -> None:
+        if nn is None:
+            raise RuntimeError("MoP-0 reference execution requires PyTorch")
+        super().__init__()
+        if tile_width <= 0:
+            raise ValueError("tile_width must be positive")
+        for name in ("gate_up_proj", "down_proj"):
+            if not hasattr(expert_bank, name):
+                raise TypeError(f"packed expert bank is missing {name}")
+        self.expert_bank = expert_bank
+        self.tile_width = int(tile_width)
+
+    @property
+    def num_experts(self) -> int:
+        declared = getattr(self.expert_bank, "num_experts", None)
+        if declared is not None:
+            return int(declared)
+        return int(self.expert_bank.gate_up_proj.shape[0])
+
+    @property
+    def intermediate_size(self) -> int:
+        declared = getattr(self.expert_bank, "intermediate_dim", None)
+        if declared is not None:
+            return int(declared)
+        return int(self.expert_bank.down_proj.shape[-1])
+
+    def _activate(self, gate_up: Any) -> Any:
+        apply_gate = getattr(self.expert_bank, "_apply_gate", None)
+        if callable(apply_gate):
+            return apply_gate(gate_up)
+
+        gate, up = gate_up.chunk(2, dim=-1)
+        limit = float(getattr(self.expert_bank, "limit", 0.0) or 0.0)
+        if limit > 0:
+            gate = gate.clamp(max=limit)
+            up = up.clamp(min=-limit, max=limit)
+        act_fn = getattr(self.expert_bank, "act_fn", F.silu)
+        return act_fn(gate) * up
+
+    def forward(self, hidden_states: Any, top_k_index: Any, top_k_weights: Any) -> Any:
+        intermediate_size = self.intermediate_size
+        if intermediate_size % self.tile_width:
+            raise ValueError(
+                f"packed expert intermediate size {intermediate_size} is not divisible by "
+                f"tile_width={self.tile_width}"
+            )
+
+        final = torch.zeros_like(hidden_states)
+        with torch.no_grad():
+            mask = F.one_hot(top_k_index, num_classes=self.num_experts).permute(2, 1, 0)
+            hit = torch.greater(mask.sum(dim=(-1, -2)), 0).nonzero()
+
+        for expert_index_tensor in hit:
+            expert_index = int(expert_index_tensor[0].item())
+            if expert_index >= self.num_experts:
+                continue
+            top_k_pos, token_idx = torch.where(mask[expert_index])
+
+            gate_up = F.linear(
+                hidden_states[token_idx],
+                self.expert_bank.gate_up_proj[expert_index],
+            )
+            activated = self._activate(gate_up)
+
+            expert_output = None
+            for start in range(0, intermediate_size, self.tile_width):
+                stop = start + self.tile_width
+                contribution = F.linear(
+                    activated[..., start:stop],
+                    self.expert_bank.down_proj[expert_index, :, start:stop],
+                )
+                expert_output = (
+                    contribution if expert_output is None else expert_output + contribution
+                )
+
+            expert_output = expert_output * top_k_weights[token_idx, top_k_pos, None]
+            final.index_add_(0, token_idx, expert_output.to(final.dtype))
+        return final
+
+
 def _looks_like_routed_moe(module: Any) -> bool:
-    experts = getattr(module, "experts", None)
-    return experts is not None and hasattr(module, "gate") and hasattr(experts, "__len__")
+    return getattr(module, "experts", None) is not None and hasattr(module, "gate")
+
+
+def _is_packed_expert_bank(experts: Any) -> bool:
+    return hasattr(experts, "gate_up_proj") and hasattr(experts, "down_proj")
 
 
 def install_mop0_reference(model: Any, *, tile_width: int = 128) -> PatchReport:
-    """Wrap routed experts in-place while deliberately leaving shared experts alone."""
+    """Patch routed experts in-place while deliberately leaving shared experts alone."""
     if nn is None:
         raise RuntimeError(
             "MoP-0 reference execution requires PyTorch; install Leviathan with "
@@ -138,18 +229,31 @@ def install_mop0_reference(model: Any, *, tile_width: int = 128) -> PatchReport:
     already = 0
     unavailable = 0
 
-    for module in model.modules():
+    # Freeze the traversal before replacing modules so newly inserted wrappers do not
+    # alter which parent modules this pass sees.
+    modules = tuple(model.modules())
+    for module in modules:
         if not _looks_like_routed_moe(module):
             continue
         experts = module.experts
-        candidate_count = 0
-        for expert in experts:
-            if expert is not None:
-                candidate_count += 1
+
+        if isinstance(experts, MoP0PackedExpertsWrapper):
+            moe_modules += 1
+            already += experts.num_experts
+            continue
+
+        if _is_packed_expert_bank(experts):
+            moe_modules += 1
+            packed = MoP0PackedExpertsWrapper(experts, tile_width=tile_width)
+            wrapped += packed.num_experts
+            module.experts = packed
+            continue
+
+        if not hasattr(experts, "__len__"):
+            continue
+
+        candidate_count = sum(1 for expert in experts if expert is not None)
         if candidate_count == 0:
-            # On sharded ranks the ModuleList may contain mostly None, but at least
-            # one local routed expert should normally exist. Do not count an unrelated
-            # empty container as a MoE module.
             continue
         moe_modules += 1
 
@@ -168,8 +272,9 @@ def install_mop0_reference(model: Any, *, tile_width: int = 128) -> PatchReport:
 
     if wrapped == 0 and already == 0:
         raise RuntimeError(
-            "no DeepSeek-style routed experts were found. Expected MoE modules with "
-            "a gate and an experts container whose experts expose w1/w2/w3."
+            "no supported DeepSeek V4 routed experts were found. Expected either "
+            "Transformers packed gate_up_proj/down_proj experts or DeepSeek reference "
+            "experts exposing w1/w2/w3."
         )
 
     return PatchReport(
@@ -182,14 +287,21 @@ def install_mop0_reference(model: Any, *, tile_width: int = 128) -> PatchReport:
 
 
 def restore_original_experts(model: Any) -> int:
-    """Undo the reference wrapper in-place and return the number restored."""
+    """Undo either reference layout wrapper and return the expert count restored."""
     if nn is None:
         return 0
     restored = 0
-    for module in model.modules():
+    modules = tuple(model.modules())
+    for module in modules:
         if not _looks_like_routed_moe(module):
             continue
         experts = module.experts
+        if isinstance(experts, MoP0PackedExpertsWrapper):
+            restored += experts.num_experts
+            module.experts = experts.expert_bank
+            continue
+        if not hasattr(experts, "__len__"):
+            continue
         for index in range(len(experts)):
             expert = experts[index]
             if isinstance(expert, MoP0ExpertWrapper):
@@ -212,8 +324,8 @@ def _extract_logits(output: Any) -> Any:
 
 
 def _forward_model(model: Any, model_inputs: Mapping[str, Any]) -> Any:
-    # Most Transformers models accept keyword tensors. The official DeepSeek reference
-    # Transformer accepts input_ids directly. Support both without model-specific forks.
+    # Transformers accepts keyword tensors. DeepSeek's standalone reference Transformer
+    # accepts input_ids directly. Support both without maintaining separate parity code.
     try:
         return model(**dict(model_inputs))
     except TypeError as first_error:
