@@ -1,5 +1,11 @@
 """Leviathan research scaffold."""
 
+from .architecture_maturity import (
+    ArchitectureMaturityPlan,
+    GateState,
+    LayerMaturity,
+    load_maturity_plan,
+)
 from .controller import BaselineMetaController, UtilityWeights, should_continue_deliberating, utility
 from .deepseek_v4 import (
     CANONICAL_MODEL_ID,
@@ -10,6 +16,17 @@ from .deepseek_v4 import (
     ParameterTileSpec,
     build_manifest,
     verify_full_checkpoint_files,
+)
+from .parameter_cells import (
+    CellAction,
+    CellBudget,
+    CellIdentity,
+    CellMembraneConfig,
+    CoalitionRegistry,
+    DisagreementThresholds,
+    MoPStage,
+    load_parameter_cell_spec,
+    stage_sequence,
 )
 from .trust import PromotionThresholds, candidate_trust, may_promote, verification_trust
 from .types import (
@@ -25,17 +42,27 @@ from .types import (
 )
 
 __all__ = [
+    "ArchitectureMaturityPlan",
     "BaselineMetaController",
     "Belief",
     "CANONICAL_MODEL_ID",
     "CANONICAL_REPO_ID",
+    "CellAction",
+    "CellBudget",
+    "CellIdentity",
+    "CellMembraneConfig",
     "CognitiveMode",
+    "CoalitionRegistry",
     "DeepSeekV4Fingerprint",
     "DeepSeekV4Manifest",
+    "DisagreementThresholds",
+    "GateState",
+    "LayerMaturity",
     "LearningCandidate",
     "MetaState",
     "MixtureOfParametersPlan",
     "ModeEstimate",
+    "MoPStage",
     "ParameterTileSpec",
     "PromotionThresholds",
     "Provenance",
@@ -45,8 +72,11 @@ __all__ = [
     "Verification",
     "build_manifest",
     "candidate_trust",
+    "load_maturity_plan",
+    "load_parameter_cell_spec",
     "may_promote",
     "should_continue_deliberating",
+    "stage_sequence",
     "utility",
     "verification_trust",
     "verify_full_checkpoint_files",
