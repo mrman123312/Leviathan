@@ -1,4 +1,4 @@
-version = "0.1"
+version = "0.2"
 
 # The registry stores metadata only. Do not commit model weights to Git.
 # Revisions should be pinned to an immutable commit hash before any experiment is declared reproducible.
@@ -10,17 +10,30 @@ require_revision_pin_for_training = true
 allow_remote_code_by_default = false
 
 [[models]]
+id = "deepseek-v4-pro-base"
+repo_id = "deepseek-ai/DeepSeek-V4-Pro-Base"
+role = "frontier_semantic_substrate"
+stage = "base"
+license = "MIT"
+total_parameters_b = 1600.0
+active_parameters_b = 49.0
+multimodal = false
+enabled_for_download = false
+priority = 1
+notes = "Canonical R4/Omega-L substrate. Full pretrained DeepSeek V4 target for MoP conversion; multi-terabyte class and explicit opt-in required."
+
+[[models]]
 id = "qwen3-30b-a3b-base"
 repo_id = "Qwen/Qwen3-30B-A3B-Base"
-role = "experimental_substrate"
+role = "development_fallback"
 stage = "base"
 license = "Apache-2.0"
 total_parameters_b = 30.5
 active_parameters_b = 3.3
 multimodal = false
 enabled_for_download = true
-priority = 1
-notes = "Primary development-scale sparse substrate for architecture surgery."
+priority = 2
+notes = "Retained as a low-cost regression/development fallback; no longer the canonical R4 substrate."
 
 [[models]]
 id = "olmo3-32b-base"
@@ -32,21 +45,8 @@ total_parameters_b = 32.0
 active_parameters_b = 32.0
 multimodal = false
 enabled_for_download = true
-priority = 2
+priority = 3
 notes = "Transparent training-lineage control for measuring architecture effects."
-
-[[models]]
-id = "deepseek-v4-pro-base"
-repo_id = "deepseek-ai/DeepSeek-V4-Pro-Base"
-role = "frontier_semantic_substrate"
-stage = "base"
-license = "MIT"
-total_parameters_b = 1600.0
-active_parameters_b = 49.0
-multimodal = false
-enabled_for_download = false
-priority = 10
-notes = "Preferred giant semantic substrate after Leviathan mechanisms are proven at smaller scale. Multi-terabyte class; explicit opt-in required."
 
 [[models]]
 id = "mimo-v2.5-pro-base"
