@@ -81,6 +81,56 @@ Mathematical sparsity alone is not success. A lower-active-tile candidate is acc
 
 See `spec/deepseek-v4-mop.toml`, `docs/15-deepseek-v4-mop-r4.md` and `docs/16-deepseek-v4-mop-integration.md`.
 
+### Prompt runtime
+
+R4 now has an executable prompt path rather than only a transplant specification.
+
+Prompt an already-served OpenAI-compatible V4 instance:
+
+```bash
+python scripts/run_prompt.py \
+  --backend endpoint \
+  --base-url http://127.0.0.1:8000 \
+  --prompt "The capital of France is"
+```
+
+Or open the interactive shell:
+
+```bash
+python scripts/run_prompt.py --backend endpoint
+```
+
+On a machine capable of loading the local full checkpoint, install the inference extras and run the donor directly:
+
+```bash
+python -m pip install -e '.[inference]'
+python scripts/run_prompt.py \
+  --backend transformers \
+  --model-dir /models/deepseek-v4-pro-base \
+  --prompt "The capital of France is"
+```
+
+The same local runner can install the deliberately slow **MoP-0 reference executor**:
+
+```bash
+python scripts/run_prompt.py \
+  --backend transformers \
+  --model-dir /models/deepseek-v4-pro-base \
+  --mop0-reference \
+  --prompt "The capital of France is"
+```
+
+Prompt-level parity is measured with:
+
+```bash
+python scripts/check_mop0_prompt_parity.py \
+  --model-dir /models/deepseek-v4-pro-base \
+  --prompt "The capital of France is" \
+  --require-argmax-match
+```
+
+The reference executor is a correctness oracle, not a speed claim: it reconstructs each selected routed expert from all 24 tiles using the unchanged donor projections. See `docs/17-prompt-and-mop0-runtime.md`.
+
 ### Other model roles
 
 - **Qwen3-30B-A3B-Base** — development/regression control.
@@ -115,6 +165,7 @@ See `docs/12-omega-model-soup.md` and `docs/13-weight-transplantation.md`.
 - `docs/14-omega-source-addendum.md` — model-source provenance and role notes.
 - `docs/15-deepseek-v4-mop-r4.md` — R4 execution protocol, MoP-0 parity, benchmark/efficiency gates and success definition.
 - `docs/16-deepseek-v4-mop-integration.md` — canonical full-V4 integration boundary and handoff to later Leviathan layers.
+- `docs/17-prompt-and-mop0-runtime.md` — prompt shell, local reference executor and prompt-level parity procedure.
 - `spec/architecture.yaml` — machine-readable cognitive module graph and trust rules.
 - `spec/interfaces.md` — proposed data contracts between modules.
 - `spec/model-registry.toml` — model/checkpoint metadata and download policy.
@@ -122,9 +173,11 @@ See `docs/12-omega-model-soup.md` and `docs/13-weight-transplantation.md`.
 - `spec/deepseek-v4-mop.toml` — canonical full-V4 fingerprint, MoP phases and acceptance gates.
 - `scripts/fetch_model_assets.py` — guarded metadata/checkpoint acquisition utility.
 - `scripts/prepare_deepseek_v4_mop.py` — validate a pinned local V4 checkpoint and emit the combined checkpoint/R4 MoP manifest.
+- `scripts/run_prompt.py` — raw/interactive V4 prompt runner for endpoint or local Transformers execution.
+- `scripts/check_mop0_prompt_parity.py` — run one prompt through original V4 and MoP-0 and measure logit drift.
 - `scripts/validate_model_registry.py` — stdlib-only registry/Omega/V4 validator.
 - `models/README.md` — local checkpoint storage and reproducibility rules.
-- `src/leviathan/` — research scaffold for the controller, trust system, transplant state machine and V4 MoP plan.
+- `src/leviathan/` — research scaffold for the controller, trust system, transplant state machine and V4 MoP/runtime plan.
 - `vendor/` — pinned upstream Git submodules for the public source projects studied.
 
 ## Model assets
@@ -176,6 +229,12 @@ Fetching all weights requires explicit opt-in and should use an immutable upstre
 ```bash
 python scripts/fetch_model_assets.py deepseek-v4-pro-base \
   --weights --allow-disabled --revision <immutable-hugging-face-commit>
+```
+
+For local prompt/parity execution install the separate inference extra:
+
+```bash
+python -m pip install -e '.[inference]'
 ```
 
 ## Evidence labels
