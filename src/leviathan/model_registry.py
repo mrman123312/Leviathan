@@ -44,9 +44,12 @@ class ModelRegistry:
     """Read-only registry with explicit safety around giant checkpoint acquisition."""
 
     def __init__(self, models: Iterable[ModelSpec]) -> None:
-        self._models = {model.id: model for model in models}
-        if len(self._models) != len(list(self._models.values())):
-            raise ValueError("duplicate model IDs")
+        model_list = list(models)
+        ids = [model.id for model in model_list]
+        if len(ids) != len(set(ids)):
+            duplicates = sorted({model_id for model_id in ids if ids.count(model_id) > 1})
+            raise ValueError(f"duplicate model IDs: {duplicates}")
+        self._models = {model.id: model for model in model_list}
 
     @classmethod
     def from_toml(cls, path: Path = DEFAULT_REGISTRY_PATH) -> "ModelRegistry":
