@@ -1,0 +1,90 @@
+version = "0.1"
+name = "Leviathan single-model cognitive kernel"
+single_cognitive_model = true
+canonical_model_id = "deepseek-v4-pro-base"
+
+[invariant]
+semantic_model_count = 1
+subagent_committee = false
+opaque_prompt_state = false
+append_only_event_log = true
+predictions_recorded_before_outcomes = true
+compression_may_raise_trust = false
+raw_experience_updates_core = false
+
+[pipeline]
+stages = [
+  "representation_compiler",
+  "cognitive_program_compiler",
+  "dynamic_cognitive_graph",
+  "theory_prediction",
+  "evidence_update",
+  "learning_router",
+  "cognitive_compilation"
+]
+
+[representation]
+kinds = ["token", "concept", "entity_event", "graph", "causal", "symbolic", "spatial", "temporal", "procedural"]
+preserve_exact_input = true
+online_representation_invention = "future_learned_stage"
+
+[operators]
+allowed = [
+  "encode", "abstract", "expand", "recall", "bind", "compare",
+  "hypothesize", "predict", "simulate", "search", "verify",
+  "update_belief", "plan", "execute", "ask", "write_memory", "compile_skill"
+]
+operator_outputs_are_not_independent_agents = true
+
+[graph]
+acyclic_reference_program = true
+conditional_execution = true
+parallel_width_bounded = true
+failed_dependencies_block_descendants = true
+runtime_graph_synthesis = "baseline_compiler_then_learned"
+
+[belief]
+multiple_hypotheses_allowed = true
+provenance_required = true
+uncertainty_required = true
+independence_discount_required = true
+self_summary_cannot_increase_trust = true
+
+[world_model]
+prediction_before_outcome = true
+action_conditioned_predictions = true
+counterfactual_interface_required = true
+theory_induction = "reference_types_first_learned_search_later"
+
+[learning]
+destinations = ["ignore", "episodic_memory", "semantic_memory", "procedural_memory", "plastic_parameters", "core_parameters"]
+least_dangerous_destination_first = true
+raw_experience_to_core = false
+plastic_parameters_transactional = true
+core_requires_independent_verification = true
+core_requires_replay = true
+core_requires_calibration = true
+core_requires_safety = true
+core_requires_shadow = true
+core_requires_rollback = true
+core_requires_external_promotion_authority = true
+
+[compilation]
+default_min_verified_trials = 8
+default_min_success_rate = 0.90
+compile_only_verified_trajectories = true
+compiled_skill_still_requires_verification = true
+
+[accountability]
+record_goal = true
+record_beliefs = true
+record_program = true
+record_actions = true
+record_predictions = true
+record_outcome = true
+record_verification = true
+
+[parameter_ecology_bridge]
+cell_disagreement_is_observational_initially = true
+cell_budget_pressure_is_observational_initially = true
+learned_metacognitive_use_requires_calibration = true
