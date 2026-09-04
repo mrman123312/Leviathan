@@ -4,10 +4,11 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "leviathan-cognitive-architecture"
-version = "0.3.0"
-description = "Unified-agent research scaffold for an adaptive cognitive architecture"
+version = "0.4.0"
+description = "Single-model research scaffold for an adaptive cognitive architecture"
 requires-python = ">=3.11"
 readme = "README.md"
+dependencies = ["numpy>=1.26"]
 
 [project.optional-dependencies]
 models = ["huggingface_hub>=0.27"]

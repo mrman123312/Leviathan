@@ -15,6 +15,8 @@ GoalFrame(
 
 AgentSnapshot(
     agent_id: str,
+    model_id: str,
+    kernel_manifest: KernelManifest,
     goal: GoalFrame,
     policy_digest: str,
     cycle: int,
@@ -25,33 +27,57 @@ AgentSnapshot(
 )
 ```
 
-Only the unified agent owns mutable task state. Internal cells receive an immutable
-metacognitive snapshot with the original goal restored by the agent.
+Only the unified agent owns mutable task state. It passes an immutable snapshot with
+the original goal restored to exactly one cognitive model.
 
-## Cognitive Parameter Cell
+## Single cognitive kernel
 
 ```python
-CognitiveParameterCell(
-    cell_id: str,
-    reliability: float,
-    activation(context) -> float,
-    propose(context) -> CellProposal | None,
-    revise(context, aggregate_consensus) -> CellProposal | None,
+CognitiveKernel(
+    model_id: str,
+    manifest: KernelManifest,          # exact one-model resource counts
+    infer(context: CognitiveContext) -> InferenceTrace,
 )
 
-CellProposal(
-    cell_id: str,
-    candidate: CognitiveCandidate,
+CognitiveContext(
+    agent_id: str,
+    goal_id: str,
+    observation: object,
+    meta: MetaSnapshot,
+    allowed_modes: frozenset[CognitiveMode],
+    refinement_budget: int,
+)
+
+InferenceTrace(
+    status: Literal['decided', 'budget_exhausted', 'no_decision'],
+    decision: CognitiveCandidate | None,
     confidence: float,
-    request_cell_ids: tuple[str, ...],
-    evidence_refs: tuple[str, ...],
+    uncertainty: float,
+    refinement_steps: int,
+    forward_passes: int,
+    active_parameters: int,
+    total_parameters: int,
+    route_entropy: float,
 )
 ```
 
-A cell can propose and recruit. It cannot execute, receive mutable agent state, certify
-its proposal, promote itself, or modify the goal/policy. Discussion ends in
-`converged`, `budget_exhausted`, or `no_proposal`; only `converged` can reach the action
-gateway.
+The kernel boundary is singular. Parameter bases may be selected as tensor slices
+inside its forward pass, but they have no IDs, private state, model interface, messages,
+votes, goals, outputs, optimizers or checkpoints. The kernel cannot execute, certify
+itself, promote learning, or modify the goal/policy. `budget_exhausted`, `no_decision`,
+invalid output and exceptions stop before the action gateway.
+`LeviathanAgent` rejects a manifest with any count other than the contract in
+`spec/one-agent.yaml`, including any nonzero `independent_internal_models` count.
+
+The current trainable operator is:
+
+```python
+y = x @ W_base + bias + sum(gate[e] * ((x @ A[e]) @ B[e]))
+```
+
+`UnifiedMoP` owns every term, one loss and one optimizer state. `B` is zero-initialized
+for exact insertion parity. Adaptive recurrence is not part of the interface contract;
+if admitted later, it must reuse the same parameters and shared latent state.
 
 ## Belief
 

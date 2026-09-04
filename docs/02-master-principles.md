@@ -20,7 +20,10 @@ Predictable text can be compressed aggressively. Rare symbols, code, measurement
 
 `active_compute_t = f(context, uncertainty, difficulty, load)`
 
-The system should route easy work through fewer experts/smaller models and difficult work through greater capacity. Routing must account for hardware congestion, not only model-side quality.
+The one model should route easy work through fewer internal parameter bases or forward
+passes and difficult work through greater internal capacity. It must not choose among a
+portfolio of independently stateful models at runtime. Routing must account for
+hardware congestion, not only model-side quality.
 
 ## 3. Predict beyond one step
 
@@ -168,26 +171,17 @@ When uncertainty is material, preserve multiple hypotheses and let evidence elim
 ## 16. Compute should be heterogeneous
 
 **Sources:** the entire stack.  
-**Rule:** A general system is a portfolio of cognitive resources.
+**Rule:** One general model should allocate heterogeneous internal compute and typed
+external instruments without becoming a portfolio of minds.
 
-Possible resources include:
+Internal resources include parameter bases, attention heads, shared-state passes,
+perceptual projections, world-state projections and native action heads. Search trees,
+hypotheses and memory entries are data operated on by the same model. Formal solvers,
+code execution, sensors, effectors and independent measurements may remain external
+because they are instruments with frozen contracts, not separately goaled cognition.
 
-- small drafter,
-- large reasoner,
-- sparse expert model,
-- world model,
-- vision encoder,
-- speech decoder,
-- GUI actor,
-- robot controller,
-- formal verifier,
-- reward model,
-- search process,
-- code interpreter,
-- memory service,
-- simulator.
-
-The important intelligence may increasingly reside in the controller that allocates these resources.
+The metacognitive policy that allocates these resources is a learned head of the same
+checkpoint and shares the same task state.
 
 ## 17. Metacognition is the master control problem
 

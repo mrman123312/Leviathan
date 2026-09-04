@@ -12,7 +12,14 @@ from leviathan.agent import (
     GoalFrame,
     LeviathanAgent,
 )
-from leviathan.cells import CognitiveCandidate, EcologyConfig, ParameterEcology, ScriptedCell
+from leviathan.kernel import (
+    CognitiveCandidate,
+    CognitiveContext,
+    InferenceStatus,
+    InferenceTrace,
+    KernelManifest,
+    ScriptedKernel,
+)
 from leviathan.types import CognitiveMode, MetaState, Provenance, ProvenanceKind, Verification
 
 
@@ -58,16 +65,6 @@ def action_candidate(*, risk: float = 0.1, reversible: bool = True) -> Cognitive
         reversible=reversible,
         authorization_class="sandbox",
         verifier="deterministic",
-    )
-
-
-def ecology_for(candidate: CognitiveCandidate) -> ParameterEcology:
-    return ParameterEcology(
-        [
-            ScriptedCell("causal", candidate, confidence=0.9),
-            ScriptedCell("semantic", candidate, confidence=0.9),
-            ScriptedCell("planner", candidate, confidence=0.9),
-        ]
     )
 
 
@@ -122,56 +119,104 @@ class OtherVerifier(DeterministicVerifier):
     verifier_id = "other"
 
 
+class CountingKernel:
+    model_id = "counting-single-kernel"
+    manifest = KernelManifest()
+
+    def __init__(self, candidate: CognitiveCandidate) -> None:
+        self.candidate = candidate
+        self.calls = 0
+
+    def infer(self, context: CognitiveContext) -> InferenceTrace:
+        self.calls += 1
+        return InferenceTrace(
+            status=InferenceStatus.DECIDED,
+            decision=self.candidate,
+            confidence=0.9,
+            uncertainty=0.1,
+            refinement_steps=1,
+            forward_passes=1,
+            active_parameters=80,
+            total_parameters=100,
+        )
+
+
+class ExhaustedKernel:
+    model_id = "exhausted-single-kernel"
+    manifest = KernelManifest()
+
+    def infer(self, context: CognitiveContext) -> InferenceTrace:
+        return InferenceTrace(
+            status=InferenceStatus.BUDGET_EXHAUSTED,
+            decision=None,
+            confidence=0.0,
+            uncertainty=1.0,
+            refinement_steps=context.refinement_budget,
+            forward_passes=context.refinement_budget,
+            reason="refinement budget exhausted",
+        )
+
+
+class FailingKernel:
+    model_id = "failing-single-kernel"
+    manifest = KernelManifest()
+
+    def infer(self, context: CognitiveContext) -> InferenceTrace:
+        raise RuntimeError("model failure")
+
+
 class LeviathanAgentTests(unittest.TestCase):
-    def test_internal_cells_produce_one_agent_decision(self) -> None:
+    def test_kernel_manifest_rejects_a_hidden_model_population(self) -> None:
+        class PopulationKernel:
+            model_id = "hidden-population"
+            manifest = KernelManifest(
+                parameter_owners=5,
+                shared_states=5,
+                optimizers=5,
+                checkpoints=5,
+                independent_internal_models=5,
+            )
+
+            def infer(self, context: CognitiveContext) -> InferenceTrace:
+                raise AssertionError("the invalid kernel must never run")
+
+        with self.assertRaisesRegex(ValueError, "single-model contract"):
+            LeviathanAgent(
+                agent_id="leviathan-1",
+                goal=GoalFrame("diagnose"),
+                kernel=PopulationKernel(),
+            )
+
+    def test_one_kernel_call_produces_one_agent_decision(self) -> None:
         answer = CognitiveCandidate(
             id="answer",
             mode=CognitiveMode.REASON,
             payload="one coherent result",
         )
+        kernel = CountingKernel(answer)
         agent = LeviathanAgent(
             agent_id="leviathan-1",
             goal=GoalFrame("diagnose"),
-            ecology=ecology_for(answer),
+            kernel=kernel,
         )
 
         result = agent.step(observation(), meta(goal="attempted replacement"))
 
         self.assertEqual(result.status, AgentStatus.DECIDED)
         self.assertEqual(result.candidate, answer)
+        self.assertEqual(kernel.calls, 1)
         self.assertEqual(agent.snapshot.agent_id, "leviathan-1")
+        self.assertEqual(agent.snapshot.model_id, kernel.model_id)
+        self.assertEqual(agent.snapshot.kernel_manifest.independent_internal_models, 0)
         self.assertEqual(agent.snapshot.goal.original, "diagnose")
         self.assertIn("goal_restored", [event.kind for event in agent.events])
 
-    def test_nonconverged_market_never_falls_through_to_action(self) -> None:
+    def test_budget_exhaustion_never_falls_through_to_action(self) -> None:
         executor = RecordingExecutor()
-        ecology = ParameterEcology(
-            [
-                ScriptedCell("one", action_candidate(), confidence=0.9),
-                ScriptedCell(
-                    "two",
-                    CognitiveCandidate(
-                        id="other-action",
-                        mode=CognitiveMode.ACT,
-                        payload="other",
-                        expected_observation="other-result",
-                        risk=0.1,
-                        authorization_class="sandbox",
-                    ),
-                    confidence=0.9,
-                ),
-            ],
-            config=EcologyConfig(
-                initial_cells=2,
-                max_active_cells=2,
-                max_rounds=4,
-                max_cell_calls=2,
-            ),
-        )
         agent = LeviathanAgent(
             agent_id="leviathan-1",
             goal=GoalFrame("diagnose"),
-            ecology=ecology,
+            kernel=ExhaustedKernel(),
             executor=executor,
             verifier=DeterministicVerifier(),
         )
@@ -180,13 +225,30 @@ class LeviathanAgentTests(unittest.TestCase):
 
         self.assertEqual(result.status, AgentStatus.NO_DECISION)
         self.assertEqual(executor.contracts, [])
+        self.assertIn("budget", result.reason or "")
+
+    def test_model_failure_is_explicit_and_cannot_act(self) -> None:
+        executor = RecordingExecutor()
+        agent = LeviathanAgent(
+            agent_id="leviathan-1",
+            goal=GoalFrame("diagnose"),
+            kernel=FailingKernel(),
+            executor=executor,
+            verifier=DeterministicVerifier(),
+        )
+
+        result = agent.step(observation(), meta())
+
+        self.assertEqual(result.status, AgentStatus.FAILED)
+        self.assertEqual(executor.contracts, [])
+        self.assertIn("kernel failed", result.reason or "")
 
     def test_risk_limit_blocks_action(self) -> None:
         executor = RecordingExecutor()
         agent = LeviathanAgent(
             agent_id="leviathan-1",
             goal=GoalFrame("diagnose", risk_budget=0.2),
-            ecology=ecology_for(action_candidate(risk=0.6)),
+            kernel=ScriptedKernel(action_candidate(risk=0.6)),
             executor=executor,
             verifier=DeterministicVerifier(),
         )
@@ -202,7 +264,7 @@ class LeviathanAgentTests(unittest.TestCase):
         agent = LeviathanAgent(
             agent_id="leviathan-1",
             goal=GoalFrame("diagnose"),
-            ecology=ecology_for(action_candidate()),
+            kernel=ScriptedKernel(action_candidate()),
             executor=executor,
             verifier=OtherVerifier(),
         )
@@ -218,7 +280,7 @@ class LeviathanAgentTests(unittest.TestCase):
         agent = LeviathanAgent(
             agent_id="leviathan-1",
             goal=GoalFrame("diagnose"),
-            ecology=ecology_for(action_candidate()),
+            kernel=ScriptedKernel(action_candidate()),
             executor=executor,
             verifier=DeterministicVerifier(),
         )
@@ -233,13 +295,12 @@ class LeviathanAgentTests(unittest.TestCase):
         self.assertLess(kinds.index("prediction_recorded"), kinds.index("action_executed"))
         self.assertLess(kinds.index("action_executed"), kinds.index("verification_recorded"))
 
-    def test_same_model_self_evaluation_cannot_promote(self) -> None:
+    def test_same_model_self_evaluation_cannot_create_learning_evidence(self) -> None:
         executor = RecordingExecutor()
-        ecology = ecology_for(action_candidate())
         agent = LeviathanAgent(
             agent_id="leviathan-1",
             goal=GoalFrame("diagnose"),
-            ecology=ecology,
+            kernel=ScriptedKernel(action_candidate()),
             executor=executor,
             verifier=DeterministicVerifier(
                 kind=ProvenanceKind.SELF_EVALUATION,
@@ -250,15 +311,15 @@ class LeviathanAgentTests(unittest.TestCase):
         result = agent.step(observation(), meta())
 
         self.assertEqual(result.status, AgentStatus.UNVERIFIED)
-        self.assertEqual(ecology.compiled_coalition(frozenset({"diagnostic"})), ())
+        self.assertNotIn("verified_learning_evidence", [event.kind for event in agent.events])
 
-    def test_repeated_external_success_compiles_the_internal_coalition(self) -> None:
+    def test_repeated_external_success_records_evidence_without_online_weight_update(self) -> None:
         executor = RecordingExecutor()
-        ecology = ecology_for(action_candidate())
+        kernel = CountingKernel(action_candidate())
         agent = LeviathanAgent(
             agent_id="leviathan-1",
             goal=GoalFrame("diagnose"),
-            ecology=ecology,
+            kernel=kernel,
             executor=executor,
             verifier=DeterministicVerifier(),
         )
@@ -268,9 +329,10 @@ class LeviathanAgentTests(unittest.TestCase):
 
         self.assertEqual(first.status, AgentStatus.VERIFIED)
         self.assertEqual(second.status, AgentStatus.VERIFIED)
+        self.assertEqual(kernel.calls, 2)
         self.assertEqual(
-            set(ecology.compiled_coalition(frozenset({"diagnostic"}))),
-            {"causal", "semantic", "planner"},
+            [event.kind for event in agent.events].count("verified_learning_evidence"),
+            2,
         )
 
     def test_negative_independent_verification_rejects_learning(self) -> None:
@@ -278,7 +340,7 @@ class LeviathanAgentTests(unittest.TestCase):
         agent = LeviathanAgent(
             agent_id="leviathan-1",
             goal=GoalFrame("diagnose"),
-            ecology=ecology_for(action_candidate()),
+            kernel=ScriptedKernel(action_candidate()),
             executor=executor,
             verifier=DeterministicVerifier(passed=False),
         )

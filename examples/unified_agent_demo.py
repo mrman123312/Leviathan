@@ -13,10 +13,12 @@ from leviathan import (
     GoalFrame,
     LeviathanAgent,
     MetaState,
-    ParameterEcology,
+    MoPConfig,
     Provenance,
     ProvenanceKind,
-    ScriptedCell,
+    UnifiedMoP,
+    VectorMoPKernel,
+    VectorObservation,
     Verification,
 )
 
@@ -71,12 +73,32 @@ def main() -> None:
         information_gain=0.8,
         transfer_value=0.6,
     )
-    ecology = ParameterEcology(
-        [
-            ScriptedCell("causal", candidate, frozenset({"hidden-rule"}), confidence=0.90),
-            ScriptedCell("experiment", candidate, frozenset({"hidden-rule"}), confidence=0.88),
-            ScriptedCell("planner", candidate, frozenset({"hidden-rule"}), confidence=0.86),
-        ]
+    wait = CognitiveCandidate(
+        id="wait",
+        mode=CognitiveMode.WAIT_OBSERVE,
+        payload={"operation": "wait"},
+    )
+    model = UnifiedMoP(
+        MoPConfig(
+            input_dim=4,
+            context_dim=2,
+            output_dim=2,
+            basis_count=2,
+            rank=1,
+            seed=7,
+        )
+    )
+    # Fixed demonstration weights make the one model select the safe experiment token.
+    # Training behavior is exercised by benchmark_single_model.py.
+    state = model.state_dict()
+    state["base_weight"][...] = 0.0
+    state["base_bias"][...] = (0.0, 8.0)
+    model.load_state_dict(state)
+    kernel = VectorMoPKernel(
+        model=model,
+        candidates=(wait, candidate),
+        active_bases=1,
+        confidence_threshold=0.80,
     )
     goal = GoalFrame(
         "discover which switch controls lamp B",
@@ -87,13 +109,16 @@ def main() -> None:
     agent = LeviathanAgent(
         agent_id="leviathan-demo",
         goal=goal,
-        ecology=ecology,
+        kernel=kernel,
         executor=SandboxExecutor(),
         verifier=DeterministicVerifier(),
     )
     observation = AgentObservation(
         id="initial-state",
-        payload={"switch_a": "off", "lamp_b": "off"},
+        payload=VectorObservation(
+            features=(0.0, 0.0, 0.0, 0.0),
+            context=(1.0, 0.0),
+        ),
         provenance=Provenance(
             kind=ProvenanceKind.REAL_OBSERVATION,
             source_id="demo-environment",
@@ -123,8 +148,12 @@ def main() -> None:
                 "agent_id": agent.snapshot.agent_id,
                 "status": result.status.value,
                 "candidate": result.candidate.id if result.candidate else None,
-                "rounds": result.trace.rounds,
-                "active_cells": result.trace.active_cell_ids,
+                "model_id": kernel.model_id,
+                "independent_internal_models": (
+                    agent.snapshot.kernel_manifest.independent_internal_models
+                ),
+                "forward_passes": result.trace.forward_passes,
+                "refinement_steps": result.trace.refinement_steps,
                 "goal_id": agent.snapshot.goal.id,
                 "event_order": [event.kind for event in agent.events],
             },

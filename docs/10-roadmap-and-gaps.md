@@ -1,12 +1,15 @@
 # Roadmap and Research Gaps
 
-Leviathan should be built in stages. The goal is not to connect every frontier component immediately. The goal is to validate progressively harder hypotheses while preserving measurable failure boundaries.
+Leviathan should be built in stages. The goal is not to connect frontier models into a
+runtime collective. Each promoted stage must remain one cognitive parameter state and
+one checkpoint while validating progressively harder hypotheses with measurable failure
+boundaries. External stores, tools and verifiers are infrastructure, not co-reasoners.
 
 ## Stage 0 — Instrumented agent baseline
 
 Build:
 
-- one open reasoner,
+- one open reasoner checkpoint,
 - structured tool registry,
 - deterministic code sandbox,
 - task/trajectory logger,
@@ -71,6 +74,7 @@ Implement the mode controller:
 `DIRECT | RECALL | SKILL | REASON | SEARCH | TOOL | PARALLELIZE | ASK`
 
 Train initially from heuristic policies and offline trajectory data.
+The learned controller must be a head of the same model, not a separately served model.
 
 Research question:
 

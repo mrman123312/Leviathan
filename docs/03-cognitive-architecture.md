@@ -45,29 +45,33 @@ Responsibilities:
 
 ---
 
-## 1.5. One identity, many internal organs
+## 1.5. One identity, one cognitive model
 
-All three loops belong to one persistent `LeviathanAgent`. Models, tools, search
-branches, hypotheses and Cognitive Parameter Cells are internal resources, not
-separately goaled agents. The unified agent alone owns:
+All three loops are state transitions of one persistent `LeviathanAgent`. Cognition is
+one parameterized function with one shared state, one output distribution, one loss,
+one optimizer and one checkpoint. It is not a panel of models hidden behind a common
+name. Search branches and hypotheses are data in that state, not entities with their
+own goals or memories. The agent envelope owns:
 
 - the immutable original-goal reference,
 - serialized task/belief state,
 - the append-only trajectory,
 - action contracts and the external execution gateway,
 - the boundary to independent verification,
-- verified promotion into durable memory.
+- verified evidence offered to an offline learning pipeline.
 
-Between the numerical function substrate and the larger transformation primitives,
-Leviathan adds an L1.5 **Parameter Ecology**. A sparse set of stateful parameter cells
-forms proposals, exchanges bounded aggregate messages, recruits peers when disagreement
-is high, and either converges or stops at a hard budget. Cells cannot act, verify, write
-durable memory or alter governance. Repeated externally verified coalitions may be
-compiled into cheaper procedural routing.
+The L1.5 experiment is a **tensorized Mixture-of-Parameters** inside that single
+function. A router produces coefficients over low-rank parameter bases; the weighted
+sum is one effective transformation and one output. Bases have no callable interface,
+identity, private state, proposal, message, vote or authority. Adaptive depth, when it
+is eventually admitted, will reapply the same shared block to the same shared latent
+state under a hard compute budget.
 
-The current Python implementation is a behavioral reference for these contracts. The
-neural hypothesis still requires function-preserving basis decomposition, routing,
-communication and ablation experiments. See `docs/17-one-agent-recursive-plan.md`.
+The executable NumPy study proves exact zero-insertion parity and tests dense versus
+sparse routing. It also records the failures: post-hoc sparsification loses accuracy,
+the unfused sparse implementation loses wall time, and the linear operator loses on a
+nonlinear negative control. Recurrence and wider architectural claims remain gated.
+See `docs/17-one-agent-recursive-plan.md`.
 
 ---
 

@@ -59,6 +59,11 @@ Current role split:
 - **GLM-5.3-Flash / Kimi K3 / Step / Qwen-family architectures** — efficiency and sequence-compute donors.
 - **Kimi K3 / GLM-5.3 / Qwen3.8 / DeepSeek post-trained checkpoints** — teacher ensemble for trajectory distillation and disagreement-driven curriculum.
 
+These are offline alternatives, donors and training-data sources—not five models
+co-inferencing behind one agent. A runtime promotion selects or distills into one
+substrate and one checkpoint. Donors never keep separate task state or vote on the
+deployed agent's output.
+
 Every architectural graft must initially preserve the pretrained function:
 
 `h' = F_pretrained(h) + alpha * G_new(h)`, with `alpha = 0` at insertion.
@@ -81,7 +86,7 @@ See `docs/12-omega-model-soup.md` and `docs/13-weight-transplantation.md`.
 - `docs/11-failure-modes.md` — drift, forgetting, simulator bias, verifier corruption, goal drift and other failure classes.
 - `docs/12-omega-model-soup.md` — substrate/donor/teacher roles and the target Leviathan Ω neural stack.
 - `docs/13-weight-transplantation.md` — compatibility classes and function-preserving architecture migration.
-- `docs/17-one-agent-recursive-plan.md` — the unified-agent definition, recursive build ladder, Parameter Ecology experiments and kill criteria.
+- `docs/17-one-agent-recursive-plan.md` — the strict single-model definition, recursive build ladder, benchmark gates and kill criteria.
 - `spec/architecture.yaml` — machine-readable cognitive module graph and trust rules.
 - `spec/interfaces.md` — proposed data contracts between modules.
 - `spec/one-agent.yaml` — machine-readable authority boundaries, cycle order, recursion limits and research rungs.
@@ -89,27 +94,33 @@ See `docs/12-omega-model-soup.md` and `docs/13-weight-transplantation.md`.
 - `spec/omega-transplant.toml` — machine-readable Omega transplantation plan.
 - `scripts/fetch_model_assets.py` — guarded metadata/checkpoint acquisition utility.
 - `scripts/validate_model_registry.py` — stdlib-only registry/reference validator.
-- `examples/unified_agent_demo.py` — one deterministic observe-discuss-contract-act-verify cycle.
+- `examples/unified_agent_demo.py` — one deterministic observe-infer-contract-act-verify cycle.
 - `models/README.md` — local checkpoint storage and reproducibility rules.
-- `src/leviathan/` — executable research scaffold for the unified agent, bounded Cognitive Parameter Cell ecology, meta-controller, trust weighting and shared types.
+- `src/leviathan/` — executable single-agent envelope, one-model tensorized MoP experiment, meta-controller, trust weighting and shared types.
+- `benchmarks/benchmark_single_model.py` — matched-parameter parity, learning, sparsity, negative-control and latency benchmark.
 - `vendor/` — pinned upstream Git submodules for the public source projects studied.
 
-## One-agent reference kernel
+## One agent means one model
 
-Leviathan now has one top-level runtime identity rather than a collection of separately
-goaled agents. `LeviathanAgent` owns the immutable goal, policy digest, event journal,
-action contracts and verified learning boundary. Internal Cognitive Parameter Cells can
-propose, disagree, revise and recruit peers, but cannot execute actions or certify their
-own outputs.
+Leviathan's cognitive boundary is now strict: one parameter owner, one shared state,
+one router, one loss, one optimizer, one checkpoint and one output. There are no
+internal model identities, private memories, proposals, messages, votes, coalitions or
+independent objectives. Sparse parameter bases are tensor slices inside the same
+differentiable function, comparable to heads or neurons—not a population of agents.
+The agent checks these counts through a `KernelManifest` and rejects any kernel that
+declares a nonzero independent-internal-model count.
 
-The reference Parameter Ecology implements:
+`LeviathanAgent` invokes that one kernel and owns the immutable goal, policy digest,
+event journal and action contracts. The executor changes the environment and the
+verifier measures the result; neither participates in cognition. A model failure or
+budget exhaustion stops before action.
 
-`recruit -> propose -> aggregate -> measure disagreement -> expand/revise -> converge or stop`
+The trainable proof operator is:
 
-It has hard limits on active cells, rounds, requests and total cell calls. A discussion
-that does not converge never falls through to an external action. Repeated coalitions
-are compiled only after independent verification; this changes procedural routing, not
-core parameters.
+`y = x W_base + b + sum_e g_e(c) (x A_e) B_e`
+
+All terms belong to one `UnifiedMoP` object and one gradient update. `B_e` starts at
+zero, so inserting the routed path preserves the base function exactly.
 
 Run the stdlib-only test suite:
 
@@ -117,12 +128,18 @@ Run the stdlib-only test suite:
 python -m pip install -e .
 python -m unittest discover -s tests -v
 python examples/unified_agent_demo.py
+PYTHONPATH=src python benchmarks/benchmark_single_model.py
 ```
 
-The Python cells are an orchestration and falsification baseline. Neural
-Mixture-of-Parameters training begins with the parity experiments in
-`docs/17-one-agent-recursive-plan.md`; the repository does not claim those experiments
-have already succeeded.
+The recorded three-seed benchmark promotes only the conditional low-rank operator:
+staged Top-2 training reached mean MSE `0.00940` versus `0.33439` for a
+matched-parameter dense MLP while estimating `45.2%` of its MACs. Post-hoc Top-2
+pruning failed (`0.83442` MSE), the NumPy sparse path was `6.49x` slower in measured
+wall time, and a nonlinear negative control favored the dense MLP (`0.01003` versus
+`0.11512`). The next rung therefore places the routed update *inside* one nonlinear
+sequence model and requires a fused-kernel benchmark. No AGI or general language claim
+is made from the synthetic result. Exact results are in
+`benchmarks/results/single_model_v0.4.0.json`.
 
 ## Model assets
 

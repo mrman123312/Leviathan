@@ -1,452 +1,302 @@
-# Leviathan as One Agent: Recursive Build Plan
+# One Leviathan: strict single-model plan
 
-## Purpose
+## Correction accepted
 
-Leviathan should become one persistent learning system, not a committee of chatbots.
+One agent does not mean a civilization of models wearing one name. Leviathan's
+cognitive core is one trainable function with one parameter owner, one shared state,
+one objective, one optimizer, one checkpoint and one output. The previous Parameter
+Ecology abstraction violated the spirit of that requirement because its cells had
+identities, private behavior, proposals, messages and votes. It has been removed from
+the active architecture.
 
-The repository already contains most of the architectural organs: adaptive compute,
-belief state, memory, world modeling, tools, verification, causal credit, learning, and
-governance.  The missing engineering center is a runtime that makes those organs serve
-one identity, one externally anchored goal, one evolving state, and one auditable
-trajectory.
+This document is the new line in the sand. A future implementation that crosses it is
+not Leviathan's one-agent path, even if it exposes only one API.
 
-This document turns that center into a recursive research plan.  It separates what can
-be implemented as software now from what needs neural training, substantial compute, or
-new science.
+## The one-model invariant
 
-## North star
+Let the entire cognitive model be
 
-Given an unfamiliar environment, one Leviathan agent should:
+`(h_next, decision, uncertainty) = F_theta(observation, h, goal, budget)`.
 
-1. orient before committing;
-2. preserve several plausible hypotheses;
-3. choose cognition or action for goal-relevant information gain;
-4. predict before acting;
-5. test predictions against independent evidence;
-6. localize what caused success or failure;
-7. turn repeated verified discoveries into reusable skills;
-8. learn locally without corrupting inherited competence or its governing objective.
+There is one `theta`, one `h`, and one final decision distribution. Additional compute
+may apply a shared block again to `h`; it may not start another independently stateful
+model and call the result deliberation.
 
-The target trajectory is:
+| Property | Required count | Meaning |
+|---|---:|---|
+| Cognitive parameter owner | 1 | every trainable tensor is in one state dictionary |
+| Shared cognitive state | 1 | branches and hypotheses are data, never private minds |
+| Learned router | 1 | routing is a layer of `F_theta` |
+| Training objective | 1 | one scalar loss owns credit assignment |
+| Optimizer | 1 | one update step covers the whole parameter state |
+| Checkpoint | 1 | one artifact restores the complete cognitive function |
+| Decision output | 1 | no proposal aggregation or majority vote |
+| Independent internal models | 0 | no separately prompted, trained or stateful specialists |
 
-`unknown world -> orient -> hypothesize -> discriminate -> act -> verify -> explain error -> learn -> transfer`
+Ordinary layers, attention heads, memory slots and parameter tensors are allowed. They
+are parts of a model. A component is disallowed when it can be separately prompted,
+independently optimized, independently checkpointed, keep private task state, or emit a
+candidate that must be negotiated with other candidates.
 
-The agent is complete only when this improves across unrelated environments from a
-small number of useful experiences.  A sophisticated orchestration demo is not enough.
+The boundary is executable as well as documentary: every `CognitiveKernel` supplies a
+`KernelManifest`, and `LeviathanAgent` rejects any count that differs from the table,
+including any nonzero `independent_internal_models` value. A manifest cannot prove that
+arbitrary third-party code is honest, so source review and checkpoint inspection remain
+promotion requirements.
 
-## What "one agent" means
+## Boundaries are not extra minds
 
-One agent does **not** mean one giant function and it does not mean every internal
-component shares authority.
+The agent envelope, executor and verifier remain separate in authority, not in
+cognition:
 
-It means:
+- `LeviathanAgent` preserves identity, goal integrity, journal order and action gates.
+- the one `CognitiveKernel` produces the decision;
+- an executor applies an authorized contract to the environment;
+- a verifier measures what happened.
 
-- one stable `agent_id`;
-- one immutable original-goal record;
-- one serialized belief and memory state;
-- one metacognitive budget allocator;
-- one append-only causal trajectory;
-- one action gateway;
-- one learning proposal pipeline;
-- one externally held constitution and promotion authority.
+The executor is an effect boundary and the verifier is an instrument. Neither suggests
+what the model should think or joins its inference. This keeps `generator != verifier`
+without turning the generator into a committee.
 
-Internal models, tools, search branches, hypotheses, and Cognitive Parameter Cells are
-organs.  They can disagree and specialize, but none is a separately goaled actor.
+## Current executable kernel
 
-The authority boundary is strict:
+`src/leviathan/kernel.py` defines the singular runtime contract. One cycle invokes one
+kernel and consumes one `InferenceTrace`. Failure, invalid output, no decision or budget
+exhaustion stops before action.
 
-| Component | May propose | May execute | May verify itself | May write durable learning | May alter constitution |
-|---|---:|---:|---:|---:|---:|
-| Parameter cell | yes | no | no | no | no |
-| Cell ecology | yes | no | no | no | no |
-| Leviathan agent | chooses | through gateway | no | only through gates | no |
-| External executor | no | contracted action only | no | no | no |
-| Independent verifier | no | measurement only | yes, for its scope | no | no |
-| Governor/release process | no | promotion only | audits evidence | yes | externally only |
+`src/leviathan/mop.py` implements the smallest trainable Mixture-of-Parameters claim:
 
-This is how `learner != governor`, `generator != verifier`, and `agent != auditor` remain
-true while the product still behaves as one agent.
+`y = x W_base + b + sum_e g_e(c) (x A_e) B_e`
 
-## The recursive unit
+The `e` axis is a tensor axis. It does not enumerate models. `A` and `B` slices cannot
+be called, prompted, assigned goals, given memory, or optimized alone. The router,
+bases and dense path are trained by one loss and saved in one checkpoint.
 
-Every scale uses the same research recursion:
+`B` starts at zero. Therefore adding the whole routed path changes the base output by
+exactly zero while leaving a gradient path into `B`. This is the function-preserving
+entry point required by the Omega transplantation plan.
 
-1. **Frame** one falsifiable capability claim.
-2. **Freeze** the current baseline, goal, tests, and cost measurements.
-3. **Insert** the smallest reversible mechanism with zero or identity effect where
-   pretrained function is involved.
-4. **Run** it inside hard compute, risk, and time limits.
-5. **Falsify** it with counterexamples, ablations, independent tests, and old-skill
-   regression.
-6. **Promote** only if verified capability per lifetime compute improves.
-7. **Compile** the successful procedure into the next baseline, then recurse on the
-   next bottleneck.
+## Benchmark before architecture
 
-If a prerequisite or verifier is missing, the recursion stops at that boundary.  It
-routes around a replaceable implementation problem; it does not force its way through
-an unknown scientific or governance problem.
+The benchmark uses three fixed seeds and equal training steps. The primary task is a
+conditional low-rank operator—the exact hypothesis a Mixture-of-Parameters block is
+supposed to fit. The comparison dense MLP has nearly the same total parameters. An
+unseen two-context composition split tests limited transfer. A dense nonlinear teacher
+is included as a negative control so the home-field result cannot be advertised as
+general superiority.
 
-## The agent's inner cycle
+Run it with:
+
+```bash
+PYTHONPATH=src python benchmarks/benchmark_single_model.py
+```
+
+Recorded results are in `benchmarks/results/single_model_v0.4.0.json`.
+
+| Measurement, mean over seeds 7/17/29 | Dense MLP | MoP result |
+|---|---:|---:|
+| Total parameters | 591 | 582 |
+| Top-2 active parameters | 591 | 258 |
+| Estimated MACs/example | 566 | 256 |
+| Conditional held-out MSE | 0.33439 | **0.00940** staged Top-2 |
+| Unseen composition MSE | 1.03466 | **0.30133** staged Top-2 |
+| Nonlinear negative-control MSE | **0.01003** | 0.11512 staged Top-2 |
+| Batch-512 NumPy latency | **52.894 us** | 343.281 us Top-2 |
+
+Two parity checks passed: zero-gated insertion had maximum absolute error `0.0`, and a
+full SVD reconstruction had error `2.61e-15`.
+
+### The asteroid found by the benchmark
+
+Training all routes and pruning to Top-2 afterward failed: mean MSE rose from `0.02163`
+with all bases to `0.83442` with Top-2. The route had not learned to survive scarcity.
+
+The bounded alternative was one staged schedule, not an open-ended rescue campaign:
+
+1. train the one model with all bases for the first third of steps;
+2. continue the same optimizer and checkpoint with Top-2 routing;
+3. compare against both the dense baseline and failed post-hoc pruning.
+
+That route reached `0.00940` MSE and passed the algorithmic gates. It did **not** produce
+a runtime speedup: the unfused NumPy Top-2 path was `6.49x` slower than the small dense
+MLP despite using an estimated `45.2%` of its MACs. Therefore:
+
+- promote staged sparse training as an operator hypothesis;
+- reject post-hoc sparsification;
+- reject any wall-clock efficiency claim from this implementation;
+- do not treat the linear operator as a complete cognitive model;
+- do not add recurrence yet.
+
+The nonlinear negative control is equally important. It says the routed update belongs
+inside a nonlinear sequence model; it cannot replace one.
+
+## Recursive build rule
+
+Every rung uses the same recursion:
 
 ```mermaid
 flowchart TD
-    O[Observe and orient] --> R[Recruit cells]
-    R --> D[Discuss and measure disagreement]
-    D -->|uncertain, budget remains| R
-    D -->|converged| C[Create prediction and action contract]
-    C --> A[Act through one gateway]
-    A --> V[Independent verification]
-    V --> U[Update episode, beliefs, and skill evidence]
-    U -->|goal incomplete| O
-    U -->|goal satisfied or boundary hit| S[Stop]
+    A[Freeze last passing rung] --> B[Add one mechanism]
+    B --> C[Benchmark against frozen rung]
+    C --> D{All gates pass?}
+    D -->|Yes| E[Promote and recurse]
+    D -->|No| F[Revert and choose another route]
+    F --> A
 ```
 
-The two recursion controls are different:
+“All gates” means capability, retention, epistemics and measured systems cost. A gain in
+one ledger cannot erase a hard failure in another. Results, seeds, hardware and failed
+ablations stay in the repository.
 
-- **inner recursion** spends more cells or communication rounds when disagreement is
-  high;
-- **outer recursion** takes another observe-act-learn cycle only when the goal remains
-  incomplete and the expected marginal value is positive.
+## R0 — singular cognitive boundary
 
-Both have hard ceilings.  Non-convergence is a result to report, not permission to take
-the current plurality and act anyway.
+**State:** implemented.
 
-## L1.5: the Parameter Ecology
+**Build:** replace the proposal market with `CognitiveKernel.infer(context) ->
+InferenceTrace`; invoke it once per cycle; keep goal/action governance outside the
+learned model.
 
-The proposed bottom-level primitive is a Cognitive Parameter Cell:
+**Pass:** one call, one decision, explicit failure state, no action after failure or
+budget exhaustion, immutable goal and policy.
 
-`C_i = (theta_i, state_i, recruitment_keys_i, quality_i, message_interface_i)`
+**Regression:** unit tests inspect call count, event order, risk gates and verifier
+independence.
 
-For one state transition:
+## R1 — function-preserving parameter substrate
 
-1. a small seed set is recruited associatively;
-2. each cell emits a candidate, confidence, evidence references, and optional peer
-   requests;
-3. votes are aggregated without exposing every cell's private state;
-4. disagreement controls whether more cells and another round are worth their cost;
-5. a bounded consensus commits one candidate;
-6. repeated externally verified coalitions become direct routing priors;
-7. new learning remains local to the responsible cells or coalition.
+**State:** passed on the numerical proof operator.
 
-This is deeper than ordinary MoE routing.  MoE chooses a few large feed-forward experts.
-The Parameter Ecology assembles a temporary function from many smaller stateful units,
-allows limited communication, and can compile recurring cooperation.
+**Build bit by bit:** decompose one dense transform; insert low-rank bases with a zero
+final factor; verify exact equality; verify explicit gradients by finite differences;
+round-trip the complete function through one checkpoint.
 
-The Python implementation in `src/leviathan/cells.py` is a **behavioral reference
-runtime**.  It tests recruitment, consensus, escalation, budgets, failure isolation, and
-coalition compilation.  It is not evidence that a neural MoP layer already works.
+**Pass:** insertion error at floating-point zero, finite-difference gradient agreement,
+one optimizer lowers loss, checkpoint reload is bit-exact.
 
-## What this branch implements
+**Stop:** any unexplained base-function drift.
 
-The first executable vertical slice spans the safest parts of Stages 0 through 3:
+## R2 — learned conditional routing
 
-- `LeviathanAgent` as the single owner of identity, goal, journal, action contracts,
-  episodes, and durable coalition evidence;
-- a frozen `GoalFrame` and `AgentPolicy`, each protected by a digest checked around the
-  cycle;
-- an immutable metacognitive snapshot so a cell cannot rewrite the active goal;
-- sparse cell recruitment and one-to-five bounded discussion rounds;
-- confidence-weighted consensus and entropy-based disagreement;
-- disagreement-driven peer recruitment;
-- hard round, active-cell, and total-cell-call budgets;
-- per-cell fault isolation, so one failed experimental organ does not collapse the
-  agent;
-- no action when discussion fails to converge;
-- prediction-before-action `ActionContract` records;
-- risk, authorization, reversibility, precondition, executor, and verifier gates;
-- independent verification thresholds using the existing provenance trust model;
-- negative-verifier vetoes;
-- repeated externally verified coalition compilation, without parameter updates;
-- append-only events and closed episode records for later causal analysis.
+**State:** passed only for dense routing on the conditional low-rank task.
 
-This is the constitutional skeleton.  It makes later neural and learning experiments
-comparable instead of letting each prototype quietly change the rules.
+**Build:** one router inside the model; all bases contribute to one weighted transform;
+train with the same samples, steps and initial dense path as the baseline.
 
-## Recursive build ladder
+**Measure:** held-out loss, composition loss, route entropy, total parameters and MACs.
 
-Each rung must pass before the next receives authority.  Work inside a rung repeats the
-seven-step research recursion above.
+**Stop:** a win that disappears under matched parameters or a negative control.
 
-### R0. Constitutional single-agent kernel — implemented now
+## R3 — sparse parameter activation
 
-**Claim:** heterogeneous internal cognition can be coordinated under one identity and
-one goal without giving proposal modules action or learning authority.
+**State:** algorithmic gate passed; wall-clock gate failed.
 
-**Build:** the reference cell ecology, single agent, event journal, contracts, risk
-gates, independent verifier gate, and procedural coalition cache.
+**Build:** dense warmup followed by Top-2 training in the same model. Sparse inference
+gathers selected tensor slices before multiplication; inactive transforms are not
+computed and masked afterward.
 
-**Measure:** determinism, bounded calls, action-gate coverage, event ordering, failure
-containment, and whether unverified outcomes can change routing.
+**Pass:** better held-out loss at no more than 60% of dense MACs. The current result
+passes this limited gate.
 
-**Pass:** every effect is attributable to one goal-bound contract; no failed,
-non-converged, or self-verified path is promoted.
+**Blocked claim:** efficiency. A framework-level fused gather/matmul kernel must beat
+the dense wall clock on realistic dimensions before the word “faster” is allowed.
 
-### R1. Epistemic state kernel — next
+## R4 — one nonlinear sequence block
 
-**Claim:** an explicit belief ledger beats raw history on long, contradictory tasks.
+**State:** next.
 
 **Build bit by bit:**
 
-1. append-only observations with provenance;
-2. beliefs with confidence, status, scope, and supporting/contradicting evidence;
-3. parallel hypothesis sets;
-4. prediction records written before outcomes;
-5. typed causal edges;
-6. loss-aware state compaction;
-7. calibration buckets by domain, source, mode, and model version.
+1. freeze a small pretrained sequence block;
+2. insert one zero-initialized routed low-rank residual into its feed-forward path;
+3. train dense routing on a small sequence suite;
+4. repeat the staged Top-K schedule;
+5. compare against the untouched block, a dense adapter and a parameter-matched MLP;
+6. measure retention on protected tasks and real wall time;
+7. promote only the smallest passing form.
 
-**Measure:** contradiction rate, repeated-context cost, belief survival under new
-evidence, calibration error, and information lost during compaction.
+**Measures:** next-token loss, task accuracy, calibration, protected-task regression,
+active/total parameters, peak memory and p50/p95 latency.
 
-**Stop condition:** if explicit state merely restates model prose or silently raises
-trust during summarization, do not connect it to learning.
+**Stop:** the routed block wins only on its matched synthetic teacher, loses protected
+capability, or needs a second model to route it.
 
-### R2. Novel-environment learner
+## R5 — shared-state adaptive refinement
 
-**Claim:** the agent can infer a hidden environment rule in roughly 3–20 useful
-experiences and reuse it in a held-out environment.
+**State:** gated behind R4 and a fused R3 runtime.
 
-**Build bit by bit:**
+This is where recursion may enter, but only as repeated application of the same block:
 
-1. orientation policy that maps controllable objects and possible feedback;
-2. diverse hypothesis generator;
-3. explicit differentiating predictions;
-4. low-risk experiment selector using goal-conditioned information gain;
-5. Bayesian or calibrated evidence update baseline;
-6. rule/theory induction over programs, graphs, equations, or latent dynamics;
-7. held-out transfer test before any skill promotion.
+`h_(r+1) = F_theta(h_r, observation, goal, budget)`.
 
-**Measure:** interactions to first success, interactions to calibrated rule recovery,
-held-out transfer, regret, and unsafe/redundant actions.
+The halting scalar is another output of the same model. There are no round-specific
+models and no messages. Compare one, two and adaptive passes at matched compute.
 
-**Stop condition:** success by memorizing environment identifiers, exhaustive search,
-or hindsight explanation does not count.
+**Pass:** adaptive passes improve verified success or calibration per wall-clock cost.
 
-### R3. Memory ecology and cognitive compilation
+**Stop:** fixed one-pass or fixed-depth inference performs as well. In that case,
+recurrence stays out.
 
-**Claim:** verified experience raises future success while reducing future compute.
+## R6 — explicit epistemic state
 
-**Build bit by bit:**
+**State:** planned.
 
-1. causal episode schema;
-2. retrieval by failed belief, action pattern, and causal structure, not only text
-   similarity;
-3. semantic claims supported by several episodes;
-4. versioned procedural skills with typed preconditions and attached verifiers;
-5. failure-triggered demotion;
-6. verified coalition-to-skill compilation;
-7. scheduled merge, decay, compression, and contradiction review.
+Represent beliefs, hypotheses, provenance, contradictions and predicted observations as
+typed projections of the shared state. They are records, not agents. Train confidence
+against outcomes and require predictions to be stored before action.
 
-**Measure:** success and cost curves over repeated task families, false-memory rate,
-skill misuse outside scope, and recovery after environment changes.
+**Pass:** better calibration, contradiction recovery and information-seeking than an
+equal-context transcript baseline.
 
-**Stop condition:** a skill that is cheaper but less reliable, weakly scoped, or hard to
-invalidate is not an improvement.
+**Stop:** confidence rises without new independent evidence.
 
-### R4. World model and causal accountability
+## R7 — novel-environment learning
 
-**Claim:** action-conditioned models improve real decisions and locate causal failure,
-after charging for simulator error and compute.
+**State:** planned after R4/R6.
 
-**Build bit by bit:**
+Use tiny hidden-rule environments with deterministic controls. Give one model a short
+support history and require it to infer, test and reuse a rule in 3–20 experiences.
+Compare random action, information-gain heuristics, dense adaptation and retrieval-only
+baselines.
 
-1. short-horizon state prediction baseline;
-2. action-conditioned alternatives;
-3. adaptive simulation resolution;
-4. predicted-versus-observed calibration;
-5. trajectory dependency graph;
-6. retrospective counterfactuals;
-7. credit updates limited by counterfactual confidence and provenance.
+**Pass:** fewer interactions to verified transfer, not merely memorization of the
+training environments.
 
-**Measure:** decision gain over no-simulator baseline, simulation/reality gap,
-counterfactual accuracy where interventions exist, and whether learning changes the
-true causal predecessor instead of the nearest action.
+**Stop:** gains vanish on new rule families or after misleading evidence.
 
-**Stop condition:** simulator confidence may never promote simulator-only claims into
-grounded truth.
+## R8 — verified memory and reversible plasticity
 
-### R5. Neural Mixture-of-Parameters parity
+**State:** research.
 
-**Claim:** a pretrained transformation can be decomposed into smaller parameter bases,
-sparsified, and given bounded communication without losing inherited function.
+First store verified episodes outside the parameter update path. Then compile a scoped
+procedure. Only after replay and regression gates pass may an offline job update a
+reversible adapter inside the same checkpoint.
 
-**Build bit by bit:**
+**Pass:** new-skill gain with bounded old-skill regression, calibrated rollback and
+faster verified success on recurrence.
 
-1. factor one frozen linear or FFN transformation into additive bases;
-2. activate every required basis and prove output parity;
-3. train a sparse router by distillation while the original path remains active;
-4. add redundant zero-gated cells;
-5. specialize cells by operation and semantic context;
-6. add one communication round behind a zero gate;
-7. make disagreement control active cells and rounds;
-8. compare compiled coalitions with fresh routing;
-9. repeat across layers only after the single-layer ablation passes.
+**Stop:** raw experience changes core weights, the model can promote its own evidence,
+or rollback fails.
 
-**Measure:** perplexity/output drift, downstream retention, active parameters, bytes
-moved, latency, calibration, disagreement quality, and cost per successful task.
+## R9 — canonical Leviathan latent
 
-**Stop condition:** if communication adds latency without improving verified work, keep
-the sparse bases and remove discussion.  If sparse routing cannot reach dense parity,
-the pretrained path stays authoritative.
+**State:** research-lab wall.
 
-### R6. Local plasticity and functional neurogenesis
+Adapter reconstruction and typed latent alignment across frozen donors may inform one
+future model, but inference may not become an ensemble of those donors. Distillation
+must end in one student checkpoint. R9 begins only after R0–R8 show that the cognitive
+mechanisms are worth preserving.
 
-**Claim:** verified new skills can be learned in small cells or newly allocated
-descendants with less interference than global fine-tuning.
+## Immediate next slice
 
-**Build bit by bit:**
+The next pull request should do exactly R4's first comparison:
 
-1. task-local disposable state;
-2. reversible cell adapters;
-3. replay and interference probes;
-4. local learning-policy baseline;
-5. allocate a child cell when measured interference exceeds a threshold;
-6. sandbox train, evaluate, shadow, and promote or delete;
-7. merge/prune redundant descendants.
+1. select one small open sequence-model block;
+2. add the zero-preserving `UnifiedMoP` residual to one FFN;
+3. add dense-adapter and untouched baselines;
+4. train on a small real sequence suite with fixed seeds;
+5. benchmark protected retention and p50/p95 latency;
+6. either promote staged Top-K or return to the dense adapter;
+7. only then decide whether R5 recursion deserves code.
 
-**Measure:** new-skill gain, protected-skill regression, calibration drift, bytes added,
-active compute, and rollback success.
-
-**Stop condition:** no online experience updates the ancestral/core path directly.
-
-### R7. Representation and cognitive compilers
-
-**Claim:** choosing a problem-specific representation and program beats fixed token
-reasoning across diverse tasks.
-
-**Build bit by bit:**
-
-1. typed objects for entities, events, quantities, hypotheses, constraints, and goals;
-2. reversible compression/expansion with explicit information-loss tests;
-3. a small fixed operator algebra;
-4. typed cognitive bytecode;
-5. compiler from task state to bounded operator program;
-6. runtime graph synthesis from that program;
-7. temporary concept and internal-DSL invention;
-8. compile verified programs into procedures.
-
-**Measure:** accuracy, transfer, representation size, cognitive steps, invalid state
-transitions, and reconstruction loss on task-relevant facts.
-
-**Stop condition:** invented representations must be inspectable through typed
-projections and cannot bypass goals, action gates, or provenance.
-
-### R8. Persistent heterogeneous runtime
-
-**Claim:** one agent can remain coherent while perception, memory, planning, tools, and
-control run at different timescales and hardware locations.
-
-**Build bit by bit:**
-
-1. event-triggered module scheduling;
-2. cognitive state residency metadata;
-3. near-memory filtering;
-4. joint precision/location/compute routing;
-5. distributed append-only journal and recoverable snapshots;
-6. deterministic replay after process failure;
-7. cognitive IR lowered to CPU, GPU, storage, and remote execution backends.
-
-**Measure:** recovered-state equivalence, stale-state errors, bytes moved, queueing,
-tail latency, energy proxy, and task success per wall-clock cost.
-
-**Stop condition:** hardware optimization cannot weaken verification, provenance, or
-goal integrity.
-
-### R9. Canonical Leviathan latent — research wall
-
-**Claim:** different frozen pretrained models can map useful state into a typed shared
-latent without destroying their competence, eventually making the substrate
-replaceable.
-
-The safe sequence is adapter reconstruction, cross-model semantic alignment, typed
-latent slots, limited Leviathan-native computation, and only then possible migration.
-
-R9 begins only after R0–R8 show that the higher cognitive architecture is worth
-preserving.  Running substantial cognition in a new latent needs serious continued
-training.  A portable foundation-independent cognitive IR is a research-lab-scale
-program, not a repository wiring task.
-
-## First neural experiment sequence
-
-The first MoP study should stay small and answer one question at a time:
-
-| Experiment | Change | Frozen baseline | Promotion gate |
-|---|---|---|---|
-| E0 | Python cell-market simulator | current controller | bounded convergence and trace correctness |
-| E1 | Additive basis decomposition of one FFN | original FFN | numerical/output parity |
-| E2 | Learned Top-K basis router | dense basis use | retention at lower active compute |
-| E3 | Redundant zero-gated cells | sparse E2 | exact insertion parity |
-| E4 | One aggregate communication round | E3 | verified task gain exceeds latency |
-| E5 | Disagreement-based expansion | fixed active count | lower cost at matched success |
-| E6 | Coalition cache | fresh routing | cheaper repeats without generalization loss |
-| E7 | Local reversible adapter update | frozen E6 | new-skill gain with bounded regression |
-| E8 | Cell birth/merge/prune | fixed reservoir | lifetime gain after storage/compute cost |
-
-Do not combine E2 through E8 into one training run.  A positive result would be
-uninterpretable and a negative result would reveal nothing about which assumption
-failed.
-
-## Evaluation spine
-
-Every rung reports the same four ledgers:
-
-### Capability
-
-- success on held-out tasks;
-- sample efficiency in novel environments;
-- transfer across unrelated task families;
-- recovery after misleading evidence.
-
-### Epistemics
-
-- calibration error;
-- prediction-before-outcome accuracy;
-- hypothesis diversity and collapse rate;
-- verifier independence and coverage;
-- provenance preservation.
-
-### Lifetime learning
-
-- compute to solve a repeated task over experience count;
-- false semantic/procedural promotion rate;
-- old-skill regression;
-- rollback success;
-- skill invalidation latency.
-
-### Systems
-
-- active/total parameters;
-- cell calls and rounds;
-- bytes moved and state footprint;
-- wall-clock latency;
-- cost per verified success.
-
-No single aggregate score can waive a failed governance invariant.
-
-## Kill criteria
-
-The following results should simplify or stop a branch rather than trigger more scale:
-
-- cell discussion performs no better than one aggregation pass after matched compute;
-- disagreement is not calibrated with error or information value;
-- compiled coalitions overfit routing keys and fail held-out transfer;
-- explicit belief state raises confidence without new independent evidence;
-- world-model planning wins only inside the simulator;
-- local plasticity causes accumulating protected-skill or calibration regression;
-- the controller learns to avoid difficult but important tasks;
-- any component needs access to goal, verifier, rollback, and promotion authority at the
-  same time;
-- an improvement disappears when measured as cost per **verified** success.
-
-## Immediate next implementation slices
-
-After this branch, the narrowest valuable sequence is:
-
-1. add a versioned belief ledger and observation-to-belief update contract;
-2. add a causal episode DAG using the existing journal references;
-3. build two tiny hidden-rule environments for novel-environment learning;
-4. add a deterministic information-gain baseline and a random-action control;
-5. compile a verified rule into a scoped procedure and test transfer/invalidation;
-6. only then begin E1, the single-FFN neural basis-parity experiment.
-
-That sequence gives the rocket a guidance system before adding a larger engine.
+That is the rocket path: preserve the last working stage, test the next engine under
+load, and route around a failed mechanism instead of drilling through it.

@@ -131,30 +131,32 @@ The controller should estimate problem branching structure:
 
 ## 9. Hardware-aware routing
 
-A theoretically best expert/model may be a bad wall-clock choice when overloaded.
+A theoretically best internal parameter route may be a bad wall-clock choice when its
+gather, memory or synchronization cost is high.
 
 Routing can include a systems term:
 
-`score(model) = expected_quality - latency_penalty - queue_penalty - communication_penalty - memory_penalty`
+`score(route) = expected_quality - latency_penalty - queue_penalty - communication_penalty - memory_penalty`
 
 This is the system-level extension of LongCat's lesson that adaptive routing and hardware load balancing cannot be designed independently.
 
-## 10. Model portfolio
+## 10. One model, multiple typed operations
 
-The controller may choose among multiple model classes:
+The controller chooses modes and resource allocations inside one cognitive model:
 
 ```text
-small drafter      cheap breadth / speculation
-mid-size worker    common tasks
-large reasoner     difficult high-value tasks
-world model        state/action prediction
-vision model       perceptual grounding
-reward model       learned quality signal
-formal verifier    exact restricted-domain validation
-robot/GUI actor    native action execution
+fewer parameter bases       cheap direct inference
+more parameter bases        difficult high-value inference
+shared-state passes         bounded refinement
+world-state projection      state/action prediction
+perceptual projection       visual/audio grounding
+native action head          robot/GUI action encoding
 ```
 
-A future system should not assume one foundation model is the optimal executor for every operation.
+Formal solvers, deterministic tools, sensors, executors and independent measurements
+remain external boundaries. They can transform or verify a frozen contract; they do not
+become separately stateful cognitive models. Runtime cognition always resolves to one
+foundation checkpoint and one shared task state.
 
 ## 11. Learning the controller
 

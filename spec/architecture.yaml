@@ -1,19 +1,28 @@
-version: "0.2"
+version: "0.3"
 project: Leviathan
 purpose: >-
-  Research specification for one persistent adaptive agent combining a bounded
-  Cognitive Parameter Cell ecology, persistent belief state, metacognitive routing,
-  multiple reasoning/search modes, native actions, verification, multi-tier memory,
-  procedural compilation and safe continual learning.
+  Research specification for one persistent adaptive agent with exactly one cognitive
+  model, persistent belief state, metacognitive routing, multiple reasoning/search
+  modes, native actions, verification, multi-tier memory, procedural compilation and
+  safe continual learning.
 
 agent:
   identity_owner: unified_agent
   identity_count: 1
-  internal_specialists: "organs_not_independently_goaled_agents"
+  cognitive_model_count: 1
+  independent_internal_model_count: 0
+  model_state_count: 1
+  optimizer_count: 1
+  checkpoint_count: 1
   state_owner: unified_agent
   action_gateway_count: 1
   original_goal: immutable_and_externally_inspectable
   detailed_contract: "spec/one-agent.yaml"
+  module_semantics: >-
+    Named cognitive modules are typed projections, heads, or state transitions inside
+    the one model. They are not separately prompted, optimized, checkpointed, or given
+    private task state. External prototypes remain experiments until distilled into the
+    one runtime checkpoint.
 
 invariants:
   - id: no_raw_core_updates
@@ -28,12 +37,12 @@ invariants:
     rule: "Every parametric update MUST have a rollback path."
   - id: goal_integrity
     rule: "The original external goal MUST remain inspectable and immutable by the learner."
-  - id: cells_only_propose
-    rule: "Cognitive Parameter Cells MUST NOT execute actions, self-verify, promote learning, or alter governance."
+  - id: strict_single_model
+    rule: "Cognition MUST have one parameter owner, shared state, router, objective, optimizer, checkpoint, and output."
   - id: bounded_recursion
-    rule: "Internal discussion and outer task cycles MUST have explicit hard budgets."
-  - id: nonconvergence_stops_action
-    rule: "A non-converged internal discussion MUST NOT fall through to external action."
+    rule: "Shared-state refinement and outer task cycles MUST have explicit hard budgets."
+  - id: failed_inference_stops_action
+    rule: "Model failure, invalid output, or budget exhaustion MUST NOT fall through to external action."
 
 loops:
   fast:
@@ -84,28 +93,36 @@ modules:
       - deployment_promotion
       - rollback_authority
 
-  parameter_ecology:
-    unit: cognitive_parameter_cell
-    cell_fields:
-      - learned_function
-      - local_state
-      - recruitment_keys
-      - quality_estimate
-      - communication_interface
-    cycle:
-      - associative_recruitment
-      - independent_proposals
-      - confidence_weighted_aggregation
-      - disagreement_measurement
-      - bounded_peer_recruitment
-      - revision
-      - consensus_or_stop
-    hard_budgets:
-      - active_cells
-      - discussion_rounds
-      - total_cell_calls
-      - peer_requests
-    learning_boundary: "Only externally verified coalitions may affect procedural routing; cells cannot self-promote."
+  unified_cognitive_model:
+    exact_counts:
+      parameter_owners: 1
+      shared_states: 1
+      routers: 1
+      objectives: 1
+      optimizers: 1
+      checkpoints: 1
+      outputs: 1
+    parameter_substrate:
+      - dense_base_transform
+      - tensorized_low_rank_basis_bank
+      - differentiable_top_k_router
+      - one_weighted_parameter_update
+    basis_may_not_have:
+      - identity
+      - private_state
+      - goal
+      - callable_model_interface
+      - independent_output
+      - independent_optimizer
+    current_evidence:
+      - exact_zero_insertion_parity
+      - conditional_operator_learning
+      - staged_sparse_training
+    current_rejections:
+      - posthoc_sparsification
+      - unfused_runtime_speed_claim
+      - recurrence_without_sequence_evidence
+    learning_boundary: "Only independently verified evidence may enter an offline, rollbackable model update."
 
   perception:
     responsibilities:
@@ -135,8 +152,7 @@ modules:
       - stakes
       - hardware_load
     outputs:
-      - selected_model
-      - active_experts
+      - active_parameter_bases_inside_the_same_model
       - precision
       - reasoning_budget
     lessons:

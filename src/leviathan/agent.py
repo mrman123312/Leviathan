@@ -1,8 +1,9 @@
-"""A single governed Leviathan agent built around a sparse parameter ecology.
+"""The governed envelope around Leviathan's one cognitive model.
 
-``LeviathanAgent`` is the sole owner of identity, goal continuity, action authority,
-the event journal, and durable learning.  Internal cells are proposal mechanisms, not
-subagents.  This preserves one coherent agent while allowing heterogeneous cognition.
+``LeviathanAgent`` owns identity, goal continuity, serialized task state, action
+authority, and the event journal.  It invokes exactly one cognitive kernel per cycle.
+The verifier and executor are external measurement/effect boundaries, not additional
+reasoning agents.
 """
 
 from __future__ import annotations
@@ -15,15 +16,16 @@ from hashlib import sha256
 from math import isfinite
 from typing import Any, Protocol, runtime_checkable
 
-from .cells import (
-    CellContext,
-    CognitiveCandidate,
-    DeliberationStatus,
-    DeliberationTrace,
-    MetaSnapshot,
-    ParameterEcology,
-)
 from .controller import BaselineMetaController
+from .kernel import (
+    CognitiveCandidate,
+    CognitiveContext,
+    CognitiveKernel,
+    InferenceStatus,
+    InferenceTrace,
+    KernelManifest,
+    MetaSnapshot,
+)
 from .trust import verification_trust
 from .types import CognitiveMode, MetaState, Provenance, Verification
 
@@ -87,6 +89,7 @@ class AgentPolicy:
         "no_raw_core_updates",
     )
     max_cycles: int = 32
+    max_refinement_steps: int = 4
     max_action_risk: float = 0.35
     allowed_authorization_classes: frozenset[str] = frozenset({"internal", "read", "sandbox"})
     irreversible_authorization_classes: frozenset[str] = frozenset()
@@ -100,6 +103,8 @@ class AgentPolicy:
             raise ValueError("constitution must not be empty")
         if self.max_cycles < 1:
             raise ValueError("max_cycles must be at least 1")
+        if self.max_refinement_steps < 1:
+            raise ValueError("max_refinement_steps must be at least 1")
         _unit_interval("max_action_risk", self.max_action_risk)
         _unit_interval("minimum_verifier_independence", self.minimum_verifier_independence)
         _unit_interval("minimum_verification_trust", self.minimum_verification_trust)
@@ -112,6 +117,7 @@ class AgentPolicy:
             {
                 "constitution": self.constitution,
                 "max_cycles": self.max_cycles,
+                "max_refinement_steps": self.max_refinement_steps,
                 "max_action_risk": self.max_action_risk,
                 "allowed_authorization_classes": sorted(self.allowed_authorization_classes),
                 "irreversible_authorization_classes": sorted(
@@ -183,7 +189,7 @@ class ActionExecutor(Protocol):
 
 @runtime_checkable
 class OutcomeVerifier(Protocol):
-    """Independent evidence port kept outside the cell ecology."""
+    """Independent measurement port kept outside the cognitive model."""
 
     verifier_id: str
 
@@ -222,7 +228,7 @@ class Episode:
     cycle: int
     goal_id: str
     observation_id: str
-    trace: DeliberationTrace
+    trace: InferenceTrace
     status: AgentStatus
     contract: ActionContract | None = None
     outcome: ActionOutcome | None = None
@@ -233,6 +239,8 @@ class Episode:
 @dataclass(frozen=True, slots=True)
 class AgentSnapshot:
     agent_id: str
+    model_id: str
+    kernel_manifest: KernelManifest
     goal: GoalFrame
     policy_digest: str
     cycle: int
@@ -245,7 +253,7 @@ class AgentSnapshot:
 @dataclass(frozen=True, slots=True)
 class AgentTurnResult:
     status: AgentStatus
-    trace: DeliberationTrace
+    trace: InferenceTrace
     episode: Episode
     candidate: CognitiveCandidate | None
     contract: ActionContract | None = None
@@ -255,14 +263,14 @@ class AgentTurnResult:
 
 
 class LeviathanAgent:
-    """One stateful agent with bounded recursive cognition and guarded effects."""
+    """One stateful agent with one bounded cognitive model and guarded effects."""
 
     def __init__(
         self,
         *,
         agent_id: str,
         goal: GoalFrame,
-        ecology: ParameterEcology,
+        kernel: CognitiveKernel,
         policy: AgentPolicy | None = None,
         controller: BaselineMetaController | None = None,
         executor: ActionExecutor | None = None,
@@ -275,7 +283,12 @@ class LeviathanAgent:
         self._goal_digest = goal.id
         self._policy = policy if policy is not None else AgentPolicy()
         self._policy_digest = self._policy.digest
-        self._ecology = ecology
+        if not isinstance(kernel, CognitiveKernel):
+            raise TypeError("kernel must implement the single CognitiveKernel boundary")
+        violations = kernel.manifest.violations()
+        if violations:
+            raise ValueError("kernel violates the single-model contract: " + "; ".join(violations))
+        self._kernel = kernel
         self._controller = controller or BaselineMetaController()
         self._executor = executor
         self._verifier = verifier
@@ -289,6 +302,8 @@ class LeviathanAgent:
     def snapshot(self) -> AgentSnapshot:
         return AgentSnapshot(
             agent_id=self._agent_id,
+            model_id=self._kernel.model_id,
+            kernel_manifest=self._kernel.manifest,
             goal=self._goal,
             policy_digest=self._policy_digest,
             cycle=self._cycle,
@@ -307,11 +322,10 @@ class LeviathanAgent:
         return tuple(self._episodes)
 
     def step(self, observation: AgentObservation, meta_state: MetaState) -> AgentTurnResult:
-        """Run one observe-orient-discuss-contract-act-verify cycle.
+        """Run one observe-infer-contract-act-verify cycle.
 
-        A non-converged cell market never falls through to action.  The caller can add
-        evidence, change the budget, or explicitly reconfigure the research system and
-        then begin another cycle.
+        Budget exhaustion or model failure never falls through to action.  Additional
+        compute means another refinement by the same model over the same shared state.
         """
 
         self._assert_integrity()
@@ -336,7 +350,7 @@ class LeviathanAgent:
         # These are boundary transitions, not endorsements.  Risk and authority are
         # checked later against the frozen goal and policy.
         allowed_modes.update({CognitiveMode.ACT, CognitiveMode.ASK, CognitiveMode.WAIT_OBSERVE})
-        context = CellContext(
+        context = CognitiveContext(
             agent_id=self._agent_id,
             goal_id=self._goal.id,
             meta=MetaSnapshot.from_state(sanitized_meta, immutable_goal=self._goal.original),
@@ -344,26 +358,44 @@ class LeviathanAgent:
             observation=observation.payload,
             routing_keys=observation.routing_keys,
             evidence_refs=observation.evidence_refs,
+            refinement_budget=self._policy.max_refinement_steps,
             allowed_modes=frozenset(allowed_modes),
         )
-        trace = self._ecology.deliberate(context)
+        try:
+            trace = self._kernel.infer(context)
+        except Exception as exc:  # noqa: BLE001 - model failure becomes explicit state
+            reason = f"cognitive kernel failed: {type(exc).__name__}"
+            trace = self._empty_trace(reason)
+            self._event(
+                "inference_failed",
+                refs=(observation.id,),
+                detail=(
+                    ("model_id", self._kernel.model_id),
+                    ("error", type(exc).__name__),
+                ),
+            )
+            return self._close_episode(
+                observation=observation,
+                trace=trace,
+                status=AgentStatus.FAILED,
+                reason=reason,
+            )
         self._event(
-            "deliberation_closed",
+            "inference_closed",
             refs=(observation.id,),
             detail=(
                 ("status", trace.status.value),
-                ("rounds", str(trace.rounds)),
-                ("cell_calls", str(trace.cell_calls)),
-                ("disagreement", f"{trace.disagreement:.6f}"),
+                ("model_id", self._kernel.model_id),
+                ("refinement_steps", str(trace.refinement_steps)),
+                ("forward_passes", str(trace.forward_passes)),
+                ("uncertainty", f"{trace.uncertainty:.6f}"),
+                ("active_parameters", str(trace.active_parameters)),
+                ("total_parameters", str(trace.total_parameters)),
             ),
         )
 
-        if trace.status is not DeliberationStatus.CONVERGED or trace.decision is None:
-            reason = (
-                "internal deliberation did not converge within its hard limits"
-                if trace.decision is not None
-                else "internal deliberation produced no admissible proposal"
-            )
+        if trace.status is not InferenceStatus.DECIDED or trace.decision is None:
+            reason = trace.reason or "the cognitive model produced no admissible decision"
             return self._close_episode(
                 observation=observation,
                 trace=trace,
@@ -372,6 +404,13 @@ class LeviathanAgent:
             )
 
         candidate = trace.decision
+        if candidate.mode not in allowed_modes:
+            return self._close_episode(
+                observation=observation,
+                trace=trace,
+                status=AgentStatus.BLOCKED,
+                reason="the cognitive model selected a disallowed mode",
+            )
         if candidate.mode not in EXTERNAL_ACTION_MODES:
             return self._close_episode(
                 observation=observation,
@@ -437,11 +476,13 @@ class LeviathanAgent:
         eligible, passed, trust = self._verification_gate(contract, verifications)
         if eligible:
             verified_success = passed and outcome.success is not False
-            self._ecology.record_verified_outcome(
-                routing_keys=observation.routing_keys,
-                trace=trace,
-                passed=verified_success,
-                trust=trust,
+            self._event(
+                "verified_learning_evidence",
+                refs=(contract.id,),
+                detail=(
+                    ("passed", str(verified_success)),
+                    ("trust", f"{trust:.6f}"),
+                ),
             )
             status = AgentStatus.VERIFIED if verified_success else AgentStatus.REJECTED
             if verified_success:
@@ -568,7 +609,7 @@ class LeviathanAgent:
         self,
         *,
         observation: AgentObservation,
-        trace: DeliberationTrace,
+        trace: InferenceTrace,
         status: AgentStatus,
         contract: ActionContract | None = None,
         outcome: ActionOutcome | None = None,
@@ -610,21 +651,8 @@ class LeviathanAgent:
         observation: AgentObservation,
         reason: str,
     ) -> AgentTurnResult:
-        # A synthetic empty trace keeps the result type total without pretending a cycle ran.
-        trace = DeliberationTrace(
-            status=DeliberationStatus.NO_PROPOSAL,
-            decision=None,
-            confidence=0.0,
-            disagreement=1.0,
-            rounds=0,
-            cell_calls=0,
-            active_cell_ids=(),
-            coalition_cell_ids=(),
-            snapshots=(),
-            proposals=(),
-            failures=(),
-            unresolved_requests=(),
-        )
+        # A synthetic empty trace keeps the result total without claiming a model ran.
+        trace = self._empty_trace(reason)
         self._status = AgentStatus.BLOCKED
         self._event("cycle_blocked", refs=(observation.id,), detail=(("reason", reason),))
         episode = Episode(
@@ -642,6 +670,18 @@ class LeviathanAgent:
             trace=trace,
             episode=episode,
             candidate=None,
+            reason=reason,
+        )
+
+    @staticmethod
+    def _empty_trace(reason: str) -> InferenceTrace:
+        return InferenceTrace(
+            status=InferenceStatus.NO_DECISION,
+            decision=None,
+            confidence=0.0,
+            uncertainty=1.0,
+            refinement_steps=0,
+            forward_passes=0,
             reason=reason,
         )
 

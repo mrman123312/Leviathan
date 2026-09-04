@@ -37,7 +37,7 @@ Use it to test:
 - expert expansion;
 - persistent-state channels;
 - memory experts;
-- heterogeneous expert routing;
+- heterogeneous parameter-basis routing inside one checkpoint;
 - MTP extensions;
 - continual adapters;
 - verifier-conditioned learning;
@@ -121,7 +121,9 @@ Primary lesson: semantic reasoning and modality realization should be separable.
 
 ## Role D — post-training teachers
 
-Teacher models are not necessarily the substrate. They are used to create, compare and verify trajectories.
+Teacher models are never the deployed agent. They are offline sources used to create
+and compare candidate training trajectories. Any retained information must be distilled
+or transplanted into one student parameter state before runtime.
 
 Candidate teacher ensemble:
 
@@ -131,7 +133,8 @@ Candidate teacher ensemble:
 - DeepSeek-V4-Pro post-trained checkpoints;
 - GLM-5.3-Flash for efficient solution proposals.
 
-The ensemble should not be distilled by naive majority vote.
+The offline set should not be distilled by naive majority vote, and its members must
+never co-infer as Leviathan's runtime cognition.
 
 For task `x`, model the target as a task-conditioned mixture:
 
