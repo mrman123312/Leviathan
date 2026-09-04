@@ -1,8 +1,9 @@
-version = "0.1"
+version = "0.2"
 name = "Leviathan Omega"
 
 [substrate]
-experimental = "qwen3-30b-a3b-base"
+experimental = "deepseek-v4-pro-base"
+development_fallback = "qwen3-30b-a3b-base"
 scientific_control = "olmo3-32b-base"
 frontier_semantic = "deepseek-v4-pro-base"
 frontier_efficiency = "mimo-v2.5-pro-base"
@@ -16,6 +17,7 @@ rollback_required = true
 provenance_required = true
 simulated_evidence_labeled = true
 teacher_disagreement_is_not_ground_truth = true
+architecture_rules_are_rejectable_when_verified_accuracy_or_speed_improves_without_loss = true
 
 [training.phases]
 phase_0 = "baseline_and_fingerprint"
@@ -38,6 +40,19 @@ future_action_prediction = true
 verifier_outcome_prediction = true
 replay_retention = true
 stability_regularization = true
+
+[modules.mixture_of_parameters]
+enabled = true
+substrate = "deepseek-v4-pro-base"
+spec = "spec/deepseek-v4-mop.toml"
+target = "routed_moe_ffn"
+initial_mode = "exact_parameter_tile_decomposition"
+tile_width = 128
+preserve_shared_expert = true
+preserve_original_router_through_mop1 = true
+scalar_parameter_routing = false
+expert_weight_averaging = false
+rule = "retain only if capability-per-real-wall-clock-compute improves; otherwise keep original DeepSeek V4 MoE"
 
 [modules.memory_graft]
 class = "gated_parallel"
@@ -123,11 +138,20 @@ metrics = [
   "simulator_reality_gap"
 ]
 
+[evaluation.r4_canaries]
+public_language = "wikitext_64_heldout"
+max_relative_language_loss_increase = 0.02
+target_relative_language_loss_increase = 0.0025
+reasoning_canary = "arc_easy"
+report_every_candidate = true
+real_speed_must_not_regress = true
+
 [scaling]
 omega_s0 = "3B_to_30B"
 omega_s1 = "100B_to_300B_sparse"
 omega_s2 = "approximately_1T"
 omega_l = "1.6T_plus"
+current_target = "omega_l"
 
 [promotion]
 required_suites = ["capability", "retention", "calibration", "safety", "adversarial", "efficiency"]
