@@ -7,6 +7,7 @@ from .deepseek_v4 import (
     DeepSeekV4Fingerprint,
     DeepSeekV4Manifest,
     MixtureOfParametersPlan,
+    ParameterTileSpec,
     build_manifest,
     verify_full_checkpoint_files,
 )
@@ -35,6 +36,7 @@ __all__ = [
     "MetaState",
     "MixtureOfParametersPlan",
     "ModeEstimate",
+    "ParameterTileSpec",
     "PromotionThresholds",
     "Provenance",
     "ProvenanceKind",
