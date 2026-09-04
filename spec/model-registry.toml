@@ -1,0 +1,153 @@
+version = "0.1"
+
+# The registry stores metadata only. Do not commit model weights to Git.
+# Revisions should be pinned to an immutable commit hash before any experiment is declared reproducible.
+
+[defaults]
+model_root = "models/checkpoints"
+cache_root = ".cache/huggingface"
+require_revision_pin_for_training = true
+allow_remote_code_by_default = false
+
+[[models]]
+id = "qwen3-30b-a3b-base"
+repo_id = "Qwen/Qwen3-30B-A3B-Base"
+role = "experimental_substrate"
+stage = "base"
+license = "Apache-2.0"
+total_parameters_b = 30.5
+active_parameters_b = 3.3
+multimodal = false
+enabled_for_download = true
+priority = 1
+notes = "Primary development-scale sparse substrate for architecture surgery."
+
+[[models]]
+id = "olmo3-32b-base"
+repo_id = "allenai/Olmo-3-1125-32B"
+role = "scientific_control"
+stage = "base"
+license = "Apache-2.0"
+total_parameters_b = 32.0
+active_parameters_b = 32.0
+multimodal = false
+enabled_for_download = true
+priority = 2
+notes = "Transparent training-lineage control for measuring architecture effects."
+
+[[models]]
+id = "deepseek-v4-pro-base"
+repo_id = "deepseek-ai/DeepSeek-V4-Pro-Base"
+role = "frontier_semantic_substrate"
+stage = "base"
+license = "MIT"
+total_parameters_b = 1600.0
+active_parameters_b = 49.0
+multimodal = false
+enabled_for_download = false
+priority = 10
+notes = "Preferred giant semantic substrate after Leviathan mechanisms are proven at smaller scale. Multi-terabyte class; explicit opt-in required."
+
+[[models]]
+id = "mimo-v2.5-pro-base"
+repo_id = "XiaomiMiMo/MiMo-V2.5-Pro-Base"
+role = "frontier_efficiency_substrate"
+stage = "base"
+license = "MIT"
+total_parameters_b = 1020.0
+active_parameters_b = 42.0
+multimodal = false
+enabled_for_download = false
+priority = 11
+notes = "Efficiency-first giant base donor: sparse MoE, local/global attention economy and MTP."
+
+[[models]]
+id = "mistral-large-3-base"
+repo_id = "mistralai/Mistral-Large-3-675B-Base-2512"
+role = "multimodal_base_donor"
+stage = "base"
+license = "Apache-2.0"
+total_parameters_b = 675.0
+active_parameters_b = 41.0
+multimodal = true
+enabled_for_download = false
+priority = 12
+notes = "Clean multimodal base donor; use projection bridges rather than incompatible raw tensor merges."
+
+[[models]]
+id = "glm-5.3-flash"
+repo_id = "zai-org/GLM-5.3-Flash"
+role = "efficiency_teacher_and_architecture_donor"
+stage = "posttrained"
+license = "MIT"
+total_parameters_b = 320.0
+active_parameters_b = 18.0
+multimodal = true
+enabled_for_download = false
+priority = 20
+notes = "Study hybrid sparse/linear attention, mHC-style residual connectivity and low active compute."
+
+[[models]]
+id = "glm-5.3"
+repo_id = "zai-org/GLM-5.3"
+role = "teacher"
+stage = "posttrained"
+license = "custom_or_model_card"
+total_parameters_b = 753.0
+active_parameters_b = 40.0
+multimodal = false
+enabled_for_download = false
+priority = 21
+notes = "High-capability agent/post-training teacher. Verify current model-card terms before redistribution."
+
+[[models]]
+id = "qwen3.8-2.4t-a95b"
+repo_id = "Qwen/Qwen3.8-2.4T-A95B"
+role = "teacher"
+stage = "posttrained"
+license = "Qwen-custom"
+total_parameters_b = 2400.0
+active_parameters_b = 95.0
+multimodal = false
+enabled_for_download = false
+priority = 22
+notes = "Huge post-trained teacher and architecture reference; not the preferred clean substrate."
+
+[[models]]
+id = "deepseek-v4-pro-0813"
+repo_id = "deepseek-ai/DeepSeek-V4-Pro-0813"
+role = "teacher"
+stage = "posttrained"
+license = "MIT"
+total_parameters_b = 1600.0
+active_parameters_b = 49.0
+multimodal = false
+enabled_for_download = false
+priority = 23
+notes = "Post-trained behavior teacher paired with the V4 Pro Base substrate."
+
+[[models]]
+id = "kimi-k3"
+repo_id = "MoonshotAI/Kimi-K3"
+role = "teacher_and_architecture_donor"
+stage = "posttrained_or_release_specific"
+license = "Kimi-custom"
+total_parameters_b = 2800.0
+active_parameters_b = 104.0
+multimodal = true
+enabled_for_download = false
+priority = 24
+notes = "Architecture donor for KDA, AttnRes, latent MoE, quantization-native design and long-horizon agent behavior. Verify exact checkpoint ID/release terms before automated download."
+
+[[models]]
+id = "qwen3-omni"
+repo_id = "Qwen/Qwen3-Omni"
+role = "multimodal_output_donor"
+stage = "posttrained_or_release_specific"
+license = "Apache-2.0_or_release_specific"
+total_parameters_b = 0.0
+active_parameters_b = 0.0
+multimodal = true
+enabled_for_download = false
+priority = 30
+notes = "Thinker/Talker and audio/video/speech architecture donor. Exact checkpoint selection is experiment-specific."
