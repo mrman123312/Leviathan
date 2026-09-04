@@ -91,6 +91,13 @@ class MetaState:
     hardware_load: float = 0.0
     recent_failures: int = 0
 
+    # L1.5 -> L8 bridge. These remain observational until a calibrated/validated
+    # controller is explicitly promoted to use them for compute allocation.
+    parameter_cell_disagreement: float = 0.0
+    parameter_cell_active_fraction: float = 0.0
+    parameter_cell_rounds_used: int = 0
+    parameter_cell_budget_pressure: float = 0.0
+
 
 @dataclass(slots=True)
 class ModeEstimate:
