@@ -30,7 +30,7 @@ Why it is preferred:
 
 The core rule remains **inherit first, mutate second**. The initial Leviathan representation must reproduce the base model's function before original paths are relaxed or retired.
 
-The exact canonical V4 fingerprint and Mixture-of-Parameters migration are specified in `spec/deepseek-v4-mop.toml` and `docs/15-deepseek-v4-mop-integration.md`.
+The exact canonical V4 fingerprint and Mixture-of-Parameters migration are specified in `spec/deepseek-v4-mop.toml`, `docs/15-deepseek-v4-mop-r4.md` and `docs/16-deepseek-v4-mop-integration.md`.
 
 ### Qwen3-30B-A3B-Base — development control
 
@@ -133,7 +133,7 @@ Use the vision encoder or learned representations through a projection bridge ra
 
 A generic bridge is:
 
-`z_vision -> P_vision(z_vision) -> Leviathan belief space`
+`z_vision -> P_vision(z_vision) -> z_Leviathan`
 
 where both large pretrained systems are frozen while the projector is initially trained.
 
