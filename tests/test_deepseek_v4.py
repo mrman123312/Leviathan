@@ -11,6 +11,7 @@ from leviathan.deepseek_v4 import (
     build_manifest,
     verify_full_checkpoint_files,
 )
+from leviathan.deepseek_v4_mop import plan_from_spec
 
 
 CANONICAL_CONFIG = {
@@ -59,6 +60,35 @@ class DeepSeekV4Tests(unittest.TestCase):
         self.assertEqual(last.w1_row_bounds, (2944, 3072))
         self.assertEqual(last.w3_row_bounds, (2944, 3072))
         self.assertEqual(last.w2_column_bounds, (2944, 3072))
+
+    def test_checkpoint_and_fused_serving_tile_views_are_consistent(self) -> None:
+        fingerprint = DeepSeekV4Fingerprint.from_mapping(CANONICAL_CONFIG)
+        checkpoint_plan = MixtureOfParametersPlan.from_fingerprint(fingerprint)
+        serving_plan = plan_from_spec()
+
+        self.assertEqual(checkpoint_plan.tiles_per_expert, serving_plan.tiles_per_expert)
+        self.assertEqual(
+            checkpoint_plan.routed_tiles_per_layer,
+            serving_plan.routed_tiles_per_layer,
+        )
+        self.assertEqual(
+            checkpoint_plan.baseline_active_routed_tiles_per_token,
+            serving_plan.initial_active_routed_tiles,
+        )
+
+        for expert_id, tile_index in ((0, 0), (17, 9), (383, 23)):
+            checkpoint_tile = checkpoint_plan.tile_spec(expert_id, tile_index)
+            serving_tile = serving_plan.tile(expert_id, tile_index)
+
+            self.assertEqual(checkpoint_tile.w1_row_bounds, serving_tile.gate_rows)
+            self.assertEqual(checkpoint_tile.w2_column_bounds, serving_tile.down_columns)
+
+            packed_up_start, packed_up_end = serving_tile.up_rows
+            logical_up_rows = (
+                packed_up_start - serving_tile.intermediate_size,
+                packed_up_end - serving_tile.intermediate_size,
+            )
+            self.assertEqual(checkpoint_tile.w3_row_bounds, logical_up_rows)
 
     def test_exact_route_expands_all_tiles_of_selected_experts(self) -> None:
         fingerprint = DeepSeekV4Fingerprint.from_mapping(CANONICAL_CONFIG)
