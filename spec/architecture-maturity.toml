@@ -1,0 +1,142 @@
+version = "0.1"
+name = "Leviathan architecture embodiment ledger"
+single_cognitive_model = true
+
+[maturity]
+gates = ["specification", "executable", "integrated", "learned", "demonstrated"]
+rule = "A layer is not called achieved until all five gates pass. Code/data structures alone never count as demonstration."
+
+[development]
+build_order = ["L1", "L1.5", "L2", "L5", "L8", "L6", "L7", "L9", "L4", "L3", "L0", "L10"]
+
+[layers.L0]
+name = "physical execution"
+target_fundamental = "hardware-aware information transformation and cognitive IR"
+evidence = "metrics/runtime hooks exist; optimized Leviathan execution substrate does not"
+[layers.L0.gates]
+specification = "passed"
+executable = "partial"
+integrated = "not_started"
+learned = "not_started"
+demonstrated = "not_started"
+
+[layers.L1]
+name = "numerical/function substrate"
+target_fundamental = "dynamic function substrate that preserves inherited function"
+evidence = "function-preserving DeepSeek expert tiling exists and has reference parity tests"
+[layers.L1.gates]
+specification = "passed"
+executable = "passed"
+integrated = "partial"
+learned = "not_started"
+demonstrated = "not_started"
+
+[layers."L1.5"]
+name = "parameter ecology"
+target_fundamental = "sparse ecology of expressive parameterized cells"
+evidence = "MoP-0 tiles exist; cell membrane/reference ecology is inserted inertly"
+[layers."L1.5".gates]
+specification = "passed"
+executable = "passed"
+integrated = "partial"
+learned = "not_started"
+demonstrated = "not_started"
+
+[layers.L2]
+name = "transformation primitive"
+target_fundamental = "learned neural microprograms over heterogeneous operators"
+evidence = "pretrained Transformer blocks still own the actual state transition"
+[layers.L2.gates]
+specification = "passed"
+executable = "partial"
+integrated = "not_started"
+learned = "not_started"
+demonstrated = "not_started"
+
+[layers.L3]
+name = "topology and routing"
+target_fundamental = "task-compiled conditional cognitive graph"
+evidence = "conditional routing concepts exist; inherited topology remains primary"
+[layers.L3.gates]
+specification = "passed"
+executable = "partial"
+integrated = "not_started"
+learned = "not_started"
+demonstrated = "not_started"
+
+[layers.L4]
+name = "representation"
+target_fundamental = "problem-specific internal representation compiler"
+evidence = "contracts/specification only"
+[layers.L4.gates]
+specification = "passed"
+executable = "not_started"
+integrated = "not_started"
+learned = "not_started"
+demonstrated = "not_started"
+
+[layers.L5]
+name = "persistent state and memory"
+target_fundamental = "self-organizing epistemic memory and persistent belief state"
+evidence = "belief/provenance schemas exist; persistent integrated cognitive state does not"
+[layers.L5.gates]
+specification = "passed"
+executable = "partial"
+integrated = "not_started"
+learned = "not_started"
+demonstrated = "not_started"
+
+[layers.L6]
+name = "prediction and world model"
+target_fundamental = "counterfactual theory-building causal world model"
+evidence = "architecture specified; no native executable theory-induction loop"
+[layers.L6.gates]
+specification = "passed"
+executable = "not_started"
+integrated = "not_started"
+learned = "not_started"
+demonstrated = "not_started"
+
+[layers.L7]
+name = "learning and plasticity"
+target_fundamental = "evidence-directed learning router and audited self-improvement compiler"
+evidence = "trust/promotion/transplant control plane exists; lifelong learner does not"
+[layers.L7.gates]
+specification = "passed"
+executable = "partial"
+integrated = "not_started"
+learned = "not_started"
+demonstrated = "not_started"
+
+[layers.L8]
+name = "cognition and metacognition"
+target_fundamental = "algorithm-synthesizing metacognitive controller with cognitive compilation"
+evidence = "transparent heuristic controller exists; learned integrated controller does not"
+[layers.L8.gates]
+specification = "passed"
+executable = "passed"
+integrated = "partial"
+learned = "not_started"
+demonstrated = "not_started"
+
+[layers.L9]
+name = "goals, agency, verification"
+target_fundamental = "governed evidence-driven agency with causal accountability"
+evidence = "governance/transplant contracts exist; autonomous executive loop does not"
+[layers.L9.gates]
+specification = "passed"
+executable = "partial"
+integrated = "not_started"
+learned = "not_started"
+demonstrated = "not_started"
+
+[layers.L10]
+name = "canonical cognitive latent"
+target_fundamental = "typed portable Leviathan cognitive coordinate system"
+evidence = "conceptual; migration beyond early adapters crosses the pretraining wall"
+[layers.L10.gates]
+specification = "passed"
+executable = "not_started"
+integrated = "not_started"
+learned = "not_started"
+demonstrated = "not_started"
