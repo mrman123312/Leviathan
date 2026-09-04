@@ -45,6 +45,26 @@ This layer borrows from reasoning-RL systems, world models, AlphaEvolve-style po
 
 This layer borrows from Letta, Mem0, Voyager, Absolute Zero Reasoner and continual-learning research.
 
+## Leviathan Ω model layer
+
+Leviathan is an **architecture soup, not a naive weight soup**. Unrelated giant-model tensors are not averaged together. Pretrained capability is transferred by direct compatible reuse, zero-gated grafts, latent projection bridges and distillation.
+
+Current role split:
+
+- **Qwen3-30B-A3B-Base** — primary development-scale architecture-surgery substrate.
+- **OLMo 3 32B Base** — transparent scientific control.
+- **DeepSeek-V4-Pro-Base** — preferred frontier semantic substrate after smaller-scale mechanisms are proven.
+- **MiMo-V2.5-Pro-Base** — frontier efficiency substrate/donor.
+- **Mistral Large 3 Base** — multimodal base donor.
+- **GLM-5.3-Flash / Kimi K3 / Step / Qwen-family architectures** — efficiency and sequence-compute donors.
+- **Kimi K3 / GLM-5.3 / Qwen3.8 / DeepSeek post-trained checkpoints** — teacher ensemble for trajectory distillation and disagreement-driven curriculum.
+
+Every architectural graft must initially preserve the pretrained function:
+
+`h' = F_pretrained(h) + alpha * G_new(h)`, with `alpha = 0` at insertion.
+
+See `docs/12-omega-model-soup.md` and `docs/13-weight-transplantation.md`.
+
 ## Repository map
 
 - `docs/00-source-ledger.md` — every system we learned from, with openness status and the lesson extracted.
@@ -59,9 +79,47 @@ This layer borrows from Letta, Mem0, Voyager, Absolute Zero Reasoner and continu
 - `docs/09-open-stack-blueprint.md` — practical mapping from Leviathan modules to available open/open-weight projects.
 - `docs/10-roadmap-and-gaps.md` — staged implementation path and remaining research blockers.
 - `docs/11-failure-modes.md` — drift, forgetting, simulator bias, verifier corruption, goal drift and other failure classes.
-- `spec/architecture.yaml` — machine-readable module graph and trust rules.
+- `docs/12-omega-model-soup.md` — substrate/donor/teacher roles and the target Leviathan Ω neural stack.
+- `docs/13-weight-transplantation.md` — compatibility classes and function-preserving architecture migration.
+- `spec/architecture.yaml` — machine-readable cognitive module graph and trust rules.
 - `spec/interfaces.md` — proposed data contracts between modules.
+- `spec/model-registry.toml` — model/checkpoint metadata and download policy.
+- `spec/omega-transplant.toml` — machine-readable Omega transplantation plan.
+- `scripts/fetch_model_assets.py` — guarded metadata/checkpoint acquisition utility.
+- `scripts/validate_model_registry.py` — stdlib-only registry/reference validator.
+- `models/README.md` — local checkpoint storage and reproducibility rules.
 - `src/leviathan/` — minimal research scaffold for the meta-controller, trust weighting and shared types.
+- `vendor/` — pinned upstream Git submodules for the public source projects studied.
+
+## Model assets
+
+Model weights are deliberately **not stored in Git**. Some frontier checkpoints are multi-terabyte assets.
+
+List the registry:
+
+```bash
+python scripts/fetch_model_assets.py --list
+```
+
+Validate the registry and Omega references:
+
+```bash
+python scripts/validate_model_registry.py
+```
+
+Install optional model-download support:
+
+```bash
+python -m pip install -e '.[models]'
+```
+
+Metadata-only fetch is the default:
+
+```bash
+python scripts/fetch_model_assets.py qwen3-30b-a3b-base
+```
+
+Weights require explicit `--weights`; frontier entries additionally require `--allow-disabled`. Pin an immutable upstream revision for reproducible experiments.
 
 ## Evidence labels
 
@@ -95,4 +153,4 @@ Leviathan does **not** claim that simply wiring these projects together creates 
 
 ## Origin
 
-This repository consolidates the complete architecture discussion and source inventory developed through September 2026 into one clean research specification.
+This repository consolidates the architecture discussion and source inventory developed through September 2026 into one research specification and executable scaffold.
