@@ -1,8 +1,10 @@
-version = "0.1"
+version = "0.2"
 name = "Leviathan Omega"
 
 [substrate]
-experimental = "qwen3-30b-a3b-base"
+canonical = "deepseek-v4-pro-base"
+experimental = "deepseek-v4-pro-base"
+development_control = "qwen3-30b-a3b-base"
 scientific_control = "olmo3-32b-base"
 frontier_semantic = "deepseek-v4-pro-base"
 frontier_efficiency = "mimo-v2.5-pro-base"
@@ -16,6 +18,9 @@ rollback_required = true
 provenance_required = true
 simulated_evidence_labeled = true
 teacher_disagreement_is_not_ground_truth = true
+single_cognitive_model = true
+full_deepseek_v4_checkpoint_required = true
+function_preserving_mop_initialization = true
 
 [training.phases]
 phase_0 = "baseline_and_fingerprint"
@@ -38,6 +43,18 @@ future_action_prediction = true
 verifier_outcome_prediction = true
 replay_retention = true
 stability_regularization = true
+
+[modules.mixture_of_parameters]
+class = "function_preserving_moe_to_parameter_tiles"
+source_model = "deepseek-v4-pro-base"
+spec = "spec/deepseek-v4-mop.toml"
+tile_width = 128
+initial_route = "expand_each_selected_expert_into_all_24_constituent_tiles"
+initial_independent_tile_routing = false
+preserve_shared_expert_path = true
+full_checkpoint_only = true
+objective = "increase_verified_capability_per_active_parameter_and_wall_clock_without_pretrained_regression"
+rule = "Do not reduce active tiles until exact-parity reconstruction and protected capability gates pass."
 
 [modules.memory_graft]
 class = "gated_parallel"
@@ -113,21 +130,27 @@ metrics = [
   "retention_score",
   "catastrophic_forgetting_score",
   "active_parameters_per_token",
+  "active_tiles_per_token",
   "hbm_bytes_per_token",
   "kv_or_state_bytes_per_token",
   "reasoning_tokens_per_success",
   "tool_calls_per_success",
   "wall_clock_seconds_per_success",
+  "single_stream_tokens_per_second",
+  "aggregate_tokens_per_second",
+  "router_overhead",
   "verifier_agreement",
   "rollback_success_rate",
   "simulator_reality_gap"
 ]
+protected_benchmarks = ["ARC-Easy", "ARC-Challenge", "MMLU", "MMLU-Pro", "HellaSwag", "WinoGrande", "GSM8K", "HumanEval", "AGIEval", "LongBench-V2", "PIQA", "OpenBookQA", "BoolQ", "BBH", "WikiText-heldout"]
+arc_easy_is_canary = true
 
 [scaling]
-omega_s0 = "3B_to_30B"
-omega_s1 = "100B_to_300B_sparse"
-omega_s2 = "approximately_1T"
-omega_l = "1.6T_plus"
+omega_s0 = "3B_to_30B_control_only"
+omega_s1 = "100B_to_300B_sparse_control"
+omega_s2 = "approximately_1T_control"
+omega_l = "deepseek_v4_pro_base_1.6T_canonical"
 
 [promotion]
 required_suites = ["capability", "retention", "calibration", "safety", "adversarial", "efficiency"]
