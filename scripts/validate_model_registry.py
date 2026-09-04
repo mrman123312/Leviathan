@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 from pathlib import Path
-import sys
 import tomllib
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -13,6 +12,7 @@ OMEGA_PATH = ROOT / "spec" / "omega-transplant.toml"
 DEEPSEEK_MOP_PATH = ROOT / "spec" / "deepseek-v4-mop.toml"
 PARAMETER_CELLS_PATH = ROOT / "spec" / "parameter-cells.toml"
 MATURITY_PATH = ROOT / "spec" / "architecture-maturity.toml"
+COGNITIVE_KERNEL_PATH = ROOT / "spec" / "cognitive-kernel.toml"
 
 REQUIRED_MODEL_FIELDS = {
     "id",
@@ -48,6 +48,23 @@ EXPECTED_LAYERS = {
     "L0", "L1", "L1.5", "L2", "L3", "L4", "L5", "L6", "L7", "L8", "L9", "L10"
 }
 EXPECTED_CELL_STAGES = list(range(10))
+EXPECTED_COGNITIVE_PIPELINE = [
+    "representation_compiler",
+    "cognitive_program_compiler",
+    "dynamic_cognitive_graph",
+    "theory_prediction",
+    "evidence_update",
+    "learning_router",
+    "cognitive_compilation",
+]
+EXPECTED_LEARNING_DESTINATIONS = [
+    "ignore",
+    "episodic_memory",
+    "semantic_memory",
+    "procedural_memory",
+    "plastic_parameters",
+    "core_parameters",
+]
 
 
 def load(path: Path) -> dict:
@@ -62,6 +79,7 @@ def main() -> int:
     deepseek_mop = load(DEEPSEEK_MOP_PATH)
     parameter_cells = load(PARAMETER_CELLS_PATH)
     maturity = load(MATURITY_PATH)
+    cognitive_kernel = load(COGNITIVE_KERNEL_PATH)
 
     models = registry.get("models", [])
     if not models:
@@ -193,6 +211,37 @@ def main() -> int:
         if not acceptance.get(key, False):
             errors.append(f"parameter-cell acceptance gate {key} must remain true")
 
+    # Single-model cognitive-kernel invariants.
+    if cognitive_kernel.get("canonical_model_id") != CANONICAL_MODEL_ID:
+        errors.append(f"cognitive kernel canonical_model_id must be {CANONICAL_MODEL_ID}")
+    if not cognitive_kernel.get("single_cognitive_model", False):
+        errors.append("cognitive kernel must preserve one cognitive model")
+    kernel_invariant = cognitive_kernel.get("invariant", {})
+    if kernel_invariant.get("semantic_model_count") != 1:
+        errors.append("cognitive kernel semantic_model_count must be exactly 1")
+    if kernel_invariant.get("subagent_committee", True):
+        errors.append("cognitive kernel may not use a subagent committee")
+    if kernel_invariant.get("compression_may_raise_trust", True):
+        errors.append("compression/summarization may not raise epistemic trust")
+    if kernel_invariant.get("raw_experience_updates_core", True):
+        errors.append("raw experience may not update core through the cognitive kernel")
+    if cognitive_kernel.get("pipeline", {}).get("stages") != EXPECTED_COGNITIVE_PIPELINE:
+        errors.append("cognitive kernel pipeline no longer matches the Leviathan architecture sequence")
+    learning = cognitive_kernel.get("learning", {})
+    if learning.get("destinations") != EXPECTED_LEARNING_DESTINATIONS:
+        errors.append("cognitive kernel learning destinations changed unexpectedly")
+    for key in (
+        "core_requires_independent_verification",
+        "core_requires_replay",
+        "core_requires_calibration",
+        "core_requires_safety",
+        "core_requires_shadow",
+        "core_requires_rollback",
+        "core_requires_external_promotion_authority",
+    ):
+        if not learning.get(key, False):
+            errors.append(f"cognitive kernel governance gate {key} must remain true")
+
     # Five-gate embodiment ledger. This prevents documentation from being mistaken for AGI.
     maturity_gates = maturity.get("maturity", {}).get("gates", [])
     if maturity_gates != EXPECTED_MATURITY_GATES:
@@ -230,7 +279,7 @@ def main() -> int:
     print(
         "Registry validation passed: "
         f"{len(models)} models, {len(teacher_members)} teachers, canonical={CANONICAL_MODEL_ID}, "
-        "MoP-0..9 parameter ecology and L0-L10 embodiment ledger valid."
+        "MoP-0..9 parameter ecology, single-model cognitive kernel, and L0-L10 ledger valid."
     )
     return 0
 
