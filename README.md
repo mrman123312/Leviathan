@@ -63,7 +63,7 @@ The canonical V4 integration is intentionally the **full checkpoint**, not a red
 - 1,048,576-token configured maximum context,
 - 64 safetensors weight shards.
 
-`src/leviathan/deepseek_v4.py` rejects a config that does not match that fingerprint. A run may claim `full_checkpoint_verified=true` only after the local checkpoint contains the full 64-shard set and `model.safetensors.index.json`.
+`src/leviathan/deepseek_v4.py` rejects a config that does not match the canonical fingerprint. A run may claim `full_checkpoint_verified=true` only after all 64 local shards are present **and** `model.safetensors.index.json` references the complete canonical shard set. `src/leviathan/deepseek_v4_mop.py` adds the stricter R4 architecture/FP8/revision contract.
 
 ### Mixture-of-Parameters migration
 
@@ -79,7 +79,7 @@ At initialization, every selected expert is still reconstructed from **all** of 
 
 Mathematical sparsity alone is not success. A lower-active-tile candidate is accepted only if **measured wall-clock efficiency** improves without capability, retention, calibration or safety loss.
 
-See `spec/deepseek-v4-mop.toml` and `docs/15-deepseek-v4-mop-integration.md`.
+See `spec/deepseek-v4-mop.toml`, `docs/15-deepseek-v4-mop-r4.md` and `docs/16-deepseek-v4-mop-integration.md`.
 
 ### Other model roles
 
@@ -113,14 +113,15 @@ See `docs/12-omega-model-soup.md` and `docs/13-weight-transplantation.md`.
 - `docs/12-omega-model-soup.md` — substrate/donor/teacher roles and the target Leviathan Ω neural stack.
 - `docs/13-weight-transplantation.md` — compatibility classes and function-preserving architecture migration.
 - `docs/14-omega-source-addendum.md` — model-source provenance and role notes.
-- `docs/15-deepseek-v4-mop-integration.md` — canonical full-V4 MoP migration and benchmark gates.
+- `docs/15-deepseek-v4-mop-r4.md` — R4 execution protocol, MoP-0 parity, benchmark/efficiency gates and success definition.
+- `docs/16-deepseek-v4-mop-integration.md` — canonical full-V4 integration boundary and handoff to later Leviathan layers.
 - `spec/architecture.yaml` — machine-readable cognitive module graph and trust rules.
 - `spec/interfaces.md` — proposed data contracts between modules.
 - `spec/model-registry.toml` — model/checkpoint metadata and download policy.
 - `spec/omega-transplant.toml` — machine-readable Omega transplantation plan.
 - `spec/deepseek-v4-mop.toml` — canonical full-V4 fingerprint, MoP phases and acceptance gates.
 - `scripts/fetch_model_assets.py` — guarded metadata/checkpoint acquisition utility.
-- `scripts/prepare_deepseek_v4_mop.py` — validate a local V4 checkpoint and emit the MoP manifest.
+- `scripts/prepare_deepseek_v4_mop.py` — validate a pinned local V4 checkpoint and emit the combined checkpoint/R4 MoP manifest.
 - `scripts/validate_model_registry.py` — stdlib-only registry/Omega/V4 validator.
 - `models/README.md` — local checkpoint storage and reproducibility rules.
 - `src/leviathan/` — research scaffold for the controller, trust system, transplant state machine and V4 MoP plan.
@@ -154,16 +155,20 @@ Fetch V4 metadata only:
 python scripts/fetch_model_assets.py deepseek-v4-pro-base --allow-disabled
 ```
 
-Validate a downloaded V4 config without claiming the weights are present:
+Validate a pinned downloaded V4 config without claiming the weights are present:
 
 ```bash
-python scripts/prepare_deepseek_v4_mop.py --config-only
+python scripts/prepare_deepseek_v4_mop.py \
+  --config-only \
+  --revision <immutable-hugging-face-commit>
 ```
 
 Validate the complete checkpoint and emit a manifest:
 
 ```bash
-python scripts/prepare_deepseek_v4_mop.py --output runs/deepseek-v4-mop-manifest.json
+python scripts/prepare_deepseek_v4_mop.py \
+  --revision <immutable-hugging-face-commit> \
+  --output runs/deepseek-v4-mop-manifest.json
 ```
 
 Fetching all weights requires explicit opt-in and should use an immutable upstream revision:
