@@ -40,6 +40,15 @@ from .deepseek_v4 import (
     build_manifest,
     verify_full_checkpoint_files,
 )
+from .memory_ecology import (
+    BeliefRevision,
+    BeliefStateStore,
+    MemoryEcology,
+    MemoryKind,
+    MemoryRecord,
+    MemoryStatus,
+    MemoryWrite,
+)
 from .parameter_cells import (
     CellAction,
     CellBudget,
@@ -69,6 +78,8 @@ __all__ = [
     "ArchitectureMaturityPlan",
     "BaselineMetaController",
     "Belief",
+    "BeliefRevision",
+    "BeliefStateStore",
     "CANONICAL_MODEL_ID",
     "CANONICAL_REPO_ID",
     "CellAction",
@@ -97,6 +108,11 @@ __all__ = [
     "LearningRoute",
     "LearningRouter",
     "LeviathanCognitiveKernel",
+    "MemoryEcology",
+    "MemoryKind",
+    "MemoryRecord",
+    "MemoryStatus",
+    "MemoryWrite",
     "MetaState",
     "MixtureOfParametersPlan",
     "ModeEstimate",
