@@ -1,0 +1,135 @@
+version = "0.1"
+name = "Leviathan Omega"
+
+[substrate]
+experimental = "qwen3-30b-a3b-base"
+scientific_control = "olmo3-32b-base"
+frontier_semantic = "deepseek-v4-pro-base"
+frontier_efficiency = "mimo-v2.5-pro-base"
+multimodal_base = "mistral-large-3-base"
+
+[invariants]
+raw_experience_updates_core = false
+inert_initial_grafts = true
+independent_verification_required = true
+rollback_required = true
+provenance_required = true
+simulated_evidence_labeled = true
+teacher_disagreement_is_not_ground_truth = true
+
+[training.phases]
+phase_0 = "baseline_and_fingerprint"
+phase_1 = "insert_inert_modules"
+phase_2 = "train_new_parameters_only"
+phase_3 = "gate_warmup"
+phase_4 = "selective_unfreeze"
+phase_5 = "continued_pretraining_and_agentic_posttraining"
+phase_6 = "retention_calibration_safety_evaluation"
+phase_7 = "shadow_evaluation"
+phase_8 = "candidate_promotion"
+
+[training.losses]
+next_token = true
+teacher_logit_kl = true
+hidden_state_matching = "where_semantically_compatible"
+future_token_mtp = true
+future_state_prediction = true
+future_action_prediction = true
+verifier_outcome_prediction = true
+replay_retention = true
+stability_regularization = true
+
+[modules.memory_graft]
+class = "gated_parallel"
+initial_gate = 0.0
+inputs = ["hidden_state", "belief_state", "memory_query"]
+outputs = ["memory_context"]
+promotion_requires = ["retention_pass", "calibration_pass"]
+
+[modules.recurrent_state_graft]
+class = "gated_parallel"
+initial_gate = 0.0
+donors = ["Kimi-KDA", "Mamba", "GLM-linear-attention"]
+objective = "reduce_long_context_memory_traffic_without_losing_global_reasoning"
+
+[modules.local_global_attention]
+class = "migration"
+donors = ["MiMo-V2.5-Pro-Base", "Step-3.5-Flash"]
+strategy = "retain_old_attention_while_training_local_periodic_global_replacement"
+initial_replacement_weight = 0.0
+
+[modules.depth_residual]
+class = "gated_parallel"
+donors = ["Kimi-AttnRes", "GLM-mHC"]
+initial_gate = 0.0
+objective = "preserve_and_selectively_retrieve_information_across_depth"
+
+[modules.mtp]
+class = "multi_head"
+donors = ["Step-3.5-Flash", "MiMo-V2.5-Pro", "Qwen-family-MTP", "DeepSeek-MTP"]
+channels = ["future_tokens", "future_actions", "future_latent_states", "future_verifier_outcomes"]
+execution_authority = false
+
+[modules.meta_router]
+class = "learned_controller"
+inputs = ["difficulty", "epistemic_uncertainty", "stakes", "latency_budget", "hardware_load", "available_verifiers"]
+actions = ["direct", "retrieve", "skill", "reason", "tree_search", "population_search", "simulate", "experiment", "tool", "parallelize", "ask", "act"]
+objective_positive = ["expected_success_gain", "information_gain", "transfer_value"]
+objective_negative = ["compute_cost", "latency", "risk", "irreversibility", "hardware_congestion"]
+
+[modules.heterogeneous_experts]
+initially_enabled = false
+candidate_types = ["semantic_ffn", "code", "math", "memory_retrieval", "recurrent_world_state", "causal", "planning", "simulation", "verifier_interface"]
+rule = "new expert types begin with zero route probability and must outperform matched baseline routing"
+
+[modules.vision_bridge]
+class = "projection_bridge"
+donors = ["Mistral-Large-3-Base", "V-JEPA-2", "GUI-Actor"]
+freeze_donors_initially = true
+shared_space = "belief_state"
+required_metadata = ["provenance", "timestamp", "confidence", "observed_vs_predicted"]
+
+[modules.audio_bridge]
+class = "projection_bridge"
+donors = ["Qwen3-Omni"]
+freeze_donors_initially = true
+shared_space = "belief_state"
+
+[modules.world_model]
+class = "external_then_integrated"
+donors = ["Cosmos", "V-JEPA-2", "JEPA-WM"]
+operations = ["forward_prediction", "counterfactual", "information_gain", "retrospective_counterfactual"]
+rule = "simulated outcomes never receive grounded-reality trust without external validation"
+
+[teacher_ensemble]
+members = ["kimi-k3", "glm-5.3", "qwen3.8-2.4t-a95b", "deepseek-v4-pro-0813", "glm-5.3-flash"]
+consensus_policy = "verifier_weighted_not_majority_vote"
+disagreement_policy = "route_to_verification_or_curriculum"
+
+[evaluation]
+metrics = [
+  "task_success_rate",
+  "calibration_error",
+  "retention_score",
+  "catastrophic_forgetting_score",
+  "active_parameters_per_token",
+  "hbm_bytes_per_token",
+  "kv_or_state_bytes_per_token",
+  "reasoning_tokens_per_success",
+  "tool_calls_per_success",
+  "wall_clock_seconds_per_success",
+  "verifier_agreement",
+  "rollback_success_rate",
+  "simulator_reality_gap"
+]
+
+[scaling]
+omega_s0 = "3B_to_30B"
+omega_s1 = "100B_to_300B_sparse"
+omega_s2 = "approximately_1T"
+omega_l = "1.6T_plus"
+
+[promotion]
+required_suites = ["capability", "retention", "calibration", "safety", "adversarial", "efficiency"]
+shadow_required = true
+rollback_artifact_required = true
