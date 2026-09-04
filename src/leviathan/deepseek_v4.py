@@ -15,7 +15,7 @@ from dataclasses import asdict, dataclass
 import json
 from pathlib import Path
 import re
-from typing import Any, Iterable, Mapping
+from typing import Any, Iterable, Iterator, Mapping
 
 CANONICAL_MODEL_ID = "deepseek-v4-pro-base"
 CANONICAL_REPO_ID = "deepseek-ai/DeepSeek-V4-Pro-Base"
@@ -100,6 +100,51 @@ class DeepSeekV4Fingerprint:
 
 
 @dataclass(frozen=True, slots=True)
+class ParameterTileSpec:
+    """Tensor coordinates for one routed-expert SwiGLU parameter tile.
+
+    For an expert with intermediate channels [start:end):
+
+    - w1 / gate projection: keep output rows [start:end)
+    - w3 / up projection: keep output rows [start:end)
+    - w2 / down projection: keep input columns [start:end)
+
+    Summing the w2 contributions from every tile of an expert reconstructs the
+    original expert output, assuming the same arithmetic/precision as the donor.
+    """
+
+    expert_id: int
+    tile_index: int
+    global_tile_id: int
+    intermediate_start: int
+    intermediate_end: int
+
+    @property
+    def w1_row_bounds(self) -> tuple[int, int]:
+        return self.intermediate_start, self.intermediate_end
+
+    @property
+    def w3_row_bounds(self) -> tuple[int, int]:
+        return self.intermediate_start, self.intermediate_end
+
+    @property
+    def w2_column_bounds(self) -> tuple[int, int]:
+        return self.intermediate_start, self.intermediate_end
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "expert_id": self.expert_id,
+            "tile_index": self.tile_index,
+            "global_tile_id": self.global_tile_id,
+            "intermediate_start": self.intermediate_start,
+            "intermediate_end": self.intermediate_end,
+            "w1_row_bounds": list(self.w1_row_bounds),
+            "w3_row_bounds": list(self.w3_row_bounds),
+            "w2_column_bounds": list(self.w2_column_bounds),
+        }
+
+
+@dataclass(frozen=True, slots=True)
 class MixtureOfParametersPlan:
     """Function-preserving expert-channel decomposition.
 
@@ -147,6 +192,37 @@ class MixtureOfParametersPlan:
             layers=fingerprint.num_hidden_layers,
         )
 
+    def _validate_expert_id(self, expert_id: int) -> None:
+        if not 0 <= expert_id < self.routed_experts:
+            raise ValueError(f"expert id out of range: {expert_id}")
+
+    def tile_spec(self, expert_id: int, tile_index: int) -> ParameterTileSpec:
+        """Return exact tensor bounds for one expert tile."""
+        self._validate_expert_id(expert_id)
+        if not 0 <= tile_index < self.tiles_per_expert:
+            raise ValueError(f"tile index out of range: {tile_index}")
+
+        start = tile_index * self.tile_width
+        end = start + self.tile_width
+        return ParameterTileSpec(
+            expert_id=expert_id,
+            tile_index=tile_index,
+            global_tile_id=expert_id * self.tiles_per_expert + tile_index,
+            intermediate_start=start,
+            intermediate_end=end,
+        )
+
+    def iter_expert_tiles(self, expert_id: int) -> Iterator[ParameterTileSpec]:
+        """Yield every parameter tile needed to reconstruct one routed expert."""
+        self._validate_expert_id(expert_id)
+        for tile_index in range(self.tiles_per_expert):
+            yield self.tile_spec(expert_id, tile_index)
+
+    def iter_all_routed_tiles(self) -> Iterator[ParameterTileSpec]:
+        """Yield the complete per-layer routed tile bank without materializing it."""
+        for expert_id in range(self.routed_experts):
+            yield from self.iter_expert_tiles(expert_id)
+
     def exact_tile_route(self, expert_ids: Iterable[int]) -> tuple[int, ...]:
         """Expand an expert route into all corresponding tile IDs.
 
@@ -161,13 +237,11 @@ class MixtureOfParametersPlan:
         if len(set(ids)) != len(ids):
             raise ValueError("expert route contains duplicate expert IDs")
         for expert_id in ids:
-            if not 0 <= expert_id < self.routed_experts:
-                raise ValueError(f"expert id out of range: {expert_id}")
+            self._validate_expert_id(expert_id)
 
         tile_ids: list[int] = []
         for expert_id in ids:
-            start = expert_id * self.tiles_per_expert
-            tile_ids.extend(range(start, start + self.tiles_per_expert))
+            tile_ids.extend(tile.global_tile_id for tile in self.iter_expert_tiles(expert_id))
         return tuple(tile_ids)
 
     def as_dict(self) -> dict[str, int]:
@@ -183,12 +257,24 @@ class DeepSeekV4Manifest:
     mop: MixtureOfParametersPlan
 
     def as_dict(self) -> dict[str, Any]:
+        first_tile = self.mop.tile_spec(0, 0)
+        last_tile = self.mop.tile_spec(
+            self.mop.routed_experts - 1,
+            self.mop.tiles_per_expert - 1,
+        )
         return {
             "model_id": self.model_id,
             "repo_id": self.repo_id,
             "full_checkpoint_verified": self.full_checkpoint_verified,
             "fingerprint": asdict(self.fingerprint),
             "mixture_of_parameters": self.mop.as_dict(),
+            "tensor_tile_contract": {
+                "w1_gate_projection": "output_rows[start:end]",
+                "w3_up_projection": "output_rows[start:end]",
+                "w2_down_projection": "input_columns[start:end]",
+                "first_tile": first_tile.as_dict(),
+                "last_tile": last_tile.as_dict(),
+            },
             "invariants": {
                 "single_cognitive_model": True,
                 "function_preserving_initialization": True,
@@ -198,11 +284,20 @@ class DeepSeekV4Manifest:
         }
 
 
+def _expected_shard_names() -> set[str]:
+    return {
+        f"model-{index:05d}-of-{EXPECTED_WEIGHT_SHARDS:05d}.safetensors"
+        for index in range(1, EXPECTED_WEIGHT_SHARDS + 1)
+    }
+
+
 def verify_full_checkpoint_files(model_dir: Path) -> None:
-    """Require every canonical V4-Pro-Base shard plus the safetensors index."""
-    if not (model_dir / "model.safetensors.index.json").is_file():
+    """Require all canonical V4 shards and an index that references the same set."""
+    index_path = model_dir / "model.safetensors.index.json"
+    if not index_path.is_file():
         raise FileNotFoundError("missing model.safetensors.index.json")
 
+    expected = _expected_shard_names()
     seen: set[str] = set()
     for path in model_dir.iterdir():
         match = _SHARD_RE.match(path.name)
@@ -216,10 +311,6 @@ def verify_full_checkpoint_files(model_dir: Path) -> None:
             )
         seen.add(path.name)
 
-    expected = {
-        f"model-{index:05d}-of-{EXPECTED_WEIGHT_SHARDS:05d}.safetensors"
-        for index in range(1, EXPECTED_WEIGHT_SHARDS + 1)
-    }
     missing = sorted(expected - seen)
     extra = sorted(seen - expected)
     if missing or extra:
@@ -227,6 +318,24 @@ def verify_full_checkpoint_files(model_dir: Path) -> None:
             "full DeepSeek V4 checkpoint not present: "
             f"missing={missing[:5]}{'...' if len(missing) > 5 else ''} "
             f"extra={extra[:5]}{'...' if len(extra) > 5 else ''}"
+        )
+
+    with index_path.open("r", encoding="utf-8") as f:
+        index = json.load(f)
+    weight_map = index.get("weight_map")
+    if not isinstance(weight_map, dict) or not weight_map:
+        raise ValueError("model.safetensors.index.json has no non-empty weight_map")
+
+    referenced = {Path(str(value)).name for value in weight_map.values()}
+    missing_from_index = sorted(expected - referenced)
+    unexpected_in_index = sorted(referenced - expected)
+    if missing_from_index or unexpected_in_index:
+        raise ValueError(
+            "safetensors index does not reference the canonical 64-shard set: "
+            f"missing={missing_from_index[:5]}"
+            f"{'...' if len(missing_from_index) > 5 else ''} "
+            f"unexpected={unexpected_in_index[:5]}"
+            f"{'...' if len(unexpected_in_index) > 5 else ''}"
         )
 
 
