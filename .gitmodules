@@ -169,3 +169,153 @@
 [submodule "vendor/evaluation/lm-evaluation-harness"]
 	path = vendor/evaluation/lm-evaluation-harness
 	url = https://github.com/EleutherAI/lm-evaluation-harness.git
+[submodule "vendor/memory/engram"]
+	path = vendor/memory/engram
+	url = https://github.com/deepseek-ai/Engram.git
+[submodule "vendor/precision/bitnet"]
+	path = vendor/precision/bitnet
+	url = https://github.com/microsoft/BitNet.git
+[submodule "vendor/infrastructure/deepep"]
+	path = vendor/infrastructure/deepep
+	url = https://github.com/deepseek-ai/DeepEP.git
+[submodule "vendor/kernels/deepgemm"]
+	path = vendor/kernels/deepgemm
+	url = https://github.com/deepseek-ai/DeepGEMM.git
+[submodule "vendor/kernels/flashmla"]
+	path = vendor/kernels/flashmla
+	url = https://github.com/deepseek-ai/FlashMLA.git
+[submodule "vendor/inference/eagle"]
+	path = vendor/inference/eagle
+	url = https://github.com/SafeAILab/EAGLE.git
+[submodule "vendor/vision/vggt"]
+	path = vendor/vision/vggt
+	url = https://github.com/facebookresearch/vggt.git
+[submodule "vendor/architecture/rwkv-lm"]
+	path = vendor/architecture/rwkv-lm
+	url = https://github.com/BlinkDL/RWKV-LM.git
+[submodule "vendor/architecture/torchscale"]
+	path = vendor/architecture/torchscale
+	url = https://github.com/microsoft/torchscale.git
+[submodule "vendor/architecture/stripedhyena"]
+	path = vendor/architecture/stripedhyena
+	url = https://github.com/togethercomputer/stripedhyena.git
+[submodule "vendor/training/dualpipe"]
+	path = vendor/training/dualpipe
+	url = https://github.com/deepseek-ai/DualPipe.git
+[submodule "vendor/precision/transformer-engine"]
+	path = vendor/precision/transformer-engine
+	url = https://github.com/NVIDIA/TransformerEngine.git
+[submodule "vendor/environments/browsergym"]
+	path = vendor/environments/browsergym
+	url = https://github.com/ServiceNow/BrowserGym.git
+[submodule "vendor/environments/osworld-v2"]
+	path = vendor/environments/osworld-v2
+	url = https://github.com/xlang-ai/OSWorld-V2.git
+[submodule "vendor/data/datatrove"]
+	path = vendor/data/datatrove
+	url = https://github.com/huggingface/datatrove.git
+[submodule "vendor/verification/leandojo-v2"]
+	path = vendor/verification/leandojo-v2
+	url = https://github.com/lean-dojo/LeanDojo-v2.git
+[submodule "vendor/agents/ai-scientist-v2"]
+	path = vendor/agents/ai-scientist-v2
+	url = https://github.com/SakanaAI/AI-Scientist-v2.git
+[submodule "vendor/data/nemo-curator"]
+	path = vendor/data/nemo-curator
+	url = https://github.com/NVIDIA-NeMo/Curator.git
+[submodule "vendor/precision/llm-awq"]
+	path = vendor/precision/llm-awq
+	url = https://github.com/mit-han-lab/llm-awq.git
+[submodule "vendor/precision/smoothquant"]
+	path = vendor/precision/smoothquant
+	url = https://github.com/mit-han-lab/smoothquant.git
+[submodule "vendor/inference/recurrent-drafter"]
+	path = vendor/inference/recurrent-drafter
+	url = https://github.com/apple/ml-recurrent-drafter.git
+[submodule "vendor/environments/webarena-verified"]
+	path = vendor/environments/webarena-verified
+	url = https://github.com/ServiceNow/webarena-verified.git
+[submodule "vendor/kernels/tilekernels"]
+	path = vendor/kernels/tilekernels
+	url = https://github.com/deepseek-ai/TileKernels.git
+[submodule "vendor/storage/3fs"]
+	path = vendor/storage/3fs
+	url = https://github.com/deepseek-ai/3FS.git
+[submodule "vendor/infrastructure/eplb"]
+	path = vendor/infrastructure/eplb
+	url = https://github.com/deepseek-ai/EPLB.git
+[submodule "vendor/reasoning/coconut"]
+	path = vendor/reasoning/coconut
+	url = https://github.com/facebookresearch/coconut.git
+[submodule "vendor/architecture/continuous-thought-machines"]
+	path = vendor/architecture/continuous-thought-machines
+	url = https://github.com/SakanaAI/continuous-thought-machines.git
+[submodule "vendor/inference/minference"]
+	path = vendor/inference/minference
+	url = https://github.com/microsoft/MInference.git
+[submodule "vendor/infrastructure/mooncake"]
+	path = vendor/infrastructure/mooncake
+	url = https://github.com/kvcache-ai/Mooncake.git
+[submodule "vendor/infrastructure/lmcache"]
+	path = vendor/infrastructure/lmcache
+	url = https://github.com/LMCache/LMCache.git
+[submodule "vendor/inference/ktransformers"]
+	path = vendor/inference/ktransformers
+	url = https://github.com/kvcache-ai/ktransformers.git
+[submodule "vendor/inference/torchspec"]
+	path = vendor/inference/torchspec
+	url = https://github.com/lightseekorg/TorchSpec.git
+[submodule "vendor/inference/tokenspeed"]
+	path = vendor/inference/tokenspeed
+	url = https://github.com/lightseekorg/tokenspeed.git
+[submodule "vendor/infrastructure/lplb"]
+	path = vendor/infrastructure/lplb
+	url = https://github.com/deepseek-ai/LPLB.git
+[submodule "vendor/training/deepspeed"]
+	path = vendor/training/deepspeed
+	url = https://github.com/deepspeedai/DeepSpeed.git
+[submodule "vendor/training/colossalai"]
+	path = vendor/training/colossalai
+	url = https://github.com/hpcaitech/ColossalAI.git
+[submodule "vendor/learning/openrlhf"]
+	path = vendor/learning/openrlhf
+	url = https://github.com/OpenRLHF/OpenRLHF.git
+[submodule "vendor/learning/trl"]
+	path = vendor/learning/trl
+	url = https://github.com/huggingface/trl.git
+[submodule "vendor/environments/swe-smith"]
+	path = vendor/environments/swe-smith
+	url = https://github.com/SWE-bench/SWE-smith.git
+[submodule "vendor/agents/openhands"]
+	path = vendor/agents/openhands
+	url = https://github.com/OpenHands/OpenHands.git
+[submodule "vendor/evaluation/swe-bench"]
+	path = vendor/evaluation/swe-bench
+	url = https://github.com/SWE-bench/SWE-bench.git
+[submodule "vendor/robotics/maniskill"]
+	path = vendor/robotics/maniskill
+	url = https://github.com/mani-skill/ManiSkill.git
+[submodule "vendor/robotics/isaaclab"]
+	path = vendor/robotics/isaaclab
+	url = https://github.com/isaac-sim/IsaacLab.git
+[submodule "vendor/robotics/mujoco"]
+	path = vendor/robotics/mujoco
+	url = https://github.com/google-deepmind/mujoco.git
+[submodule "vendor/kernels/xformers"]
+	path = vendor/kernels/xformers
+	url = https://github.com/facebookresearch/xformers.git
+[submodule "vendor/kernels/cutlass"]
+	path = vendor/kernels/cutlass
+	url = https://github.com/NVIDIA/cutlass.git
+[submodule "vendor/kernels/triton"]
+	path = vendor/kernels/triton
+	url = https://github.com/triton-lang/triton.git
+[submodule "vendor/infrastructure/llm-d"]
+	path = vendor/infrastructure/llm-d
+	url = https://github.com/llm-d/llm-d.git
+[submodule "vendor/infrastructure/nvidia-dynamo"]
+	path = vendor/infrastructure/nvidia-dynamo
+	url = https://github.com/ai-dynamo/dynamo.git
+[submodule "vendor/infrastructure/nixl"]
+	path = vendor/infrastructure/nixl
+	url = https://github.com/ai-dynamo/nixl.git
