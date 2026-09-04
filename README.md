@@ -81,15 +81,48 @@ See `docs/12-omega-model-soup.md` and `docs/13-weight-transplantation.md`.
 - `docs/11-failure-modes.md` — drift, forgetting, simulator bias, verifier corruption, goal drift and other failure classes.
 - `docs/12-omega-model-soup.md` — substrate/donor/teacher roles and the target Leviathan Ω neural stack.
 - `docs/13-weight-transplantation.md` — compatibility classes and function-preserving architecture migration.
+- `docs/17-one-agent-recursive-plan.md` — the unified-agent definition, recursive build ladder, Parameter Ecology experiments and kill criteria.
 - `spec/architecture.yaml` — machine-readable cognitive module graph and trust rules.
 - `spec/interfaces.md` — proposed data contracts between modules.
+- `spec/one-agent.yaml` — machine-readable authority boundaries, cycle order, recursion limits and research rungs.
 - `spec/model-registry.toml` — model/checkpoint metadata and download policy.
 - `spec/omega-transplant.toml` — machine-readable Omega transplantation plan.
 - `scripts/fetch_model_assets.py` — guarded metadata/checkpoint acquisition utility.
 - `scripts/validate_model_registry.py` — stdlib-only registry/reference validator.
+- `examples/unified_agent_demo.py` — one deterministic observe-discuss-contract-act-verify cycle.
 - `models/README.md` — local checkpoint storage and reproducibility rules.
-- `src/leviathan/` — minimal research scaffold for the meta-controller, trust weighting and shared types.
+- `src/leviathan/` — executable research scaffold for the unified agent, bounded Cognitive Parameter Cell ecology, meta-controller, trust weighting and shared types.
 - `vendor/` — pinned upstream Git submodules for the public source projects studied.
+
+## One-agent reference kernel
+
+Leviathan now has one top-level runtime identity rather than a collection of separately
+goaled agents. `LeviathanAgent` owns the immutable goal, policy digest, event journal,
+action contracts and verified learning boundary. Internal Cognitive Parameter Cells can
+propose, disagree, revise and recruit peers, but cannot execute actions or certify their
+own outputs.
+
+The reference Parameter Ecology implements:
+
+`recruit -> propose -> aggregate -> measure disagreement -> expand/revise -> converge or stop`
+
+It has hard limits on active cells, rounds, requests and total cell calls. A discussion
+that does not converge never falls through to an external action. Repeated coalitions
+are compiled only after independent verification; this changes procedural routing, not
+core parameters.
+
+Run the stdlib-only test suite:
+
+```bash
+python -m pip install -e .
+python -m unittest discover -s tests -v
+python examples/unified_agent_demo.py
+```
+
+The Python cells are an orchestration and falsification baseline. Neural
+Mixture-of-Parameters training begins with the parity experiments in
+`docs/17-one-agent-recursive-plan.md`; the repository does not claim those experiments
+have already succeeded.
 
 ## Model assets
 

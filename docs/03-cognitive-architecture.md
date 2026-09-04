@@ -45,6 +45,32 @@ Responsibilities:
 
 ---
 
+## 1.5. One identity, many internal organs
+
+All three loops belong to one persistent `LeviathanAgent`. Models, tools, search
+branches, hypotheses and Cognitive Parameter Cells are internal resources, not
+separately goaled agents. The unified agent alone owns:
+
+- the immutable original-goal reference,
+- serialized task/belief state,
+- the append-only trajectory,
+- action contracts and the external execution gateway,
+- the boundary to independent verification,
+- verified promotion into durable memory.
+
+Between the numerical function substrate and the larger transformation primitives,
+Leviathan adds an L1.5 **Parameter Ecology**. A sparse set of stateful parameter cells
+forms proposals, exchanges bounded aggregate messages, recruits peers when disagreement
+is high, and either converges or stops at a hard budget. Cells cannot act, verify, write
+durable memory or alter governance. Repeated externally verified coalitions may be
+compiled into cheaper procedural routing.
+
+The current Python implementation is a behavioral reference for these contracts. The
+neural hypothesis still requires function-preserving basis decomposition, routing,
+communication and ablation experiments. See `docs/17-one-agent-recursive-plan.md`.
+
+---
+
 ## 2. High-level module graph
 
 ```text

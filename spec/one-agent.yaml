@@ -1,0 +1,236 @@
+version: "0.1"
+project: Leviathan
+runtime: unified_agent
+
+definition:
+  identity: one_stable_agent_id
+  goal_state: one_externally_anchored_goal_frame
+  cognitive_state: one_serialized_state_and_event_history
+  action_authority: one_guarded_gateway
+  internal_specialists: organs_not_independent_agents
+
+invariants:
+  - id: immutable_goal
+    rule: "Cells and learners MUST NOT rewrite the original goal or its constraints."
+  - id: single_effect_authority
+    rule: "Only the unified agent may issue a goal-bound action contract."
+  - id: cells_only_propose
+    rule: "A parameter cell MAY propose or request cognition but MUST NOT execute, verify, promote, or govern."
+  - id: bounded_recursion
+    rule: "Every cell discussion and outer agent cycle MUST have explicit hard limits."
+  - id: nonconvergence_stops_action
+    rule: "A plurality after budget exhaustion MUST NOT be treated as consensus."
+  - id: prediction_before_action
+    rule: "Every external action MUST record an expected observation before execution."
+  - id: verifier_independence
+    rule: "Same-generator self-evaluation alone MUST NOT authorize durable learning."
+  - id: negative_evidence_veto
+    rule: "One eligible independent negative verification MUST block successful promotion."
+  - id: learning_is_reversible
+    rule: "Runtime experience MAY affect episodes and verified routing priors, not core parameters."
+  - id: learner_not_governor
+    rule: "The learner MUST NOT control constitution, verifier thresholds, deployment, signing, or rollback."
+
+authority:
+  parameter_cell:
+    may:
+      - score_relevance
+      - propose_candidate
+      - emit_confidence
+      - cite_evidence
+      - request_cells
+      - revise_after_aggregate
+    may_not:
+      - execute_action
+      - access_executor
+      - certify_output
+      - write_durable_memory
+      - mutate_goal
+      - mutate_policy
+  parameter_ecology:
+    may:
+      - recruit_cells
+      - aggregate_candidates
+      - measure_disagreement
+      - spend_bounded_rounds
+      - cache_verified_coalitions
+    may_not:
+      - execute_action
+      - decide_verifier_eligibility
+      - update_core_parameters
+  unified_agent:
+    owns:
+      - identity
+      - goal_integrity
+      - cycle_budget
+      - append_only_journal
+      - episodes
+      - action_contracts
+      - risk_and_authority_gate
+      - external_ports
+      - verified_coalition_promotion
+    does_not_own:
+      - independent_measurement_truth
+      - constitution_changes
+      - model_deployment_promotion
+  external_executor:
+    receives:
+      - frozen_action_contract
+    cannot_receive:
+      - mutable_agent_state
+  independent_verifier:
+    receives:
+      - frozen_action_contract
+      - action_outcome
+    output:
+      - provenance_tagged_verification
+
+inner_recursion:
+  seed:
+    source:
+      - compiled_verified_coalition
+      - activation_score
+    default_count: 3
+  proposal_fields:
+    - candidate
+    - confidence
+    - requested_cell_ids
+    - evidence_refs
+  aggregate:
+    vote_weight: activation_times_reliability_times_confidence
+    disagreement: normalized_candidate_vote_entropy
+    confidence: winning_share_times_supporter_confidence
+  escalation:
+    condition:
+      - low_consensus
+      - high_disagreement
+    operations:
+      - honor_bounded_cell_requests
+      - recruit_next_highest_activation_cells
+      - run_next_revision_round
+  hard_limits:
+    - initial_cells
+    - maximum_active_cells
+    - maximum_rounds
+    - maximum_cell_calls
+    - maximum_requests_per_proposal
+  outcomes:
+    - converged
+    - budget_exhausted
+    - no_proposal
+
+outer_cycle:
+  order:
+    - assert_goal_and_policy_integrity
+    - receive_provenance_tagged_observation
+    - restore_immutable_goal_into_meta_state
+    - determine_admissible_cognitive_modes
+    - run_inner_recursion
+    - stop_if_not_converged
+    - return_internal_decision_or_build_action_contract
+    - enforce_risk_authority_reversibility_and_preconditions
+    - record_prediction
+    - execute_through_external_port
+    - collect_independent_verification
+    - close_episode
+    - update_verified_coalition_evidence
+    - stop_or_begin_new_observation_cycle
+
+action_contract:
+  required_fields:
+    - contract_id
+    - agent_id
+    - goal_id
+    - policy_digest
+    - candidate_id
+    - cognitive_mode
+    - payload
+    - expected_observation
+    - preconditions
+    - risk
+    - reversibility
+    - authorization_class
+    - verifier
+  pre_execution_gates:
+    - risk_within_agent_goal_and_cycle_budgets
+    - authorization_class_allowed
+    - irreversible_action_explicitly_authorized
+    - prediction_present
+    - preconditions_satisfied
+    - executor_connected
+    - required_verifier_connected
+
+learning:
+  implemented_now:
+    episodic:
+      - append_only_events
+      - closed_cycle_episode
+    procedural_routing:
+      - repeated_externally_verified_coalition
+      - beta_prior_against_one_shot_promotion
+      - negative_outcome_tracking
+  deliberately_not_implemented:
+    - autonomous_semantic_promotion
+    - online_adapter_training
+    - cell_birth_or_parameter_generation
+    - core_parameter_update
+    - self_authorized_deployment
+
+recursive_research_rungs:
+  - id: R0
+    name: constitutional_single_agent_kernel
+    state: implemented_reference_slice
+  - id: R1
+    name: epistemic_state_kernel
+    state: planned
+    depends_on: [R0]
+  - id: R2
+    name: novel_environment_learner
+    state: planned
+    depends_on: [R1]
+  - id: R3
+    name: memory_ecology_and_cognitive_compilation
+    state: planned
+    depends_on: [R1, R2]
+  - id: R4
+    name: world_model_and_causal_accountability
+    state: research
+    depends_on: [R1, R2]
+  - id: R5
+    name: neural_mixture_of_parameters_parity
+    state: experiment
+    depends_on: [R0]
+  - id: R6
+    name: local_plasticity_and_neurogenesis
+    state: research
+    depends_on: [R3, R5]
+  - id: R7
+    name: representation_and_cognitive_compilers
+    state: research
+    depends_on: [R1, R3, R4]
+  - id: R8
+    name: persistent_heterogeneous_runtime
+    state: engineering_research
+    depends_on: [R0, R1, R3]
+  - id: R9
+    name: canonical_leviathan_latent
+    state: research_lab_wall
+    depends_on: [R1, R4, R5, R6, R7]
+
+promotion_objective:
+  maximize:
+    - verified_task_success
+    - sample_efficiency
+    - held_out_transfer
+    - calibration
+    - capability_retention
+  minimize:
+    - active_compute
+    - memory_traffic
+    - wall_clock_latency
+    - risk
+    - learning_interference
+  hard_constraints:
+    - governance_invariants_cannot_be_traded_for_score
+    - simulated_evidence_cannot_silently_become_grounded
+    - unverified_success_cannot_create_durable_learning

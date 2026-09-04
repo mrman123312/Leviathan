@@ -2,6 +2,57 @@
 
 This file defines conceptual contracts between Leviathan modules. The goal is to avoid hiding system state inside opaque prompts.
 
+## Unified agent envelope
+
+```python
+GoalFrame(
+    id: str,                         # digest of the immutable fields
+    original: str,
+    success_criteria: tuple[str, ...],
+    constraints: tuple[str, ...],
+    risk_budget: float,
+)
+
+AgentSnapshot(
+    agent_id: str,
+    goal: GoalFrame,
+    policy_digest: str,
+    cycle: int,
+    status: str,
+    observation_ids: tuple[str, ...],
+    event_count: int,
+    episode_count: int,
+)
+```
+
+Only the unified agent owns mutable task state. Internal cells receive an immutable
+metacognitive snapshot with the original goal restored by the agent.
+
+## Cognitive Parameter Cell
+
+```python
+CognitiveParameterCell(
+    cell_id: str,
+    reliability: float,
+    activation(context) -> float,
+    propose(context) -> CellProposal | None,
+    revise(context, aggregate_consensus) -> CellProposal | None,
+)
+
+CellProposal(
+    cell_id: str,
+    candidate: CognitiveCandidate,
+    confidence: float,
+    request_cell_ids: tuple[str, ...],
+    evidence_refs: tuple[str, ...],
+)
+```
+
+A cell can propose and recruit. It cannot execute, receive mutable agent state, certify
+its proposal, promote itself, or modify the goal/policy. Discussion ends in
+`converged`, `budget_exhausted`, or `no_proposal`; only `converged` can reach the action
+gateway.
+
 ## Belief
 
 ```python
@@ -143,6 +194,29 @@ Action(
     authorization_class: str,
 )
 ```
+
+Before an external action, the agent freezes it into an authority-bound contract:
+
+```python
+ActionContract(
+    id: str,
+    agent_id: str,
+    goal_id: str,
+    policy_digest: str,
+    candidate_id: str,
+    mode: CognitiveMode,
+    payload: object,
+    expected_observation: object,
+    preconditions: tuple[str, ...],
+    risk: float,
+    reversible: bool,
+    authorization_class: str,
+    verifier: str | None,
+)
+```
+
+The prediction record is emitted before this contract reaches the executor. The
+executor receives no mutable agent state.
 
 ## Verification
 

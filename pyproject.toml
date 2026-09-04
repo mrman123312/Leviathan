@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "leviathan-cognitive-architecture"
-version = "0.2.0"
-description = "Research scaffold for an adaptive metacognitive cognitive architecture"
+version = "0.3.0"
+description = "Unified-agent research scaffold for an adaptive cognitive architecture"
 requires-python = ">=3.11"
 readme = "README.md"
 
