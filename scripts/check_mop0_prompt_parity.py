@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 """Compare one real prompt through original DeepSeek V4 and Leviathan MoP-0.
 
-This loads the local full checkpoint once, runs a normal forward pass, temporarily
-wraps routed experts with the 128-channel reference decomposition, runs the same
-prompt again, restores the donor experts, and reports logit drift.
+This loads the local full checkpoint once with the eager expert backend, runs a normal
+forward pass, temporarily wraps routed experts with the 128-channel reference
+decomposition, runs the same prompt again, restores the donor experts, and reports
+logit drift. Keeping both sides on the eager backend prevents a grouped-kernel change
+from being mistaken for MoP drift.
 """
 
 from __future__ import annotations
@@ -91,9 +93,10 @@ def main() -> int:
     model = AutoModelForCausalLM.from_pretrained(
         model_dir,
         device_map=args.device_map,
-        torch_dtype="auto",
+        dtype="auto",
         trust_remote_code=args.trust_remote_code,
         low_cpu_mem_usage=True,
+        experts_implementation="eager",
     )
     model.eval()
 
@@ -101,11 +104,15 @@ def main() -> int:
     device = input_device(model)
     encoded = {key: value.to(device) for key, value in encoded.items()}
 
-    print("Running original V4 forward, then MoP-0 tiled forward...", file=sys.stderr)
+    print(
+        "Running original V4 eager-expert forward, then MoP-0 tiled forward...",
+        file=sys.stderr,
+    )
     result = compare_prompt_logits(model, encoded, tile_width=args.tile_width)
     payload = {
         "prompt": args.prompt,
         "tile_width": args.tile_width,
+        "experts_implementation": "eager",
         **result.as_dict(),
     }
     rendered = json.dumps(payload, indent=2, sort_keys=True)
