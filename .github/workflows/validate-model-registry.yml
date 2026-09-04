@@ -40,7 +40,7 @@ jobs:
       - name: Run Leviathan unit tests
         run: python -m unittest discover -s tests -v
 
-  mop0-reference-cpu:
+  mop-cell-reference-cpu:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -51,5 +51,7 @@ jobs:
         run: |
           python -m pip install --index-url https://download.pytorch.org/whl/cpu 'torch>=2.7'
           python -m pip install -e .
-      - name: Run exact MoP-0 reconstruction tests
-        run: python -m unittest tests/test_mop0_reference.py -v
+      - name: Run exact MoP and parameter-cell reconstruction tests
+        run: |
+          python -m unittest tests/test_mop0_reference.py -v
+          python -m unittest tests/test_parameter_cells.py -v
