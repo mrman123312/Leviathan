@@ -8,30 +8,35 @@ Leviathan is not a weight merge. It is a staged architecture-transplantation pro
 
 `maximum verified capability / (active compute × memory traffic × latency × learning instability)`
 
-The model stack is therefore split into four roles rather than forcing one checkpoint to do everything.
+The model stack is therefore split into roles rather than numerically merging unrelated checkpoints.
 
 ## Role A — primary semantic substrate
 
-### Preferred frontier substrate: DeepSeek-V4-Pro-Base
+### Canonical R4 / frontier substrate: DeepSeek-V4-Pro-Base
 
 Role: inherit large-scale language, code, mathematics and semantic representations from a true base checkpoint, then grow Leviathan modules around it.
 
-Why it is preferred at frontier scale:
+The current R4 decision is to perform the Mixture-of-Parameters experiment directly on the full DeepSeek-V4-Pro-Base class rather than treating a small Qwen model as the canonical test. This exception is specific to the parameter-substrate question: MoP is intended for giant sparse models where routing granularity, HBM traffic and distributed execution economics are materially different from tiny models.
+
+Why DeepSeek V4 is preferred:
 
 - true base/pretraining checkpoint rather than only chat behavior;
 - very large sparse MoE capacity with far lower active compute than total parameter count;
+- a routed SwiGLU expert structure that can be decomposed into exact channel tiles;
+- FP8 expert blocks that give MoP a hardware-aligned starting granularity;
 - long-context architecture;
-- existing MTP/sparse-attention lineage relevant to Leviathan;
-- permissive license relative to many frontier-weight releases;
+- MTP/sparse-attention lineage relevant to Leviathan;
 - enough pretrained knowledge that Leviathan does not need to relearn language and world regularities from scratch.
 
-The core rule is **inherit first, mutate second**. The initial Leviathan system must reproduce the base model's function before expensive original paths are retired.
+The core rule remains **inherit first, mutate second**. MoP-0 must reproduce the base model's function before independent parameter-tile routing is permitted.
 
-### Preferred experimental substrate: Qwen3-30B-A3B-Base
+See `docs/15-deepseek-v4-mop-r4.md` and `spec/deepseek-v4-mop.toml` for the exact R4 contract.
 
-Role: development-scale surgery.
+### Development fallback: Qwen3-30B-A3B-Base
 
-Use it to test:
+Role: cheap implementation debugging, regression reproduction and interface tests.
+
+Qwen can still be used to test:
 
 - zero-gated module insertion;
 - expert expansion;
@@ -43,7 +48,7 @@ Use it to test:
 - verifier-conditioned learning;
 - regression and rollback tooling.
 
-Architecture experiments should fail here before they are ever attempted on a trillion-parameter checkpoint.
+It is **not** the canonical R4 MoP substrate. A result on Qwen does not substitute for the full V4 experiment.
 
 ### Scientific control: OLMo 3 32B Base
 
@@ -89,7 +94,7 @@ Primary lessons:
 - long-horizon agent training with persistent state;
 - vision-in-the-loop artifact correction.
 
-Kimi's 2.8T scale is not required to test these lessons. Reproduce the primitives at development scale first.
+Kimi's scale is not required for every donor experiment. Reproduce donor primitives at the cheapest scale that can answer the actual research question.
 
 ### Step 3.5 Flash / Qwen-family MTP
 
@@ -153,23 +158,47 @@ When teachers disagree, do **not** train on an arbitrary winner. Route the item 
 
 High disagreement is a signal that the sample lies near the current capability frontier.
 
-## Heterogeneous experts
+## Mixture-of-Parameters in the neural substrate
 
-A long-term Leviathan MoE should not require every expert to be an MLP.
+R4 changes routing granularity inside the existing DeepSeek routed FFN before it changes any other major V4 subsystem.
 
-Candidate expert classes:
+The initial contract is:
 
-- semantic FFN expert;
-- code expert;
-- mathematical expert;
-- memory-retrieval expert;
-- recurrent world-state expert;
-- causal-model expert;
-- planning expert;
-- simulation expert;
-- verifier-interface expert.
+- keep attention unchanged;
+- keep mHC/residual topology unchanged;
+- keep the shared expert unchanged;
+- do not average experts;
+- do not route individual scalar parameters;
+- split each routed expert's 3,072 intermediate channels into hardware-aligned tiles;
+- preserve the original expert router through the early MoP stages;
+- reject sparsity that is slower on real hardware.
 
-The router therefore evolves from "which MLP processes this token?" toward "which cognitive operation should process this state?"
+At the default 128-channel width:
+
+`3,072 / 128 = 24 tiles/expert`
+
+`384 experts × 24 = 9,216 routed tiles/layer`
+
+`6 originally active experts × 24 = 144 tiles/token at MoP-0`
+
+MoP-0 changes representation, not compute. Speed/capacity gains are claimed only after later tile routing activates fewer tiles while retention and wall-clock gates pass.
+
+## Heterogeneous cognitive operations
+
+A long-term Leviathan system should not require every cognitive operation to be an MLP expert.
+
+Candidate operation classes include:
+
+- semantic FFN processing;
+- code/math specialization;
+- memory retrieval;
+- recurrent world-state update;
+- causal-model evaluation;
+- planning;
+- simulation;
+- verifier interaction.
+
+This later metacognitive routing problem is distinct from R4's parameter-tile router. One asks **which neural capacity should activate?** The other asks **which cognitive procedure should run?**
 
 ## Function-preserving transplantation
 
@@ -183,16 +212,18 @@ Initialize `alpha = 0`.
 
 Required sequence:
 
-1. load and freeze pretrained substrate;
-2. insert new modules with zero/identity effect;
-3. train only new parameters;
-4. demonstrate behavioral and perplexity parity;
-5. gradually increase gates;
-6. selectively unfreeze compatible old parameters;
-7. run continued pretraining/post-training;
+1. load and fingerprint the pretrained substrate;
+2. insert a zero/identity or exact-equivalent representation;
+3. demonstrate behavioral and perplexity parity;
+4. train only new parameters;
+5. gradually increase new-path authority;
+6. selectively unfreeze compatible old parameters only when necessary;
+7. run continued pretraining/post-training where justified;
 8. verify capability retention and calibration;
 9. shadow-evaluate candidate;
 10. only then retire redundant old paths.
+
+For MoP specifically, exact channel decomposition replaces the generic zero gate at MoP-0: the tiled representation must reconstruct the original expert function.
 
 ## Architecture migration, not weight soup
 
@@ -211,12 +242,15 @@ Use one of four transfer methods instead:
 multimodal encoders
       |
       v
+DeepSeek V4 semantic/parameter substrate <--- hardware-aware MoP routing
+      |
+      v
 shared belief/state space <---- episodic + semantic memory
       |
       v
 metacognitive router
       |
-      +--> direct sparse core
+      +--> direct neural core
       +--> procedural skill
       +--> retrieval
       +--> world simulation
@@ -247,57 +281,50 @@ causal credit assignment
 
 ## Development scale ladder
 
+The general Leviathan ladder remains useful, but scale must match the hypothesis being tested.
+
 ### Ω-S0 — 3B–30B
 
-Prove interfaces and safety invariants.
-
-Success criteria:
-
-- persistent belief state improves long tasks;
-- memory reduces repeated reasoning without accuracy loss;
-- meta-controller learns to select cognition modes;
-- verifier-aware routing improves calibration;
-- new modules can be added without measurable base-model regression.
+Use for interfaces, safety invariants, memory/controller logic and cheap architecture debugging.
 
 ### Ω-S1 — 100B–300B sparse
 
-Prove:
-
-- heterogeneous experts;
-- adaptive expert count;
-- recurrent/local/global hybrid sequence processing;
-- MTP state/action prediction;
-- safe plastic adapters;
-- distributed serving efficiency.
+Use for distributed sparse-kernel and heterogeneous-routing prototypes where that scale is sufficient.
 
 ### Ω-S2 — ~1T
 
-Use MiMo-class or equivalent true base substrate to test whether architecture gains survive giant-scale sparse pretraining representations.
+Use for giant-scale transfer checks when a 1T-class donor answers the question more economically.
 
 ### Ω-L — 1.6T+
 
-Frontier transplantation into a DeepSeek-V4-Pro-Base-class substrate after the smaller architecture has passed retention, safety, calibration and efficiency gates.
+Current R4 MoP target: full DeepSeek-V4-Pro-Base.
 
-## Non-negotiable evaluation dimensions
+This does **not** mean every Leviathan feature skips directly to Ω-L. It means the parameter-routing hypothesis is being tested at the scale where it is intended to matter. If a smaller reproducer can diagnose an implementation bug, use it; if scale changes the economics, the Ω-L result is authoritative.
 
-No architecture change is accepted solely because benchmark accuracy rises.
+## Non-negotiable R4 gates
+
+No architecture change is accepted solely because benchmark accuracy rises or theoretical active parameters fall.
 
 Track simultaneously:
 
 - task success;
+- ARC-Easy as a named reasoning canary;
+- held-out WikiText/public-language loss;
 - calibration;
 - retention of old capability;
 - active parameters/token;
+- active parameter tiles/token;
 - HBM bytes/token;
 - KV/state bytes/token;
-- reasoning tokens/success;
-- tool calls/success;
+- single-stream and aggregate throughput;
 - wall-clock time/success;
-- energy/compute proxy;
-- verifier agreement;
+- routing/kernel overhead;
 - rollback success;
 - catastrophic-forgetting score;
-- adversarial robustness;
-- simulator-vs-reality gap.
+- adversarial robustness.
 
-The target is not the largest model. The target is the **highest verified cognitive work per unit of lifetime computation**.
+The 64 held-out WikiText passages are excluded from training and hyperparameter selection. The hard public-language rejection boundary remains +2% relative loss, with a much stricter +0.25% target.
+
+If MoP activates fewer parameters but makes real execution slower, reject it. If it improves speed but causes an unexplained protected-capability regression, reject it. If no MoP setting beats or matches the original V4 MoE under the complete objective, keep the original V4 MoE and continue the rest of Leviathan.
+
+The target is not the largest model or the sparsest routing pattern. The target is the **highest verified cognitive work per unit of lifetime computation**.
