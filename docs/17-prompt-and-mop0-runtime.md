@@ -61,9 +61,18 @@ python scripts/run_prompt.py \
   --prompt "The capital of France is"
 ```
 
-The reference path is intentionally **not an optimized serving path**. Every selected routed expert is decomposed into all of its 128-channel tiles. To remain compatible with the donor's custom/quantized projection modules before a fused kernel exists, the reference implementation masks the intermediate activation to one tile at a time, calls the unchanged donor `w2`, and sums all tile contributions.
+When `--mop0-reference` is enabled, Leviathan loads Transformers with `experts_implementation="eager"`. The point is to keep expert arithmetic inspectable and prevent a grouped/deep-GEMM backend change from being confused with MoP behavior. Fast expert kernels return later, after parity is proven.
 
-That can require 24 `w2` calls for one selected expert instead of one. Its purpose is correctness and prompt-level parity, not speed.
+The reference executor supports both public V4 layouts:
+
+- the standalone DeepSeek-style routed experts exposing `w1`, `w2`, `w3`;
+- Hugging Face's packed `DeepseekV4Experts`, where `gate_up_proj` has shape `[experts, 2 * intermediate, hidden]` and `down_proj` has shape `[experts, hidden, intermediate]`.
+
+For the packed Transformers path, the original router and packed gate/up projection are unchanged. The activated 3,072-wide intermediate state is divided into 128-channel slices, the matching `down_proj[:, start:stop]` columns are evaluated, and all 24 tile contributions are summed before the original routing weight is applied. The shared expert remains untouched.
+
+For a standalone expert object whose quantized `w2` cannot safely be sliced, the fallback reference masks the intermediate activation to one tile at a time and calls the unchanged donor `w2`, then sums the contributions.
+
+Both paths are intentionally **correctness paths, not optimized serving paths**.
 
 ## Prompt-level MoP-0 parity test
 
@@ -79,16 +88,14 @@ python scripts/check_mop0_prompt_parity.py \
 
 The command:
 
-1. loads one local V4 checkpoint;
+1. loads one local V4 checkpoint using the eager expert backend;
 2. runs the prompt with the original routed experts;
 3. installs MoP-0 reference wrappers around routed experts only;
 4. runs the exact same prompt again;
 5. restores the original experts;
 6. reports max/mean/RMS logit drift, relative L2 drift, and whether the last-token argmax matches.
 
-The wrapper deliberately does **not** alter the shared expert.
-
-The wrapper also does not change the V4 gate. The original top-6 expert routing remains the routing decision at MoP-0.
+The wrapper deliberately does **not** alter the shared expert or the V4 router. The original top-6 expert decision remains the routing decision at MoP-0.
 
 ## Why this reference is useful
 
@@ -105,7 +112,7 @@ measure logit drift
       ↓
 prove prompt/benchmark parity
       ↓
-build fused tile-aware w1/w3/w2 kernel
+build fused tile-aware expert kernel
       ↓
 measure real speed
       ↓
@@ -119,6 +126,8 @@ If the reference reconstruction cannot preserve V4 behavior, the problem is in t
 These scripts do not make a 1.6T checkpoint fit onto ordinary hardware. They provide the execution contract once suitable V4-capable compute/storage is available.
 
 The endpoint prompt path can talk to any machine or cluster already serving the model. The local `transformers` path requires the checkpoint and hardware/runtime capable of loading it.
+
+A CPU unit test proves the tile decomposition itself on small tensors. It does **not** substitute for a real full-checkpoint FP8 parity run. That full run is the next empirical gate.
 
 ## R4 prompt test order
 
