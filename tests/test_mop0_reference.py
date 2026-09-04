@@ -13,6 +13,7 @@ except ImportError:
 
 from leviathan.mop0_reference import (
     MoP0ExpertWrapper,
+    MoP0PackedExpertsWrapper,
     install_mop0_reference,
     restore_original_experts,
 )
@@ -46,8 +47,65 @@ if torch is not None:
         def __init__(self) -> None:
             super().__init__()
             self.moe = FakeMoE()
+
+
+    class TinyPackedExperts(nn.Module):
+        """Small analogue of Transformers DeepseekV4Experts."""
+
+        def __init__(self) -> None:
+            super().__init__()
+            self.num_experts = 3
+            self.hidden_dim = 8
+            self.intermediate_dim = 8
+            self.gate_up_proj = nn.Parameter(
+                torch.randn(self.num_experts, 2 * self.intermediate_dim, self.hidden_dim) / 8
+            )
+            self.down_proj = nn.Parameter(
+                torch.randn(self.num_experts, self.hidden_dim, self.intermediate_dim) / 8
+            )
+            self.act_fn = F.silu
+            self.limit = 2.5
+
+        def _apply_gate(self, gate_up):
+            gate, up = gate_up.chunk(2, dim=-1)
+            gate = gate.clamp(max=self.limit)
+            up = up.clamp(min=-self.limit, max=self.limit)
+            return self.act_fn(gate) * up
+
+        def forward(self, hidden_states, top_k_index, top_k_weights):
+            final = torch.zeros_like(hidden_states)
+            with torch.no_grad():
+                mask = F.one_hot(top_k_index, num_classes=self.num_experts).permute(2, 1, 0)
+                hit = torch.greater(mask.sum(dim=(-1, -2)), 0).nonzero()
+            for expert_idx_tensor in hit:
+                expert_idx = int(expert_idx_tensor[0].item())
+                top_k_pos, token_idx = torch.where(mask[expert_idx])
+                current = self._apply_gate(
+                    F.linear(hidden_states[token_idx], self.gate_up_proj[expert_idx])
+                )
+                current = (
+                    F.linear(current, self.down_proj[expert_idx])
+                    * top_k_weights[token_idx, top_k_pos, None]
+                )
+                final.index_add_(0, token_idx, current.to(final.dtype))
+            return final
+
+
+    class FakePackedMoE(nn.Module):
+        def __init__(self) -> None:
+            super().__init__()
+            self.gate = nn.Identity()
+            self.experts = TinyPackedExperts()
+            self.shared_experts = nn.Identity()
+
+
+    class FakePackedModel(nn.Module):
+        def __init__(self) -> None:
+            super().__init__()
+            self.moe = FakePackedMoE()
 else:
     TinyExpert = FakeMoE = FakeModel = None
+    TinyPackedExperts = FakePackedMoE = FakePackedModel = None
 
 
 class MoP0ReferenceTests(unittest.TestCase):
@@ -77,6 +135,47 @@ class MoP0ReferenceTests(unittest.TestCase):
         self.assertEqual(restored, 2)
         self.assertIs(model.moe.experts[0], first_before)
         self.assertIs(model.moe.shared_expert, shared_before)
+
+    @unittest.skipIf(torch is None, "PyTorch inference extra not installed in core CI")
+    def test_packed_transformers_experts_reconstruct_exact_route(self) -> None:
+        torch.manual_seed(11)
+        experts = TinyPackedExperts()
+        wrapped = MoP0PackedExpertsWrapper(experts, tile_width=2)
+
+        hidden_states = torch.randn(6, 8)
+        top_k_index = torch.tensor(
+            [
+                [0, 1],
+                [1, 2],
+                [2, 0],
+                [0, 2],
+                [1, 0],
+                [2, 1],
+            ],
+            dtype=torch.long,
+        )
+        top_k_weights = torch.softmax(torch.randn(6, 2), dim=-1)
+
+        expected = experts(hidden_states, top_k_index, top_k_weights)
+        actual = wrapped(hidden_states, top_k_index, top_k_weights)
+        self.assertTrue(torch.allclose(expected, actual, atol=1e-6, rtol=1e-6))
+
+    @unittest.skipIf(torch is None, "PyTorch inference extra not installed in core CI")
+    def test_packed_expert_bank_install_and_restore(self) -> None:
+        model = FakePackedModel()
+        packed_before = model.moe.experts
+        shared_before = model.moe.shared_experts
+
+        report = install_mop0_reference(model, tile_width=2)
+        self.assertEqual(report.moe_modules, 1)
+        self.assertEqual(report.wrapped_experts, 3)
+        self.assertIsInstance(model.moe.experts, MoP0PackedExpertsWrapper)
+        self.assertIs(model.moe.shared_experts, shared_before)
+
+        restored = restore_original_experts(model)
+        self.assertEqual(restored, 3)
+        self.assertIs(model.moe.experts, packed_before)
+        self.assertIs(model.moe.shared_experts, shared_before)
 
 
 if __name__ == "__main__":
