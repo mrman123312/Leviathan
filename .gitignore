@@ -10,3 +10,28 @@ venv/
 dist/
 build/
 .DS_Store
+
+# Local caches
+.cache/
+.huggingface/
+
+# Model checkpoints and experiment deltas are local artifacts by default.
+models/checkpoints/
+models/adapters/
+checkpoints/
+weights/
+
+# Common large model formats. Commit only deliberately through a separate artifact strategy.
+*.safetensors
+*.gguf
+*.ckpt
+*.pth
+*.pt
+*.onnx
+*.bin
+
+# Training/runtime outputs
+runs/
+wandb/
+tensorboard/
+outputs/
