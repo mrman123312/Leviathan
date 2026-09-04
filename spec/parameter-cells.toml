@@ -1,0 +1,150 @@
+version = "0.1"
+name = "Leviathan Mixture of Parameterized Cells"
+single_cognitive_model = true
+source_substrate = "deepseek-v4-pro-base"
+inherits_mop0_tile_width = 128
+
+[invariant]
+rule = "Every parameterized cell begins as the inherited MoP-0 tile plus an expressive membrane whose residual influence is exactly zero."
+initial_cell_influence = 0.0
+original_router_retained = true
+pretrained_tile_computation_retained = true
+shared_expert_unchanged = true
+one_global_state = true
+one_training_objective = true
+one_parameter_ownership_system = true
+one_final_output = true
+independent_agents = false
+
+[cell]
+unit = "128_channel_swiglu_tile_plus_shared_control_membrane"
+control_dim = 32
+message_dim = 32
+recruitment_dim = 32
+confidence_dims = 4
+local_state_dim = 64
+low_rank = 16
+microcell_channel_range = [32, 128]
+mesocell = "learned coalition of microcells"
+macrocell = "compiled reusable circuit"
+
+[confidence]
+observe_before_control = true
+dimensions = ["epistemic", "aleatoric", "domain_fit", "evidence_strength"]
+abstention_observe_only_initially = true
+routing_suppression_before_calibration = false
+
+[communication]
+sparse_only = true
+max_neighbors = 8
+all_to_all_global = false
+one_round_before_multi_round = true
+messages_affect_output_at_insertion = false
+
+[disagreement]
+communicate_threshold = 0.10
+recruit_threshold = 0.30
+signal = "message_variance_reference_metric"
+rule = "Low disagreement commits; medium disagreement permits one communication round; high disagreement may recruit cells within a hard budget."
+
+[budget]
+seed_cells = 64
+recruited_cells_per_round = 32
+max_active_cells = 256
+max_rounds = 2
+global_budget_required = true
+
+[recruitment]
+mode = "associative_key_query"
+central_seed_router_retained = true
+cell_to_cell_recruitment_initially_observational = true
+budget_enforced = true
+
+[state]
+initial_mode = "ephemeral_only"
+persistent_local_state_initially = false
+reset_scope = "sequence_or_task"
+raw_experience_may_update_pretrained_cell = false
+
+[coalitions]
+verified_success_required = true
+default_min_trials = 8
+default_min_success_rate = 0.90
+auto_kernel_fusion = false
+promotion_requires_efficiency_test = true
+
+[plasticity]
+enabled_initially = false
+form = "pretrained_plus_transactional_plastic_overlay"
+raw_experience_updates_pretrained_component = false
+rollback_required = true
+promotion_governed = true
+
+[lifecycle]
+enabled_initially = false
+operations = ["grow", "split", "merge", "prune"]
+verified_evidence_required = true
+rollback_required = true
+
+[roadmap]
+stages = [0,1,2,3,4,5,6,7,8,9]
+
+[roadmap.stage_0]
+name = "exact_tiles"
+meaning = "all tiles of each originally selected expert reconstruct the pretrained function"
+behavior_change_allowed = false
+
+[roadmap.stage_1]
+name = "independent_tile_routing"
+meaning = "expert boundaries stop being fundamental; arbitrary tiles may be selected"
+behavior_change_allowed = true
+teacher = "original_expert_route"
+
+[roadmap.stage_2]
+name = "confidence_and_abstention"
+meaning = "cells estimate usefulness/confidence and may eventually abstain after calibration"
+initial_mode = "observe_only"
+
+[roadmap.stage_3]
+name = "proposal_messages"
+meaning = "active cells emit auxiliary latent proposals without changing inherited output"
+initial_mode = "auxiliary_only"
+
+[roadmap.stage_4]
+name = "one_communication_round"
+meaning = "active cells exchange sparse messages; influence remains zero-gated at insertion"
+initial_mode = "zero_gated"
+
+[roadmap.stage_5]
+name = "disagreement_recruitment"
+meaning = "unresolved disagreement can buy more cells or another bounded communication round"
+global_budget_required = true
+
+[roadmap.stage_6]
+name = "local_state"
+meaning = "cells gain bounded ephemeral state before any persistent self-modification"
+initial_mode = "ephemeral"
+
+[roadmap.stage_7]
+name = "learned_coalitions"
+meaning = "repeated verified groups become shortcut routes and later candidate fused kernels"
+verified_success_required = true
+
+[roadmap.stage_8]
+name = "local_plasticity"
+meaning = "transactional plastic overlays adapt locally while ancestral pretrained parameters remain protected"
+rollback_required = true
+
+[roadmap.stage_9]
+name = "cell_lifecycle"
+meaning = "verified grow/split/merge/prune operations create a self-organizing sparse neural tissue"
+governance_required = true
+
+[acceptance]
+logit_parity_required_before_stage_1 = true
+hidden_state_parity_required_before_stage_1 = true
+arc_easy_canary_required = true
+wikitext_retention_gate_required = true
+wall_clock_efficiency_required = true
+mathematical_sparsity_alone_is_failure = true
+fallback = "original_deepseek_v4_moe"
