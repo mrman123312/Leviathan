@@ -56,3 +56,4 @@ jobs:
         run: |
           python -m unittest tests/test_mop0_reference.py -v
           python -m unittest tests/test_parameter_cells.py -v
+          python -m unittest tests/test_parameter_ecology_live.py -v
