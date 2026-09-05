@@ -1,23 +1,28 @@
 """Mixture-of-Parameterized-Cells reference architecture.
 
-This module grows Leviathan's exact MoP-0 parameter tiles into richer computational
-cells without changing the inherited DeepSeek function at insertion.
+Leviathan grows each function-preserving MoP-0 tile into an expressive parameter
+cell while retaining the DeepSeek V4 pretrained function as the ancestral path.
 
-The fundamental invariant is:
+The insertion invariant is deliberately strict::
 
-    output = donor_output                         when every new gate == 0
+    output = donor_output + 0 * new_path
 
-The live reference path can additionally compute:
+The new paths are still executed when their reference stage is enabled, so they can
+be measured, trained with auxiliary objectives and tested before receiving behavioral
+authority.  No Python branch skips a zero-gated residual: a gate at exactly zero can
+therefore receive gradient while the forward value remains the donor value.
 
-* arbitrary cross-expert cell routes,
-* sparse peer communication among cells assigned to the same token,
+The live packed-expert reference path supports:
+
+* arbitrary cross-expert ancestral cell routing,
+* confidence and abstention signals,
+* sparse token-local peer communication,
 * disagreement-triggered associative recruitment,
+* a second discussion round including recruited cells,
 * bounded ephemeral local cell state,
-* low-rank learned refinements around inherited tile bodies.
+* low-rank learned refinements around ancestral tile bodies.
 
-Every behavioral bridge is independently zero-gated at insertion. This keeps one
-global model, one parameter ownership system and one final output. Cells are pieces
-of a single neural network, never independent language-model agents.
+Cells are components of one neural network, never independent agents or models.
 """
 
 from __future__ import annotations
@@ -233,7 +238,7 @@ class CellCoalition:
 
 
 class CoalitionRegistry:
-    """Tracks repeated verified cell groups without silently promoting them."""
+    """Track repeated verified cell groups without silently promoting them."""
 
     def __init__(self) -> None:
         self._coalitions: dict[tuple[int, ...], CellCoalition] = {}
@@ -308,14 +313,25 @@ if nn is not None:
         refinement: Any
         control: Any
 
+        @staticmethod
+        def concatenate(parts: Iterable["CellSignals"]) -> "CellSignals":
+            values = tuple(parts)
+            if not values:
+                raise ValueError("cannot concatenate an empty signal collection")
+            return CellSignals(
+                confidence=torch.cat([item.confidence for item in values], dim=0),
+                abstention=torch.cat([item.abstention for item in values], dim=0),
+                message=torch.cat([item.message for item in values], dim=0),
+                recruitment_query=torch.cat(
+                    [item.recruitment_query for item in values], dim=0
+                ),
+                refinement=torch.cat([item.refinement for item in values], dim=0),
+                control=torch.cat([item.control for item in values], dim=0),
+            )
+
 
     class CellControlMembrane(nn.Module):
-        """Cheap expressive membrane around inherited parameter tiles.
-
-        Communication and local state are inputs to the same cell membrane rather
-        than external agents. Their influence gates start at zero independently of
-        the residual refinement gate.
-        """
+        """Cheap expressive membrane around an inherited parameter tile."""
 
         def __init__(
             self,
@@ -428,18 +444,16 @@ if nn is not None:
 
             control_pre = self.state_down(hidden_states.float()) + self.cell_embedding(cell_ids)
             if received_message is not None:
-                if received_message.shape != (
-                    hidden_states.shape[0], self.config.message_dim
-                ):
+                expected = (hidden_states.shape[0], self.config.message_dim)
+                if tuple(received_message.shape) != expected:
                     raise ValueError("received_message shape mismatch")
                 control_pre = control_pre + (
                     self.communication_influence
                     * self.message_control(received_message.float())
                 )
             if local_state is not None:
-                if local_state.shape != (
-                    hidden_states.shape[0], self.config.local_state_dim
-                ):
+                expected = (hidden_states.shape[0], self.config.local_state_dim)
+                if tuple(local_state.shape) != expected:
                     raise ValueError("local_state shape mismatch")
                 control_pre = control_pre + (
                     self.state_influence * self.local_state_control(local_state.float())
@@ -484,7 +498,7 @@ if nn is not None:
 
 
     class SparseCellCommunication(nn.Module):
-        """One bounded communication round among active messages in the same token group."""
+        """One bounded message-passing round inside each token-local cell group."""
 
         def __init__(self, message_dim: int, *, max_neighbors: int = 8) -> None:
             super().__init__()
@@ -517,7 +531,7 @@ if nn is not None:
                 weights = torch.softmax(top_values, dim=-1)
                 gathered = v[top_indices]
                 attended = (weights.unsqueeze(-1) * gathered).sum(dim=-2)
-                result[idx] = self.out(attended)
+                result = result.index_copy(0, idx, self.out(attended).to(result.dtype))
             return result
 
 
@@ -548,19 +562,15 @@ if nn is not None:
                 self.keys.float(), dim=-1
             ).transpose(0, 1)
             if excluded_cell_ids is not None and excluded_cell_ids.numel():
-                scores[:, excluded_cell_ids.long()] = float("-inf")
+                mask = torch.zeros_like(scores, dtype=torch.bool)
+                mask[:, excluded_cell_ids.long()] = True
+                scores = scores.masked_fill(mask, float("-inf"))
             values, indices = torch.topk(scores, k=k, dim=-1)
             return indices, values
 
 
     class CellizedPackedExpertsWrapper(nn.Module):
-        """DeepSeek packed experts plus a live, zero-gated parameter ecology.
-
-        The donor expert route remains the exact output path at gate value zero. The
-        reference stage can nevertheless execute peer communication, independent
-        cross-expert cell routing, recruitment and ephemeral local-state updates so
-        those mechanisms can be tested before they are allowed to control behavior.
-        """
+        """DeepSeek packed experts plus a live, zero-gated parameter ecology."""
 
         def __init__(
             self,
@@ -592,29 +602,35 @@ if nn is not None:
             if self.intermediate_size % self.tile_width:
                 raise ValueError("tile_width must divide packed expert intermediate size")
 
+            device = self.expert_bank.gate_up_proj.device
             self.membrane = CellControlMembrane(
                 hidden_size=self.hidden_size,
                 num_cells=self.num_cells,
                 config=membrane_config,
-            )
+            ).to(device=device)
             self.communication = SparseCellCommunication(
                 membrane_config.message_dim,
                 max_neighbors=budget.max_neighbors,
-            )
+            ).to(device=device)
             self.recruiter = AssociativeCellRecruiter(
                 self.num_cells,
                 membrane_config.recruitment_dim,
-            )
+            ).to(device=device)
             self.independent_route_query = nn.Linear(
                 self.hidden_size,
                 membrane_config.recruitment_dim,
                 bias=False,
-            )
-            self.independent_route_gate = nn.Parameter(torch.tensor(0.0))
-            self.recruitment_gate = nn.Parameter(torch.tensor(0.0))
+            ).to(device=device)
+            self.independent_route_gate = nn.Parameter(torch.tensor(0.0, device=device))
+            self.recruitment_gate = nn.Parameter(torch.tensor(0.0, device=device))
             self.register_buffer(
                 "local_state",
-                torch.zeros(self.num_cells, membrane_config.local_state_dim),
+                torch.zeros(
+                    self.num_cells,
+                    membrane_config.local_state_dim,
+                    dtype=torch.float32,
+                    device=device,
+                ),
                 persistent=False,
             )
 
@@ -663,7 +679,11 @@ if nn is not None:
                 self.recruiter,
                 self.independent_route_query,
             )
-            total = sum(parameter.numel() for module in modules for parameter in module.parameters())
+            total = sum(
+                parameter.numel()
+                for module in modules
+                for parameter in module.parameters()
+            )
             total += self.independent_route_gate.numel() + self.recruitment_gate.numel()
             return int(total)
 
@@ -745,7 +765,7 @@ if nn is not None:
             )
 
         def set_reference_stage(self, stage: MoPStage | int) -> None:
-            """Enable a reference code path without claiming the maturity gate passed."""
+            """Enable a reference code path without claiming a maturity gate passed."""
             self.execution = CellExecutionConfig(
                 stage=MoPStage(int(stage)),
                 independent_top_k=self.execution.independent_top_k,
@@ -757,7 +777,7 @@ if nn is not None:
                 self.local_state.zero_()
 
         def _cell_body(self, hidden_states: Any, cell_ids: Any) -> Any:
-            """Execute the actual ancestral SwiGLU tile for arbitrary cross-expert cells."""
+            """Execute an actual ancestral SwiGLU tile for arbitrary cell IDs."""
             if hidden_states.ndim != 2 or cell_ids.ndim != 1:
                 raise ValueError("cell-body inputs must be [n, hidden] and [n]")
             if hidden_states.shape[0] != cell_ids.shape[0]:
@@ -791,7 +811,7 @@ if nn is not None:
                     activated,
                     self.expert_bank.down_proj[expert_index, :, start:stop],
                 )
-                output[rows] = local_output.to(output.dtype)
+                output = output.index_copy(0, rows, local_output.to(output.dtype))
             return output
 
         @staticmethod
@@ -802,9 +822,13 @@ if nn is not None:
             )
             sq_sums = torch.zeros_like(sums)
             counts = torch.zeros(token_count, dtype=torch.float32, device=messages.device)
-            sums.index_add_(0, group_ids, messages.float())
-            sq_sums.index_add_(0, group_ids, messages.float().square())
-            counts.index_add_(0, group_ids, torch.ones_like(group_ids, dtype=torch.float32))
+            sums = sums.index_add(0, group_ids, messages.float())
+            sq_sums = sq_sums.index_add(0, group_ids, messages.float().square())
+            counts = counts.index_add(
+                0,
+                group_ids,
+                torch.ones_like(group_ids, dtype=torch.float32),
+            )
             safe = counts.clamp_min(1.0)
             means = sums / safe[:, None]
             variance = (sq_sums / safe[:, None] - means.square()).clamp_min(0.0)
@@ -839,7 +863,11 @@ if nn is not None:
             return updated
 
         def _run_independent_route(self, hidden_states: Any) -> tuple[Any, int]:
-            top_k = min(self.execution.independent_top_k, self.num_cells)
+            top_k = min(
+                self.execution.independent_top_k,
+                self.budget.max_active_cells,
+                self.num_cells,
+            )
             queries = self.independent_route_query(hidden_states.float())
             ids, scores = self.recruiter(queries, k=top_k)
             self.last_independent_cell_ids = tuple(
@@ -850,13 +878,22 @@ if nn is not None:
             cell_outputs = self._cell_body(repeated_hidden, flat_ids).reshape(
                 hidden_states.shape[0], top_k, self.hidden_size
             )
-            weights = torch.softmax(scores.float(), dim=-1).to(cell_outputs.dtype)
+            # In MoP-0 each of the 24 tiles of an expert inherits that expert's route
+            # weight. If expert weights sum to ~1, the cell coefficient mass is ~24,
+            # not 1. Preserve that scale when expert boundaries are removed.
+            weights = (
+                torch.softmax(scores.float(), dim=-1) * float(self.tiles_per_expert)
+            ).to(cell_outputs.dtype)
             routed = (cell_outputs * weights[..., None]).sum(dim=1)
             return routed, int(flat_ids.numel())
 
-        def forward(self, hidden_states: Any, top_k_index: Any, top_k_weights: Any) -> Any:
-            donor_final = torch.zeros_like(hidden_states)
-            token_count = int(hidden_states.shape[0])
+        def _donor_and_assignments(
+            self,
+            hidden_states: Any,
+            top_k_index: Any,
+            top_k_weights: Any,
+        ) -> tuple[Any, Any, Any, Any, Any]:
+            donor = torch.zeros_like(hidden_states)
             assignment_hidden: list[Any] = []
             assignment_cell_ids: list[Any] = []
             assignment_token_ids: list[Any] = []
@@ -866,7 +903,6 @@ if nn is not None:
                 mask = F.one_hot(top_k_index, num_classes=self.num_experts).permute(2, 1, 0)
                 hit = torch.greater(mask.sum(dim=(-1, -2)), 0).nonzero()
 
-            # Preserve the inherited expert arithmetic and accumulation order exactly.
             for expert_tensor in hit:
                 expert_index = int(expert_tensor[0].item())
                 if expert_index >= self.num_experts:
@@ -874,11 +910,13 @@ if nn is not None:
                 top_k_pos, token_idx = torch.where(mask[expert_index])
                 route_weight = top_k_weights[token_idx, top_k_pos]
                 gate_up = F.linear(
-                    hidden_states[token_idx], self.expert_bank.gate_up_proj[expert_index]
+                    hidden_states[token_idx],
+                    self.expert_bank.gate_up_proj[expert_index],
                 )
                 activated = self._activate(gate_up)
                 expert_output = torch.zeros(
-                    (token_idx.shape[0], self.hidden_size),
+                    token_idx.shape[0],
+                    self.hidden_size,
                     dtype=hidden_states.dtype,
                     device=hidden_states.device,
                 )
@@ -905,10 +943,37 @@ if nn is not None:
                     assignment_token_ids.append(token_idx)
                     assignment_route_weights.append(route_weight)
 
-                expert_output = expert_output * route_weight[:, None]
-                donor_final.index_add_(0, token_idx, expert_output.to(donor_final.dtype))
+                donor = donor.index_add(
+                    0,
+                    token_idx,
+                    (expert_output * route_weight[:, None]).to(donor.dtype),
+                )
 
             if not assignment_hidden:
+                empty_hidden = hidden_states.new_empty((0, hidden_states.shape[-1]))
+                empty_long = torch.empty(0, dtype=torch.long, device=hidden_states.device)
+                empty_weight = hidden_states.new_empty((0,))
+                return donor, empty_hidden, empty_long, empty_long, empty_weight
+
+            return (
+                donor,
+                torch.cat(assignment_hidden, dim=0),
+                torch.cat(assignment_cell_ids, dim=0),
+                torch.cat(assignment_token_ids, dim=0),
+                torch.cat(assignment_route_weights, dim=0),
+            )
+
+        def forward(self, hidden_states: Any, top_k_index: Any, top_k_weights: Any) -> Any:
+            (
+                donor_final,
+                active_hidden,
+                active_cell_ids,
+                active_token_ids,
+                active_route_weights,
+            ) = self._donor_and_assignments(hidden_states, top_k_index, top_k_weights)
+            token_count = int(hidden_states.shape[0])
+
+            if not active_cell_ids.numel():
                 self.last_telemetry = CellTelemetrySummary(
                     active_cell_token_pairs=0,
                     unique_cells_seen=0,
@@ -920,218 +985,274 @@ if nn is not None:
                 )
                 return donor_final
 
-            active_hidden = torch.cat(assignment_hidden, dim=0)
-            active_cell_ids = torch.cat(assignment_cell_ids, dim=0)
-            active_token_ids = torch.cat(assignment_token_ids, dim=0)
-            active_route_weights = torch.cat(assignment_route_weights, dim=0)
-            state = None
+            active_state = None
             if self.execution.stage >= MoPStage.LOCAL_STATE:
-                state = self._gather_local_state(active_cell_ids)
+                active_state = self._gather_local_state(active_cell_ids)
 
-            signals = self.membrane(active_hidden, active_cell_ids, local_state=state)
-            received = torch.zeros_like(signals.message)
+            active_signals = self.membrane(
+                active_hidden,
+                active_cell_ids,
+                local_state=active_state,
+            )
+            active_received = torch.zeros_like(active_signals.message)
             communication_rounds = 0
 
             if self.execution.stage >= MoPStage.ONE_COMMUNICATION_ROUND:
-                received = self.communication(signals.message, active_token_ids)
-                signals = self.membrane(
+                active_received = self.communication(
+                    active_signals.message,
+                    active_token_ids,
+                )
+                active_signals = self.membrane(
                     active_hidden,
                     active_cell_ids,
-                    received_message=received,
-                    local_state=state,
+                    received_message=active_received,
+                    local_state=active_state,
                 )
                 communication_rounds = 1
 
-            # New learned refinements remain a zero-gated residual around donor tiles.
-            if float(self.membrane.influence.detach().item()) != 0.0:
-                refinement = (
-                    self.membrane.influence.to(signals.refinement.dtype)
-                    * signals.refinement
-                    * active_route_weights[:, None].to(signals.refinement.dtype)
-                )
-                donor_final.index_add_(
-                    0,
-                    active_token_ids,
-                    refinement.to(donor_final.dtype),
-                )
-
-            per_token_disagreement, active_counts = self._message_stats(
-                signals.message,
+            per_token_disagreement, _ = self._message_stats(
+                active_signals.message,
                 active_token_ids,
                 token_count,
             )
 
-            recruited_ids_all: list[Any] = []
-            recruited_messages_all: list[Any] = []
-            recruited_confidence_all: list[Any] = []
-            recruited_abstention_all: list[Any] = []
-            recruited_token_ids_all: list[Any] = []
-            recruited_received_all: list[Any] = []
-            recruited_signals_all: list[CellSignals] = []
+            final_active_signal_parts: list[CellSignals] = []
+            final_active_received_parts: list[Any] = []
+            final_active_id_parts: list[Any] = []
+            final_active_token_parts: list[Any] = []
+            final_active_weight_parts: list[Any] = []
+            recruited_signal_parts: list[CellSignals] = []
+            recruited_received_parts: list[Any] = []
+            recruited_id_parts: list[Any] = []
+            recruited_token_parts: list[Any] = []
+            refinement_by_token: list[Any] = []
+            recruitment_by_token: list[Any] = []
             recruited_pairs = 0
 
-            if self.execution.stage >= MoPStage.DISAGREEMENT_RECRUITMENT:
-                recruit_tokens = torch.where(
-                    per_token_disagreement >= self.disagreement_thresholds.recruit
-                )[0]
-                for token_tensor in recruit_tokens:
-                    token_id = int(token_tensor.item())
-                    local_rows = torch.where(active_token_ids == token_id)[0]
-                    current_ids = torch.unique(active_cell_ids[local_rows])
+            for token_id in range(token_count):
+                local_rows = torch.where(active_token_ids == token_id)[0]
+                if not local_rows.numel():
+                    refinement_by_token.append(torch.zeros_like(hidden_states[token_id]))
+                    recruitment_by_token.append(torch.zeros_like(hidden_states[token_id]))
+                    continue
+
+                local_hidden = active_hidden[local_rows]
+                local_ids = active_cell_ids[local_rows]
+                local_weights = active_route_weights[local_rows]
+                local_received = active_received[local_rows]
+                local_signals = CellSignals(
+                    confidence=active_signals.confidence[local_rows],
+                    abstention=active_signals.abstention[local_rows],
+                    message=active_signals.message[local_rows],
+                    recruitment_query=active_signals.recruitment_query[local_rows],
+                    refinement=active_signals.refinement[local_rows],
+                    control=active_signals.control[local_rows],
+                )
+
+                rec_ids = None
+                rec_signals = None
+                rec_received = None
+                rec_scores = None
+                should_recruit = (
+                    self.execution.stage >= MoPStage.DISAGREEMENT_RECRUITMENT
+                    and float(per_token_disagreement[token_id].detach().item())
+                    >= self.disagreement_thresholds.recruit
+                )
+
+                if should_recruit:
+                    current_ids = torch.unique(local_ids)
                     capacity = min(
                         self.budget.recruited_cells_per_round,
                         self.budget.max_active_cells - int(current_ids.numel()),
                         self.num_cells - int(current_ids.numel()),
                     )
-                    if capacity <= 0:
-                        continue
-                    query = signals.recruitment_query[local_rows].mean(dim=0, keepdim=True)
-                    rec_ids_2d, rec_scores_2d = self.recruiter(
-                        query,
-                        k=capacity,
-                        excluded_cell_ids=current_ids,
-                    )
-                    rec_ids = rec_ids_2d[0]
-                    rec_scores = rec_scores_2d[0]
-                    rec_hidden = hidden_states[token_id : token_id + 1].expand(capacity, -1)
-                    rec_state = None
-                    if self.execution.stage >= MoPStage.LOCAL_STATE:
-                        rec_state = self._gather_local_state(rec_ids)
-                    rec_signals = self.membrane(rec_hidden, rec_ids, local_state=rec_state)
-                    rec_received = torch.zeros_like(rec_signals.message)
-
-                    # A second bounded round lets newly recruited cells actually enter
-                    # the same token-local discussion before any new residual is formed.
-                    if self.budget.max_rounds >= 2:
-                        combined_hidden = torch.cat([active_hidden[local_rows], rec_hidden], dim=0)
-                        combined_ids = torch.cat([active_cell_ids[local_rows], rec_ids], dim=0)
-                        combined_messages = torch.cat(
-                            [signals.message[local_rows], rec_signals.message], dim=0
+                    if capacity > 0:
+                        query = local_signals.recruitment_query.mean(dim=0, keepdim=True)
+                        rec_ids_2d, rec_scores_2d = self.recruiter(
+                            query,
+                            k=capacity,
+                            excluded_cell_ids=current_ids,
                         )
-                        combined_groups = torch.zeros(
-                            combined_messages.shape[0],
-                            dtype=torch.long,
-                            device=combined_messages.device,
-                        )
-                        combined_received = self.communication(combined_messages, combined_groups)
-                        combined_state = None
+                        rec_ids = rec_ids_2d[0]
+                        rec_scores = rec_scores_2d[0]
+                        rec_hidden = hidden_states[token_id : token_id + 1].expand(capacity, -1)
+                        rec_state = None
                         if self.execution.stage >= MoPStage.LOCAL_STATE:
-                            combined_state = self._gather_local_state(combined_ids)
-                        combined_signals = self.membrane(
-                            combined_hidden,
-                            combined_ids,
-                            received_message=combined_received,
-                            local_state=combined_state,
+                            rec_state = self._gather_local_state(rec_ids)
+                        rec_signals = self.membrane(
+                            rec_hidden,
+                            rec_ids,
+                            local_state=rec_state,
                         )
-                        n_active = int(local_rows.numel())
-                        # Replace the original cells' proposals with post-recruitment
-                        # proposals so the discussion is genuinely bidirectional.
-                        signals.confidence[local_rows] = combined_signals.confidence[:n_active]
-                        signals.abstention[local_rows] = combined_signals.abstention[:n_active]
-                        signals.message[local_rows] = combined_signals.message[:n_active]
-                        signals.recruitment_query[local_rows] = (
-                            combined_signals.recruitment_query[:n_active]
-                        )
-                        signals.refinement[local_rows] = combined_signals.refinement[:n_active]
-                        signals.control[local_rows] = combined_signals.control[:n_active]
-                        received[local_rows] = combined_received[:n_active]
-                        rec_signals = CellSignals(
-                            confidence=combined_signals.confidence[n_active:],
-                            abstention=combined_signals.abstention[n_active:],
-                            message=combined_signals.message[n_active:],
-                            recruitment_query=combined_signals.recruitment_query[n_active:],
-                            refinement=combined_signals.refinement[n_active:],
-                            control=combined_signals.control[n_active:],
-                        )
-                        rec_received = combined_received[n_active:]
-                        communication_rounds = max(communication_rounds, 2)
+                        rec_received = torch.zeros_like(rec_signals.message)
 
+                        if self.budget.max_rounds >= 2:
+                            combined_hidden = torch.cat([local_hidden, rec_hidden], dim=0)
+                            combined_ids = torch.cat([local_ids, rec_ids], dim=0)
+                            combined_messages = torch.cat(
+                                [local_signals.message, rec_signals.message],
+                                dim=0,
+                            )
+                            combined_groups = torch.zeros(
+                                combined_messages.shape[0],
+                                dtype=torch.long,
+                                device=combined_messages.device,
+                            )
+                            combined_received = self.communication(
+                                combined_messages,
+                                combined_groups,
+                            )
+                            combined_state = None
+                            if self.execution.stage >= MoPStage.LOCAL_STATE:
+                                combined_state = self._gather_local_state(combined_ids)
+                            combined_signals = self.membrane(
+                                combined_hidden,
+                                combined_ids,
+                                received_message=combined_received,
+                                local_state=combined_state,
+                            )
+                            n_active = int(local_rows.numel())
+                            local_signals = CellSignals(
+                                confidence=combined_signals.confidence[:n_active],
+                                abstention=combined_signals.abstention[:n_active],
+                                message=combined_signals.message[:n_active],
+                                recruitment_query=combined_signals.recruitment_query[:n_active],
+                                refinement=combined_signals.refinement[:n_active],
+                                control=combined_signals.control[:n_active],
+                            )
+                            local_received = combined_received[:n_active]
+                            rec_signals = CellSignals(
+                                confidence=combined_signals.confidence[n_active:],
+                                abstention=combined_signals.abstention[n_active:],
+                                message=combined_signals.message[n_active:],
+                                recruitment_query=combined_signals.recruitment_query[n_active:],
+                                refinement=combined_signals.refinement[n_active:],
+                                control=combined_signals.control[n_active:],
+                            )
+                            rec_received = combined_received[n_active:]
+                            communication_rounds = max(communication_rounds, 2)
+
+                active_delta = (
+                    self.membrane.influence.to(local_signals.refinement.dtype)
+                    * local_signals.refinement
+                    * local_weights[:, None].to(local_signals.refinement.dtype)
+                ).sum(dim=0)
+                refinement_by_token.append(active_delta.to(hidden_states.dtype))
+
+                rec_delta = torch.zeros_like(hidden_states[token_id])
+                if rec_ids is not None and rec_signals is not None and rec_scores is not None:
+                    rec_hidden = hidden_states[token_id : token_id + 1].expand(rec_ids.shape[0], -1)
                     rec_body = self._cell_body(rec_hidden, rec_ids)
-                    rec_output = rec_body
-                    if float(self.membrane.influence.detach().item()) != 0.0:
-                        rec_output = rec_output + (
-                            self.membrane.influence.to(rec_output.dtype)
-                            * rec_signals.refinement.to(rec_output.dtype)
-                        )
-                    if float(self.recruitment_influence.detach().item()) != 0.0:
-                        rec_weights = torch.softmax(rec_scores.float(), dim=-1).to(rec_output.dtype)
-                        rec_residual = (rec_output * rec_weights[:, None]).sum(dim=0)
-                        donor_final[token_id] = donor_final[token_id] + (
-                            self.recruitment_influence.to(donor_final.dtype)
-                            * rec_residual.to(donor_final.dtype)
-                        )
+                    rec_output = rec_body + (
+                        self.membrane.influence.to(rec_body.dtype)
+                        * rec_signals.refinement.to(rec_body.dtype)
+                    )
+                    rec_weights = torch.softmax(rec_scores.float(), dim=-1).to(rec_output.dtype)
+                    rec_residual = (rec_output * rec_weights[:, None]).sum(dim=0)
+                    rec_delta = (
+                        self.recruitment_influence.to(rec_residual.dtype) * rec_residual
+                    ).to(hidden_states.dtype)
 
-                    recruited_ids_all.append(rec_ids)
-                    recruited_messages_all.append(rec_signals.message)
-                    recruited_confidence_all.append(rec_signals.confidence)
-                    recruited_abstention_all.append(rec_signals.abstention)
-                    recruited_token_ids_all.append(
+                    recruited_signal_parts.append(rec_signals)
+                    recruited_received_parts.append(rec_received)
+                    recruited_id_parts.append(rec_ids)
+                    recruited_token_parts.append(
                         torch.full(
-                            (capacity,),
+                            (rec_ids.shape[0],),
                             token_id,
                             dtype=torch.long,
                             device=hidden_states.device,
                         )
                     )
-                    recruited_received_all.append(rec_received)
-                    recruited_signals_all.append(rec_signals)
-                    recruited_pairs += capacity
+                    recruited_pairs += int(rec_ids.numel())
+                recruitment_by_token.append(rec_delta)
+
+                final_active_signal_parts.append(local_signals)
+                final_active_received_parts.append(local_received)
+                final_active_id_parts.append(local_ids)
+                final_active_token_parts.append(
+                    torch.full(
+                        (local_ids.shape[0],),
+                        token_id,
+                        dtype=torch.long,
+                        device=hidden_states.device,
+                    )
+                )
+                final_active_weight_parts.append(local_weights)
+
+            final_active_signals = CellSignals.concatenate(final_active_signal_parts)
+            final_active_received = torch.cat(final_active_received_parts, dim=0)
+            final_active_ids = torch.cat(final_active_id_parts, dim=0)
+            final_active_tokens = torch.cat(final_active_token_parts, dim=0)
+            final_active_weights = torch.cat(final_active_weight_parts, dim=0)
+            del final_active_weights  # encoded already in refinement_by_token
+
+            ecology_output = (
+                donor_final
+                + torch.stack(refinement_by_token, dim=0).to(donor_final.dtype)
+                + torch.stack(recruitment_by_token, dim=0).to(donor_final.dtype)
+            )
 
             independent_pairs = 0
             if self.execution.stage >= MoPStage.INDEPENDENT_TILE_ROUTING:
                 independent_output, independent_pairs = self._run_independent_route(hidden_states)
-                beta = self.independent_route_influence
-                if float(beta.detach().item()) != 0.0:
-                    donor_final = (
-                        (1.0 - beta.to(donor_final.dtype)) * donor_final
-                        + beta.to(donor_final.dtype) * independent_output.to(donor_final.dtype)
-                    )
+                beta = self.independent_route_influence.to(ecology_output.dtype)
+                ecology_output = (
+                    (1.0 - beta) * ecology_output
+                    + beta * independent_output.to(ecology_output.dtype)
+                )
             else:
                 self.last_independent_cell_ids = ()
 
             local_state_updates = 0
             if self.execution.stage >= MoPStage.LOCAL_STATE:
-                local_state_updates += self._update_local_state(
-                    active_cell_ids,
-                    signals,
-                    received,
+                state_ids = [final_active_ids]
+                state_signals = [final_active_signals]
+                state_received = [final_active_received]
+                if recruited_id_parts:
+                    state_ids.append(torch.cat(recruited_id_parts, dim=0))
+                    state_signals.append(CellSignals.concatenate(recruited_signal_parts))
+                    state_received.append(torch.cat(recruited_received_parts, dim=0))
+                local_state_updates = self._update_local_state(
+                    torch.cat(state_ids, dim=0),
+                    CellSignals.concatenate(state_signals),
+                    torch.cat(state_received, dim=0),
                 )
-                for rec_ids, rec_signals, rec_received in zip(
-                    recruited_ids_all,
-                    recruited_signals_all,
-                    recruited_received_all,
-                ):
-                    local_state_updates += self._update_local_state(
-                        rec_ids,
-                        rec_signals,
-                        rec_received,
-                    )
 
-            if recruited_ids_all:
-                recruited_ids = torch.cat(recruited_ids_all, dim=0)
-                recruited_messages = torch.cat(recruited_messages_all, dim=0)
-                recruited_confidence = torch.cat(recruited_confidence_all, dim=0)
-                recruited_abstention = torch.cat(recruited_abstention_all, dim=0)
-                recruited_token_ids = torch.cat(recruited_token_ids_all, dim=0)
+            if recruited_id_parts:
+                recruited_ids = torch.cat(recruited_id_parts, dim=0)
+                recruited_signals = CellSignals.concatenate(recruited_signal_parts)
+                recruited_tokens = torch.cat(recruited_token_parts, dim=0)
                 self.last_recruited_cell_ids = tuple(
                     sorted({int(value) for value in recruited_ids.detach().tolist()})
                 )
-                telemetry_messages = torch.cat([signals.message, recruited_messages], dim=0)
+                telemetry_messages = torch.cat(
+                    [final_active_signals.message, recruited_signals.message],
+                    dim=0,
+                )
                 telemetry_confidence = torch.cat(
-                    [signals.confidence, recruited_confidence], dim=0
+                    [final_active_signals.confidence, recruited_signals.confidence],
+                    dim=0,
                 )
                 telemetry_abstention = torch.cat(
-                    [signals.abstention, recruited_abstention], dim=0
+                    [final_active_signals.abstention, recruited_signals.abstention],
+                    dim=0,
                 )
-                telemetry_tokens = torch.cat([active_token_ids, recruited_token_ids], dim=0)
-                telemetry_cells = torch.cat([active_cell_ids, recruited_ids], dim=0)
+                telemetry_tokens = torch.cat(
+                    [final_active_tokens, recruited_tokens],
+                    dim=0,
+                )
+                telemetry_cells = torch.cat(
+                    [final_active_ids, recruited_ids],
+                    dim=0,
+                )
             else:
                 self.last_recruited_cell_ids = ()
-                telemetry_messages = signals.message
-                telemetry_confidence = signals.confidence
-                telemetry_abstention = signals.abstention
-                telemetry_tokens = active_token_ids
-                telemetry_cells = active_cell_ids
+                telemetry_messages = final_active_signals.message
+                telemetry_confidence = final_active_signals.confidence
+                telemetry_abstention = final_active_signals.abstention
+                telemetry_tokens = final_active_tokens
+                telemetry_cells = final_active_ids
 
             final_disagreement, telemetry_counts = self._message_stats(
                 telemetry_messages,
@@ -1144,14 +1265,22 @@ if nn is not None:
                 max_disagreement = float(final_disagreement[active_tokens].max().item())
                 scalar_confidence = telemetry_confidence.float().mean(dim=-1)
                 conf_sums = torch.zeros(
-                    token_count, dtype=torch.float32, device=hidden_states.device
+                    token_count,
+                    dtype=torch.float32,
+                    device=hidden_states.device,
+                ).index_add(0, telemetry_tokens, scalar_confidence)
+                abst_sums = torch.zeros_like(conf_sums).index_add(
+                    0,
+                    telemetry_tokens,
+                    telemetry_abstention.float(),
                 )
-                abst_sums = torch.zeros_like(conf_sums)
-                conf_sums.index_add_(0, telemetry_tokens, scalar_confidence)
-                abst_sums.index_add_(0, telemetry_tokens, telemetry_abstention.float())
                 safe = telemetry_counts.clamp_min(1.0)
-                mean_confidence = float((conf_sums[active_tokens] / safe[active_tokens]).mean().item())
-                mean_abstention = float((abst_sums[active_tokens] / safe[active_tokens]).mean().item())
+                mean_confidence = float(
+                    (conf_sums[active_tokens] / safe[active_tokens]).mean().item()
+                )
+                mean_abstention = float(
+                    (abst_sums[active_tokens] / safe[active_tokens]).mean().item()
+                )
             else:
                 mean_disagreement = max_disagreement = 0.0
                 mean_confidence = mean_abstention = 0.0
@@ -1172,7 +1301,7 @@ if nn is not None:
                     independent_route_cell_token_pairs=independent_pairs,
                 )
 
-            return donor_final
+            return ecology_output
 
 
     def _looks_like_moe_parent(module: Any) -> bool:
