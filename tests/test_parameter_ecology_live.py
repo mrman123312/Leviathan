@@ -172,6 +172,31 @@ class LiveParameterEcologyTests(unittest.TestCase):
         recruited = wrapped(self.hidden, self.indices, self.weights)
         self.assertFalse(torch.allclose(donor, recruited, atol=1e-6, rtol=1e-6))
 
+    def test_opened_ecology_paths_are_differentiable(self) -> None:
+        wrapped = self._full_reference_wrapper()
+        wrapped.set_influence(0.1, transplant_phase="gate_warmup")
+        wrapped.set_communication_influence(0.5, transplant_phase="gate_warmup")
+        wrapped.set_recruitment_influence(0.1, transplant_phase="gate_warmup")
+        wrapped.set_state_influence(0.5, transplant_phase="gate_warmup")
+        wrapped.set_independent_route_influence(0.1, transplant_phase="gate_warmup")
+
+        hidden = self.hidden.clone().requires_grad_(True)
+        output = wrapped(hidden, self.indices, self.weights)
+        loss = output.float().square().mean()
+        loss.backward()
+
+        self.assertIsNotNone(hidden.grad)
+        self.assertTrue(torch.isfinite(hidden.grad).all())
+        trainable_grads = [
+            parameter.grad
+            for name, parameter in wrapped.named_parameters()
+            if not name.startswith("expert_bank.") and parameter.requires_grad
+        ]
+        self.assertTrue(any(grad is not None for grad in trainable_grads))
+        self.assertTrue(
+            all(torch.isfinite(grad).all() for grad in trainable_grads if grad is not None)
+        )
+
     def test_ephemeral_local_state_updates_and_resets(self) -> None:
         wrapped = self._full_reference_wrapper()
         wrapped(self.hidden, self.indices, self.weights)
