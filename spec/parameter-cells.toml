@@ -1,11 +1,11 @@
-version = "0.1"
+version = "0.2"
 name = "Leviathan Mixture of Parameterized Cells"
 single_cognitive_model = true
 source_substrate = "deepseek-v4-pro-base"
 inherits_mop0_tile_width = 128
 
 [invariant]
-rule = "Every parameterized cell begins as the inherited MoP-0 tile plus an expressive membrane whose residual influence is exactly zero."
+rule = "Every parameterized cell begins as the inherited MoP-0 tile plus expressive control paths whose behavioral influence is exactly zero."
 initial_cell_influence = 0.0
 original_router_retained = true
 pretrained_tile_computation_retained = true
@@ -15,6 +15,20 @@ one_training_objective = true
 one_parameter_ownership_system = true
 one_final_output = true
 independent_agents = false
+
+[live_reference]
+recruited_cell_executes_ancestral_swiglu_tile = true
+independent_route_executes_ancestral_swiglu_tiles = true
+peer_communication_runs_inside_packed_expert_forward = true
+recruited_cells_join_second_token_local_communication_round = true
+local_state_is_ephemeral = true
+local_state_requires_explicit_reset_between_sequences_or_tasks = true
+independent_route_influence_at_insertion = 0.0
+communication_influence_at_insertion = 0.0
+recruitment_influence_at_insertion = 0.0
+local_state_influence_at_insertion = 0.0
+refinement_influence_at_insertion = 0.0
+reference_stage_does_not_imply_maturity_promotion = true
 
 [cell]
 unit = "128_channel_swiglu_tile_plus_shared_control_membrane"
@@ -40,12 +54,14 @@ max_neighbors = 8
 all_to_all_global = false
 one_round_before_multi_round = true
 messages_affect_output_at_insertion = false
+grouping = "token_local"
+post_recruitment_second_round_max = 1
 
 [disagreement]
 communicate_threshold = 0.10
 recruit_threshold = 0.30
 signal = "message_variance_reference_metric"
-rule = "Low disagreement commits; medium disagreement permits one communication round; high disagreement may recruit cells within a hard budget."
+rule = "Low disagreement commits; medium disagreement permits communication; high disagreement may recruit cells within a hard budget."
 
 [budget]
 seed_cells = 64
@@ -59,12 +75,22 @@ mode = "associative_key_query"
 central_seed_router_retained = true
 cell_to_cell_recruitment_initially_observational = true
 budget_enforced = true
+ancestral_cell_body_required = true
+cross_expert_allowed = true
+
+[independent_routing]
+mode = "learned_query_against_cell_keys"
+expert_boundaries_are_not_fundamental = true
+donor_route_retained_at_insertion = true
+blend_gate_initial = 0.0
+teacher = "original_expert_route"
 
 [state]
 initial_mode = "ephemeral_only"
 persistent_local_state_initially = false
 reset_scope = "sequence_or_task"
 raw_experience_may_update_pretrained_cell = false
+state_influence_initial = 0.0
 
 [coalitions]
 verified_success_required = true
@@ -96,7 +122,7 @@ behavior_change_allowed = false
 
 [roadmap.stage_1]
 name = "independent_tile_routing"
-meaning = "expert boundaries stop being fundamental; arbitrary tiles may be selected"
+meaning = "expert boundaries stop being fundamental; arbitrary ancestral tiles may be selected through a zero-initialized donor-to-cell-route blend"
 behavior_change_allowed = true
 teacher = "original_expert_route"
 
@@ -112,18 +138,19 @@ initial_mode = "auxiliary_only"
 
 [roadmap.stage_4]
 name = "one_communication_round"
-meaning = "active cells exchange sparse messages; influence remains zero-gated at insertion"
+meaning = "active cells exchange sparse token-local messages and re-form their membrane proposal; message influence remains zero-gated at insertion"
 initial_mode = "zero_gated"
 
 [roadmap.stage_5]
 name = "disagreement_recruitment"
-meaning = "unresolved disagreement can buy more cells or another bounded communication round"
+meaning = "unresolved disagreement can recruit real ancestral cells across expert boundaries and run one bounded post-recruitment discussion round"
 global_budget_required = true
+initial_mode = "zero_gated_residual"
 
 [roadmap.stage_6]
 name = "local_state"
 meaning = "cells gain bounded ephemeral state before any persistent self-modification"
-initial_mode = "ephemeral"
+initial_mode = "ephemeral_zero_influence"
 
 [roadmap.stage_7]
 name = "learned_coalitions"
