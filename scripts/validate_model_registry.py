@@ -65,6 +65,13 @@ EXPECTED_LEARNING_DESTINATIONS = [
     "plastic_parameters",
     "core_parameters",
 ]
+ZERO_GATED_CELL_PATHS = (
+    "independent_route_influence_at_insertion",
+    "communication_influence_at_insertion",
+    "recruitment_influence_at_insertion",
+    "local_state_influence_at_insertion",
+    "refinement_influence_at_insertion",
+)
 
 
 def load(path: Path) -> dict:
@@ -196,6 +203,30 @@ def main() -> int:
         if not cell_invariant.get(key, False):
             errors.append(f"parameter-cell invariant {key} must be true")
 
+    live_reference = parameter_cells.get("live_reference", {})
+    for key in ZERO_GATED_CELL_PATHS:
+        if live_reference.get(key) != 0.0:
+            errors.append(f"parameter-cell live path {key} must be exactly zero at insertion")
+    for key in (
+        "recruited_cell_executes_ancestral_swiglu_tile",
+        "independent_route_executes_ancestral_swiglu_tiles",
+        "peer_communication_runs_inside_packed_expert_forward",
+        "recruited_cells_join_second_token_local_communication_round",
+        "local_state_is_ephemeral",
+        "local_state_requires_explicit_reset_between_sequences_or_tasks",
+        "reference_stage_does_not_imply_maturity_promotion",
+    ):
+        if not live_reference.get(key, False):
+            errors.append(f"parameter-cell live-reference invariant {key} must remain true")
+
+    independent_routing = parameter_cells.get("independent_routing", {})
+    if independent_routing.get("blend_gate_initial") != 0.0:
+        errors.append("independent cell-route blend must initialize at zero")
+    if not independent_routing.get("donor_route_retained_at_insertion", False):
+        errors.append("independent cell routing must retain the donor route at insertion")
+    if not independent_routing.get("expert_boundaries_are_not_fundamental", False):
+        errors.append("independent routing must permit cross-expert cell composition")
+
     stages = parameter_cells.get("roadmap", {}).get("stages", [])
     if stages != EXPECTED_CELL_STAGES:
         errors.append(f"parameter-cell roadmap must be MoP-0..MoP-9; found {stages}")
@@ -279,7 +310,7 @@ def main() -> int:
     print(
         "Registry validation passed: "
         f"{len(models)} models, {len(teacher_members)} teachers, canonical={CANONICAL_MODEL_ID}, "
-        "MoP-0..9 parameter ecology, single-model cognitive kernel, and L0-L10 ledger valid."
+        "MoP-0..9 live parameter ecology, single-model cognitive kernel, and L0-L10 ledger valid."
     )
     return 0
 
