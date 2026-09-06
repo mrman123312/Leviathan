@@ -1,0 +1,29 @@
+{
+  "scope": "native tiny random Qwen; tokenizer fixture; not pretrained ARC performance",
+  "neutral_exact": true,
+  "all_donor_tensors_unchanged": true,
+  "training_steps": 0,
+  "new_learned_parameters": 0,
+  "trials": [
+    {
+      "kind": "task_state",
+      "prefix_max_diff": 0.0,
+      "finite": true
+    },
+    {
+      "kind": "damped_band",
+      "prefix_max_diff": 0.0,
+      "finite": true
+    },
+    {
+      "kind": "cell_ablation",
+      "prefix_max_diff": 0.0,
+      "finite": true
+    }
+  ],
+  "native_generate_executed": true,
+  "actual_forward_calls_counted": 16,
+  "hooks_restored": true,
+  "all_slots_support_gated": true,
+  "gpu_run": false
+}

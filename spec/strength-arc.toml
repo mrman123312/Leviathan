@@ -1,0 +1,62 @@
+version = "1.0"
+name = "Evidence-conditioned strength research"
+base_commit = "e1780e47ed5d74a8c8f0e0adbae2d45be7862aed"
+priority = "exact-grid reasoning and generalization before latency optimization"
+training_allowed = false
+one_neural_parameter_owner = true
+new_learned_parameters = 0
+model = "Qwen/Qwen3-1.7B-Base"
+revision = "ea980cb0a6c2ae4b936e82123acc929f1cec04c1"
+
+[benchmark]
+target = "ARC-AGI-1"
+not_the_same_as = "ARC-Easy"
+upstream_revision = "399030444e0ab0cc8b4e199870fb20b863846f34"
+metric = "exact_whole_grid_and_all_task_queries"
+attempts_reported = [1, 2]
+original_repo_trial_limit = 3
+labels_enter_solver = false
+labels_open_after_entire_batch_sealed = true
+cross_task_evaluation_adaptation = false
+neural_pretraining_contamination_ruled_out = false
+
+[search]
+program_languages = ["typed_grid_AST", "bounded_Python_shaped_interpreter"]
+interpreter_calls_python_exec = false
+interpreter_calls_python_eval = false
+uses_task_specific_solution_lookup = false
+retains_unguided_search_reserve = true
+wrong_complete_program_may_be_useful_prefix = true
+witnesses = ["failing_example", "shape", "first_wrong_cell", "exception"]
+repair = ["composition", "literal_holes", "color_constraints", "proposal_fragments"]
+representations = ["raw_grid", "objects", "color", "panels", "topology", "relational"]
+new_mechanisms = ["inverse_goal_junction", "binary_representation_join"]
+search_is_complete = false
+support_fit_proves_generalization = false
+
+[neural]
+existing_model_only = true
+proposal_modes = ["direct_DSL", "sampled_DSL", "sampled_grid_algorithms"]
+optional_routes = ["multi_slot_task_state", "conditional_cell_ablation", "damped_middle_band"]
+source_and_validation_demonstrations_disjoint = true
+all_validation_demonstrations_must_improve = true
+validation_metric = "support_output_NLL_proxy_not_test_accuracy"
+new_random_reasoning_head = false
+baseline_donor_branch_retained = true
+activation_interventions_default = "off_in_API; gated_trials_in_launcher"
+
+[memory]
+store = "existing_MemoryEcology"
+forms = ["executable_program", "activation_slots", "conditional_intervention_evidence"]
+no_support_only_truth_promotion = true
+macro_equivalence = "exact_AST_substitution"
+independent_support_hashes_for_macro_reuse = 2
+counterexample_invalidation = "transitive_dependencies"
+prior_interventions_retested_on_current_evidence = true
+
+[claims]
+local_evidence = "CPU mechanism tests and public TRAINING task control"
+full_pretrained_Qwen_run_here = false
+Windows_CUDA_launcher_run_here = false
+ARC_AGI_1_beaten = false
+AGI_demonstrated = false
