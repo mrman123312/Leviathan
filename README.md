@@ -1,3 +1,3 @@
 # Leviathan — Frozen Bedrock
 
-The current development work is in PR #15 (`bedrock-frozen-expressive`). The v3 update adds no-training expressive controls and a paired ARC-Easy one-click runner. See the PR branch for code, tests and evidence; master remains the earlier working baseline.
+Development branch publication is in progress. The complete v3 implementation is recorded in commit `f0cc3c6156e6e89db428e0c5162f5f2ede9734ac`, pending branch fast-forward. No training or baseline modification is performed by this note.
