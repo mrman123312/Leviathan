@@ -1,0 +1,59 @@
+version = "0.1"
+canonical_model_id = "qwen3.8-27b"
+canonical_stage = "posttrained"
+canonical_repo = "Qwen/Qwen3.8-27B"
+canonical_revision = "1d4bf0f2ff6012fd82039f2fa52739d0dd7c60c0"
+pretraining_control = "qwen3-1.7b-base"
+control_repo = "Qwen/Qwen3-1.7B-Base"
+control_revision = "ea980cb0a6c2ae4b936e82123acc929f1cec04c1"
+legacy_deepseek_preserved = true
+single_cognitive_model = true
+
+[invariants]
+initial_graft_influence = 0.0
+donor_frozen_for_graft_training = true
+raw_experience_updates_core = false
+new_path_connected_during_training = true
+zero_gate_eval_bypass_allowed = true
+request_local_recurrent_state = true
+no_cross_batch_state_averaging = true
+recurrent_adapter_does_not_modify_donor_kv = true
+opaque_quantized_weights_never_sliced_as_float = true
+cross_layer_cell_recruitment_enabled = false
+full_qwen_backbone_recurrence_implemented = false
+
+[runtime]
+default_profile = "rtx3060"
+quantization = "bitsandbytes_nf4_double_quant"
+context_budget = 2048
+max_new_tokens = 64
+installed_decoder_ffns_default = [-1]
+no_silent_cpu_offload = true
+
+[nrdf]
+latent_dim = 64
+hypothesis_slots = 4
+shared_attention_heads = 4
+min_loops = 1
+max_loops = 4
+chunk_tokens = 32
+step_conditioning_default = false
+learned_halting_default = false
+convergence_halting_default = false
+fast_overlay_norm_bound = 0.1
+fast_overlay_rank = 4
+persistent_task_plasticity = false
+
+[quantization]
+production_baseline = "NF4 through bitsandbytes"
+ancestral_slice_reference = "portable symmetric group INT4"
+reference_format_is_nf4 = false
+nf4_ancestral_slice_kernel_available = false
+awq_gptq_gguf_benchmark_completed = false
+
+[evidence]
+small_tensors_are_full_model_evidence = false
+synthetic_training_is_language_reasoning_evidence = false
+cpu_timings_are_gpu_timings = false
+local_vram_measured = false
+promotion_automatic = false

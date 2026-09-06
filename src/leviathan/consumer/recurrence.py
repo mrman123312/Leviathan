@@ -1,8 +1,7 @@
-"""NRDF: a function-preserving recurrent adapter, not a trained reasoning claim.
+"""NRDF: function-preserving recurrent adapter, not a trained reasoning claim.
 
-The inherited Transformer/DeltaNet backbone executes normally. A small shared
-Transformer recurrently refines token-local hypothesis slots, with optional real
-ancestral cells. It never reuses or mutates the donor's causal KV/DeltaNet caches.
+The donor Transformer/DeltaNet executes normally. A small shared Transformer
+refines token-local slots. Donor causal KV/DeltaNet caches are never modified.
 """
 from __future__ import annotations
 from dataclasses import asdict, dataclass
@@ -12,7 +11,6 @@ import torch
 from torch import Tensor, nn
 from torch.nn import functional as F
 from .cells import CellEcology, EcologyConfig, SwiGLUCells
-
 
 @dataclass(frozen=True)
 class NRDFConfig:
@@ -32,12 +30,11 @@ class NRDFConfig:
     cell_width: int = 128
     ancestral_cells: bool = False
     pulse_interval: int = 0
-
     def __post_init__(self):
         if self.pulse_interval < 0:
             raise ValueError("pulse_interval cannot be negative")
-        if min(self.latent_dim, self.slots, self.heads, self.min_loops,
-               self.max_loops, self.fast_rank, self.chunk_tokens, self.cell_width) <= 0:
+        if min(self.latent_dim, self.slots, self.heads, self.min_loops, self.max_loops,
+               self.fast_rank, self.chunk_tokens, self.cell_width) <= 0:
             raise ValueError("Positive dimensions/budgets required")
         if self.latent_dim % self.heads or self.min_loops > self.max_loops:
             raise ValueError("Invalid attention or loop budget")
@@ -48,7 +45,6 @@ class NRDFConfig:
         if not math.isfinite(self.plastic_norm) or self.plastic_norm <= 0:
             raise ValueError("Invalid plastic norm bound")
 
-
 @dataclass
 class DepthTrace:
     loops: Tensor
@@ -58,20 +54,14 @@ class DepthTrace:
     recruited_pairs: int
     routes: tuple[Tensor, ...]
 
-
 class FastOverlay(nn.Module):
-    """Task-local low-rank fast weights, never optimizer-owned pretrained weights.
-
-    A is generated from the current sequence of depth states and norm bounded.
-    V is a shared learned basis. No module-global fast-state mutation occurs.
-    """
+    """Bounded per-call low-rank fast state; no pretrained parameter mutation."""
     def __init__(self, dim: int, rank: int, norm: float):
         super().__init__()
         self.dim, self.rank, self.norm = dim, rank, norm
         self.propose = nn.Linear(dim, dim * rank)
         self.basis = nn.Parameter(torch.randn(rank, dim) / math.sqrt(dim))
         self.gate = nn.Parameter(torch.zeros(()))
-
     def forward(self, x: Tensor, prior: Tensor | None) -> tuple[Tensor, Tensor]:
         proposed = self.propose(x).reshape(len(x), self.dim, self.rank).tanh()
         if prior is None:
@@ -82,16 +72,13 @@ class FastOverlay(nn.Module):
         delta = torch.bmm(state, (x @ self.basis.T)[..., None]).squeeze(-1)
         return torch.tanh(self.gate) * delta, state
 
-
 class RecurrentFabric(nn.Module):
-    """A shared Transformer over hypothesis slots, with actual row compaction.
+    """Weight-shared slot Transformer with real active-row compaction.
 
-    Tokens never attend to each other here; their donor states already contain
-    causal context. Batch permutation/chunking therefore preserves semantics.
-    Soft slot selection is implemented; semantic branch invention is not claimed.
+    Slots are not agents. Tokens do not attend across requests or positions here;
+    their inherited states contain causal context. Semantic slot meaning is untrained.
     """
-    def __init__(self, hidden: int, config: NRDFConfig,
-                 ecology: CellEcology | None = None):
+    def __init__(self, hidden: int, config: NRDFConfig, ecology: CellEcology | None = None):
         super().__init__()
         self.config, self.ecology = config, ecology
         d = config.latent_dim
@@ -111,7 +98,6 @@ class RecurrentFabric(nn.Module):
         self.pulse_bridge = None
         self.output = nn.Linear(d, hidden, bias=False)
         nn.init.normal_(self.output.weight, std=0.01)
-
     def forward(self, hidden: Tensor, *, loops: int | None = None,
                 adaptive: bool = False, pulse: Tensor | None = None) -> tuple[Tensor, DepthTrace]:
         cfg = self.config
@@ -186,13 +172,11 @@ class RecurrentFabric(nn.Module):
                            tuple(sizes), recruited, tuple(routes))
         return self.output(self.norm(result)), trace
 
-
 class QwenNRDFWrapper(nn.Module):
-    """Original Qwen FFN plus an independently trainable, zero-initialized graft.
+    """Original FFN plus zero-gated recurrence. Training keeps zero gates connected.
 
-    eval + gate zero can bypass the graft exactly. Training always builds its graph
-    so the outer gate receives gradient. Auxiliary losses must train inner modules
-    while this gate is zero; the implementation does not claim otherwise.
+    Inner modules need auxiliary losses until the outer gate opens. Evaluation may
+    bypass a zero gate exactly. This is a graft, not full-backbone looped pretraining.
     """
     def __init__(self, donor: nn.Module, config: NRDFConfig = NRDFConfig(),
                  ecology_config: EcologyConfig | None = None):
@@ -207,7 +191,12 @@ class QwenNRDFWrapper(nn.Module):
                 raise ValueError("Ecology/fabric latent dimensions differ")
             ecology = CellEcology(bank, ecfg)
         self.fabric = RecurrentFabric(self.hidden, config, ecology)
-        device = next(donor.parameters()).device
+        anchor = next(donor.parameters(), None)
+        if anchor is None:
+            anchor = next(donor.buffers(), None)
+        if anchor is None:
+            raise ValueError("Donor has neither materialized parameters nor buffers")
+        device = anchor.device
         if device.type == "meta":
             raise ValueError("Materialize donor before installing a recurrent graft")
         self.fabric.to(device=device, dtype=torch.float32)
@@ -217,7 +206,6 @@ class QwenNRDFWrapper(nn.Module):
         self.observe_at_zero = False
         self.last_traces: list[DepthTrace] = []
         self.enabled = True
-
     def set_influence(self, value: float, *, experimental: bool = False):
         if not math.isfinite(value) or not -0.99 <= value <= 0.99:
             raise ValueError("Influence must be finite and within [-0.99, 0.99]")
@@ -225,7 +213,6 @@ class QwenNRDFWrapper(nn.Module):
             raise RuntimeError("Nonzero unvalidated grafts require explicit experimental opt-in")
         with torch.no_grad():
             self.gate.fill_(math.atanh(value))
-
     def forward(self, x: Tensor) -> Tensor:
         baseline = self.donor(x)
         self.last_traces = []
@@ -249,9 +236,8 @@ class QwenNRDFWrapper(nn.Module):
             raise FloatingPointError("Non-finite recurrent proposal: zero times NaN is not safe")
         return baseline + torch.tanh(self.gate).to(baseline.dtype) * delta
 
-
 def install_nrdf(model: nn.Module, config: NRDFConfig, *, layers: tuple[int, ...] = (-1,)) -> list[str]:
-    """Select actual decoder MLPs; never patch the vision encoder by name accident."""
+    """Select decoder MLPs, never accidentally the vision encoder."""
     if any(isinstance(m, QwenNRDFWrapper) for m in model.modules()):
         raise ValueError("NRDF is already installed; explicitly restore before reinstalling")
     candidates = [(name, module) for name, module in model.named_modules()
@@ -277,7 +263,6 @@ def install_nrdf(model: nn.Module, config: NRDFConfig, *, layers: tuple[int, ...
         setattr(model.get_submodule(parent_name), attr, wrapper)
     return [name for name, _ in wrappers]
 
-
 def restore_nrdf(model: nn.Module) -> int:
     wrappers = [(n, m) for n, m in model.named_modules() if isinstance(m, QwenNRDFWrapper)]
     for name, module in wrappers:
@@ -285,9 +270,8 @@ def restore_nrdf(model: nn.Module) -> int:
         setattr(model.get_submodule(parent), attr, module.donor)
     return len(wrappers)
 
-
 def graft_parameters(model: nn.Module):
-    """Return only graft tensors, with no duplicated/accidentally trainable donor."""
+    """Only graft tensors; no duplicated or accidentally trainable donor."""
     seen = set()
     for module in model.modules():
         if isinstance(module, QwenNRDFWrapper):

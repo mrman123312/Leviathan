@@ -1,18 +1,16 @@
-version = "0.3"
+version = "0.4"
 name = "Leviathan architecture embodiment ledger"
 single_cognitive_model = true
-
 [maturity]
 gates = ["specification", "executable", "integrated", "learned", "demonstrated"]
-rule = "A layer is not called achieved until all five gates pass. Code/data structures alone never count as demonstration."
-
+rule = "A layer is not achieved until all five gates pass; tests alone are not capability evidence."
 [development]
 build_order = ["L1", "L1.5", "L2", "L5", "L8", "L6", "L7", "L9", "L4", "L3", "L0", "L10"]
 
 [layers.L0]
 name = "physical execution"
 target_fundamental = "hardware-aware information transformation and cognitive IR"
-evidence = "metrics/runtime hooks exist; optimized Leviathan execution substrate does not"
+evidence = "CPU profiling and exact-row cache reference exist; production GPU cell kernels and cognitive IR remain open"
 [layers.L0.gates]
 specification = "passed"
 executable = "partial"
@@ -22,8 +20,8 @@ demonstrated = "not_started"
 
 [layers.L1]
 name = "numerical/function substrate"
-target_fundamental = "dynamic function substrate that preserves inherited function"
-evidence = "function-preserving DeepSeek expert tiling exists and has reference parity tests"
+target_fundamental = "dynamic function substrate preserving inherited function"
+evidence = "legacy DeepSeek retained; Qwen SwiGLU and INT4 reconstruction pass; actual 1.7B BF16 zero-graft logit smoke passes; full quantized 27B remains unmeasured"
 [layers.L1.gates]
 specification = "passed"
 executable = "passed"
@@ -33,8 +31,8 @@ demonstrated = "not_started"
 
 [layers."L1.5"]
 name = "parameter ecology"
-target_fundamental = "sparse ecology of expressive parameterized cells"
-evidence = "packed DeepSeek cell bodies now execute zero-gated peer communication, cross-expert associative routing, disagreement recruitment, and ephemeral local state; learned gates and full-V4 validation remain open"
+target_fundamental = "sparse expressive parameterized cells"
+evidence = "Qwen-compatible ancestral bodies communicate/recruit within token-local recurrence with differentiable local state; useful learned routing and NF4 sparse kernels remain open"
 [layers."L1.5".gates]
 specification = "passed"
 executable = "passed"
@@ -45,7 +43,7 @@ demonstrated = "not_started"
 [layers.L2]
 name = "transformation primitive"
 target_fundamental = "learned neural microprograms over heterogeneous operators"
-evidence = "explicit cognitive operator/program compiler is executable; actual DeepSeek neural blocks still own state transitions"
+evidence = "shared recurrent Transformer adapter and same-model token-pulse bridge execute; full-backbone recurrence and learned operator composition not established"
 [layers.L2.gates]
 specification = "passed"
 executable = "passed"
@@ -56,7 +54,7 @@ demonstrated = "not_started"
 [layers.L3]
 name = "topology and routing"
 target_fundamental = "task-compiled conditional cognitive graph"
-evidence = "acyclic dynamic cognitive DAG and a zero-gated arbitrary cross-expert cell-route reference are executable; learned neural topology replacement remains open"
+evidence = "reference DAG, bounded routing and row-compacting early exit execute; learned neural topology remains open"
 [layers.L3.gates]
 specification = "passed"
 executable = "passed"
@@ -66,8 +64,8 @@ demonstrated = "not_started"
 
 [layers.L4]
 name = "representation"
-target_fundamental = "problem-specific internal representation compiler"
-evidence = "reference representation compiler selects symbolic/procedural/causal/spatial/concept plans; learned internal DSL invention is not implemented"
+target_fundamental = "problem-specific representation compiler"
+evidence = "heuristic plans and latent slot mechanics; no demonstrated semantic slot specialization or invented DSL"
 [layers.L4.gates]
 specification = "passed"
 executable = "passed"
@@ -77,8 +75,8 @@ demonstrated = "not_started"
 
 [layers.L5]
 name = "persistent state and memory"
-target_fundamental = "self-organizing epistemic memory and persistent belief state"
-evidence = "append-only persistent episodic/semantic/procedural memory, current-vs-history belief state, contradiction tracking, provenance, and verified promotion are executable and connected to LeviathanRuntime; learned self-organizing memory policy remains open"
+target_fundamental = "self-organizing epistemic memory and persistent beliefs"
+evidence = "append-only journal, belief revisions, provenance and promotion controls retained; not yet a learned memory policy connected to Qwen decisions"
 [layers.L5.gates]
 specification = "passed"
 executable = "passed"
@@ -88,8 +86,8 @@ demonstrated = "not_started"
 
 [layers.L6]
 name = "prediction and world model"
-target_fundamental = "counterfactual theory-building causal world model"
-evidence = "hypothesis/prediction/evidence interfaces and simulation program nodes are executable; theory induction and grounded learned dynamics remain open"
+target_fundamental = "counterfactual theory-building causal model"
+evidence = "hypothesis/prediction interfaces and simulation nodes; grounded theory induction remains open"
 [layers.L6.gates]
 specification = "passed"
 executable = "partial"
@@ -99,8 +97,8 @@ demonstrated = "not_started"
 
 [layers.L7]
 name = "learning and plasticity"
-target_fundamental = "evidence-directed learning router and audited self-improvement compiler"
-evidence = "least-dangerous-destination learning router and governed core-candidate gate are executable; no trained lifelong learner yet"
+target_fundamental = "evidence-directed learning and audited improvement"
+evidence = "candidate graft trainer, replay exclusion, rollback serialization and bounded fast state exist; no demonstrated lifelong learner"
 [layers.L7.gates]
 specification = "passed"
 executable = "passed"
@@ -110,8 +108,8 @@ demonstrated = "not_started"
 
 [layers.L8]
 name = "cognition and metacognition"
-target_fundamental = "algorithm-synthesizing metacognitive controller with cognitive compilation"
-evidence = "heuristic controller plus program compiler, cell-disagreement telemetry bridge, and repeated-verified-trajectory skill compiler exist; policy is not learned"
+target_fundamental = "algorithm synthesis with cognitive compilation"
+evidence = "heuristic controller, halting head, depth supervision and telemetry; no learned cost-optimal reasoning controller"
 [layers.L8.gates]
 specification = "passed"
 executable = "passed"
@@ -121,8 +119,8 @@ demonstrated = "not_started"
 
 [layers.L9]
 name = "goals, agency, verification"
-target_fundamental = "governed evidence-driven agency with causal accountability"
-evidence = "structured GoalState, verification dependencies, append-only events and causal-accountability record exist; autonomous executive is not active"
+target_fundamental = "governed agency with causal accountability"
+evidence = "GoalState, verification dependencies and event log retained; autonomous executive and independent verifier integration remain open"
 [layers.L9.gates]
 specification = "passed"
 executable = "partial"
@@ -132,8 +130,8 @@ demonstrated = "not_started"
 
 [layers.L10]
 name = "canonical cognitive latent"
-target_fundamental = "typed portable Leviathan cognitive coordinate system"
-evidence = "conceptual; migration beyond early adapters crosses the pretraining wall"
+target_fundamental = "typed portable cognitive coordinate system"
+evidence = "conceptual; no migration away from inherited Qwen coordinates"
 [layers.L10.gates]
 specification = "passed"
 executable = "not_started"

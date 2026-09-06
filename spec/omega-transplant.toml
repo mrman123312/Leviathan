@@ -1,10 +1,9 @@
-version = "0.2"
+version = "0.3"
 name = "Leviathan Omega"
-
 [substrate]
-canonical = "deepseek-v4-pro-base"
-experimental = "deepseek-v4-pro-base"
-development_control = "qwen3-30b-a3b-base"
+canonical = "qwen3.8-27b"
+experimental = "qwen3.8-27b"
+development_control = "qwen3-1.7b-base"
 scientific_control = "olmo3-32b-base"
 frontier_semantic = "deepseek-v4-pro-base"
 frontier_efficiency = "mimo-v2.5-pro-base"
@@ -19,7 +18,8 @@ provenance_required = true
 simulated_evidence_labeled = true
 teacher_disagreement_is_not_ground_truth = true
 single_cognitive_model = true
-full_deepseek_v4_checkpoint_required = true
+full_canonical_checkpoint_required = true
+legacy_deepseek_full_checkpoint_required = true
 function_preserving_mop_initialization = true
 
 [training.phases]
@@ -45,11 +45,11 @@ replay_retention = true
 stability_regularization = true
 
 [modules.mixture_of_parameters]
-class = "function_preserving_moe_to_parameter_tiles"
-source_model = "deepseek-v4-pro-base"
-spec = "spec/deepseek-v4-mop.toml"
+class = "function_preserving_qwen_swiglu_cells_and_recurrent_adapter"
+source_model = "qwen3.8-27b"
+spec = "spec/consumer-substrate.toml"
 tile_width = 128
-initial_route = "expand_each_selected_expert_into_all_24_constituent_tiles"
+initial_route = "unchanged_dense_Qwen_FFN_with_zero_gated_NRDF"
 initial_independent_tile_routing = false
 preserve_shared_expert_path = true
 full_checkpoint_only = true
@@ -124,25 +124,7 @@ consensus_policy = "verifier_weighted_not_majority_vote"
 disagreement_policy = "route_to_verification_or_curriculum"
 
 [evaluation]
-metrics = [
-  "task_success_rate",
-  "calibration_error",
-  "retention_score",
-  "catastrophic_forgetting_score",
-  "active_parameters_per_token",
-  "active_tiles_per_token",
-  "hbm_bytes_per_token",
-  "kv_or_state_bytes_per_token",
-  "reasoning_tokens_per_success",
-  "tool_calls_per_success",
-  "wall_clock_seconds_per_success",
-  "single_stream_tokens_per_second",
-  "aggregate_tokens_per_second",
-  "router_overhead",
-  "verifier_agreement",
-  "rollback_success_rate",
-  "simulator_reality_gap"
-]
+metrics = ["task_success_rate", "calibration_error", "retention_score", "catastrophic_forgetting_score", "active_parameters_per_token", "active_tiles_per_token", "hbm_bytes_per_token", "kv_or_state_bytes_per_token", "reasoning_tokens_per_success", "tool_calls_per_success", "wall_clock_seconds_per_success", "single_stream_tokens_per_second", "aggregate_tokens_per_second", "router_overhead", "verifier_agreement", "rollback_success_rate", "simulator_reality_gap"]
 protected_benchmarks = ["ARC-Easy", "ARC-Challenge", "MMLU", "MMLU-Pro", "HellaSwag", "WinoGrande", "GSM8K", "HumanEval", "AGIEval", "LongBench-V2", "PIQA", "OpenBookQA", "BoolQ", "BBH", "WikiText-heldout"]
 arc_easy_is_canary = true
 
@@ -150,7 +132,9 @@ arc_easy_is_canary = true
 omega_s0 = "3B_to_30B_control_only"
 omega_s1 = "100B_to_300B_sparse_control"
 omega_s2 = "approximately_1T_control"
-omega_l = "deepseek_v4_pro_base_1.6T_canonical"
+omega_l = "future_giant_MoP_scale_after_consumer_controls"
+consumer_target = "qwen3.8_27b_posttrained"
+consumer_pretrain = "qwen3_1.7b_base"
 
 [promotion]
 required_suites = ["capability", "retention", "calibration", "safety", "adversarial", "efficiency"]

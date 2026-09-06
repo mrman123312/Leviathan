@@ -1,0 +1,26 @@
+{
+  "scope": "synthetic CPU reference, not pretrained language capability",
+  "seed": 902,
+  "torch": "2.10.0+cpu",
+  "cpu": "",
+  "cuda_available": false,
+  "language_benchmarks": {"ARC-Easy": null,"ARC-Challenge": null,"WikiText": null,"MMLU": null,"GSM8K": null},
+  "cell_geometry": [
+    {"width":32,"max_abs_error":2.086162567138672e-07,"median_seconds":0.0010709709999900952,"slowdown_vs_dense":9.006113557594404,"promotion":"reference only; no speed claim"},
+    {"width":64,"max_abs_error":2.086162567138672e-07,"median_seconds":0.0006745069999851694,"slowdown_vs_dense":5.672129905772373,"promotion":"reference only; no speed claim"},
+    {"width":128,"max_abs_error":1.7881393432617188e-07,"median_seconds":0.0004092799999853014,"slowdown_vs_dense":3.441757206081164,"promotion":"reference only; no speed claim"},
+    {"width":256,"max_abs_error":0.0,"median_seconds":0.00029877099996156176,"slowdown_vs_dense":2.5124541685953625,"promotion":"reference only; no speed claim"}
+  ],
+  "dense_seconds":0.00011891600001945335,
+  "int4":{"quantization_max_abs_error":0.0772600769996643,"cellization_max_abs_error":1.7881393432617188e-07,"format":"Leviathan symmetric group INT4 reference, not NF4/AWQ"},
+  "delta_cache":[
+    {"hidden":32,"intermediate":64,"unchanged_rows":124,"rows":128,"max_abs_error":0.0,"dense_seconds":2.6047000005746668e-05,"cache_seconds":5.527299992991175e-05,"speedup":0.47124274128010507,"decision":"reject for this workload"},
+    {"hidden":512,"intermediate":2048,"unchanged_rows":124,"rows":128,"max_abs_error":2.2351741790771484e-07,"dense_seconds":0.005258405000063249,"cache_seconds":0.001316116999987571,"speedup":3.9953932667938394,"decision":"keep for this workload"}
+  ],
+  "synthetic_training":{"steps":120,"train_depths":[1,2,3,4],"untrained_test_depth":6,
+    "before_mse":{"1":0.012318878434598446,"2":0.012309745885431767,"4":0.012254513800144196,"6":0.012194284237921238},
+    "after_mse":{"1":0.005348219070583582,"2":0.005298582371324301,"4":0.005372924264520407,"6":0.005597318056970835},
+    "training_seconds":0.7765043809999952,
+    "checkpoints":[{"step":40,"train_mse":0.007604910526424646},{"step":80,"train_mse":0.005851740948855877},{"step":120,"train_mse":0.005219996906816959}],
+    "interpretation":"Optimization smoke test only; no claim of language reasoning or AGI","depth6_better_than4":false}
+}

@@ -1,8 +1,5 @@
-version = "0.2"
-
-# The registry stores metadata only. Do not commit model weights to Git.
-# Revisions should be pinned to an immutable commit hash before any experiment is declared reproducible.
-
+version = "0.3"
+# Historical entries retain their original metadata. Only the consumer profiles were reverified in this migration.
 [defaults]
 model_root = "models/checkpoints"
 cache_root = ".cache/huggingface"
@@ -12,7 +9,7 @@ allow_remote_code_by_default = false
 [[models]]
 id = "deepseek-v4-pro-base"
 repo_id = "deepseek-ai/DeepSeek-V4-Pro-Base"
-role = "canonical_semantic_substrate"
+role = "legacy_substrate"
 stage = "base"
 license = "MIT"
 total_parameters_b = 1600.0
@@ -20,7 +17,7 @@ active_parameters_b = 49.0
 multimodal = false
 enabled_for_download = false
 priority = 1
-notes = "Canonical Leviathan pretrained core. Full-checkpoint experiments must pass spec/deepseek-v4-mop.toml fingerprint and 64-shard validation; explicit opt-in required for weights."
+notes = "Historical pretrained core, not canonical. Full-checkpoint fingerprint and shard requirements remain intact."
 
 [[models]]
 id = "qwen3-30b-a3b-base"
@@ -33,7 +30,7 @@ active_parameters_b = 3.3
 multimodal = false
 enabled_for_download = true
 priority = 5
-notes = "Cheaper architecture-surgery and regression control. No longer the canonical Leviathan substrate."
+notes = "Historical architecture-surgery and regression control."
 
 [[models]]
 id = "olmo3-32b-base"
@@ -46,7 +43,7 @@ active_parameters_b = 32.0
 multimodal = false
 enabled_for_download = true
 priority = 6
-notes = "Transparent training-lineage control for measuring architecture effects."
+notes = "Transparent training-lineage control."
 
 [[models]]
 id = "mimo-v2.5-pro-base"
@@ -59,7 +56,7 @@ active_parameters_b = 42.0
 multimodal = false
 enabled_for_download = false
 priority = 11
-notes = "Efficiency-first giant base donor: sparse MoE, local/global attention economy and MTP."
+notes = "Historical giant efficiency donor; verify release before use."
 
 [[models]]
 id = "mistral-large-3-base"
@@ -72,7 +69,7 @@ active_parameters_b = 41.0
 multimodal = true
 enabled_for_download = false
 priority = 12
-notes = "Clean multimodal base donor; use projection bridges rather than incompatible raw tensor merges."
+notes = "Use compatible projection bridges, never incompatible raw tensor averaging."
 
 [[models]]
 id = "glm-5.3-flash"
@@ -85,7 +82,7 @@ active_parameters_b = 18.0
 multimodal = true
 enabled_for_download = false
 priority = 20
-notes = "Study hybrid sparse/linear attention, mHC-style residual connectivity and low active compute."
+notes = "Historical hybrid attention/residual architecture reference."
 
 [[models]]
 id = "glm-5.3"
@@ -98,7 +95,7 @@ active_parameters_b = 40.0
 multimodal = false
 enabled_for_download = false
 priority = 21
-notes = "High-capability agent/post-training teacher. Verify current model-card terms before redistribution."
+notes = "Verify exact release and terms before use."
 
 [[models]]
 id = "qwen3.8-2.4t-a95b"
@@ -111,7 +108,7 @@ active_parameters_b = 95.0
 multimodal = false
 enabled_for_download = false
 priority = 22
-notes = "Huge post-trained teacher and architecture reference; not the preferred clean substrate."
+notes = "Historical post-trained giant teacher, not a raw-base substitute."
 
 [[models]]
 id = "deepseek-v4-pro-0813"
@@ -124,7 +121,7 @@ active_parameters_b = 49.0
 multimodal = false
 enabled_for_download = false
 priority = 23
-notes = "Post-trained behavior teacher paired with the V4 Pro Base substrate."
+notes = "Historical behavior teacher paired with V4 Pro Base."
 
 [[models]]
 id = "kimi-k3"
@@ -137,7 +134,7 @@ active_parameters_b = 104.0
 multimodal = true
 enabled_for_download = false
 priority = 24
-notes = "Architecture donor for KDA, AttnRes, latent MoE, quantization-native design and long-horizon agent behavior. Verify exact checkpoint ID/release terms before automated download."
+notes = "Verify exact checkpoint and license before automated download."
 
 [[models]]
 id = "qwen3-omni"
@@ -150,4 +147,32 @@ active_parameters_b = 0.0
 multimodal = true
 enabled_for_download = false
 priority = 30
-notes = "Thinker/Talker and audio/video/speech architecture donor. Exact checkpoint selection is experiment-specific."
+notes = "Exact multimodal donor selection remains experiment-specific."
+
+[[models]]
+id = "qwen3.8-27b"
+repo_id = "Qwen/Qwen3.8-27B"
+role = "canonical_semantic_substrate"
+stage = "posttrained"
+license = "Apache-2.0"
+total_parameters_b = 27.0
+active_parameters_b = 27.0
+multimodal = true
+enabled_for_download = false
+priority = 1
+revision = "1d4bf0f2ff6012fd82039f2fa52739d0dd7c60c0"
+notes = "User-selected language backbone target, explicitly POST-TRAINED. Vision/overhead adds memory. Not resident in 12 GB at 4 bit."
+
+[[models]]
+id = "qwen3-1.7b-base"
+repo_id = "Qwen/Qwen3-1.7B-Base"
+role = "consumer_pretraining_control"
+stage = "base"
+license = "Apache-2.0"
+total_parameters_b = 1.7
+active_parameters_b = 1.7
+multimodal = false
+enabled_for_download = true
+priority = 2
+revision = "ea980cb0a6c2ae4b936e82123acc929f1cec04c1"
+notes = "Genuine pretraining-only RTX 3060 control. Small engineering tests do not validate giant-model MoP economics."

@@ -1,325 +1,66 @@
-version: "0.2"
-project: Leviathan
-purpose: >-
-  Research specification for a hierarchical adaptive cognitive architecture combining
-  a pretrained semantic core, hardware-aware Mixture-of-Parameters routing, persistent
-  belief state, metacognitive routing, multiple reasoning/search modes, native actions,
-  verification, multi-tier memory, procedural compilation and safe continual learning.
-
-invariants:
-  - id: no_raw_core_updates
-    rule: "Raw experience MUST NOT directly update core parameters."
-  - id: provenance_required
-    rule: "Every promoted memory and learning sample MUST retain provenance."
-  - id: simulation_labeled
-    rule: "Simulated evidence MUST remain distinguishable from grounded evidence."
-  - id: learner_not_governor
-    rule: "The learner MUST NOT control final verifier policy, deployment signing, rollback, or promotion authority."
-  - id: rollback_required
-    rule: "Every parametric update MUST have a rollback path."
-  - id: goal_integrity
-    rule: "The original external goal MUST remain inspectable and immutable by the learner."
-  - id: pretrained_function_first
-    rule: "Architecture surgery MUST begin from a function-preserving or inert state before destructive migration."
-  - id: measured_efficiency
-    rule: "Mathematical sparsity is not an efficiency win unless real wall-clock and memory-traffic measurements agree."
-
-loops:
-  fast:
-    timescale: "milliseconds_to_seconds"
-    flow:
-      - perception
-      - adaptive_representation
-      - parameter_substrate
-      - compute_router
-      - belief_update
-      - short_horizon_prediction
-      - native_action
-  deliberative:
-    timescale: "seconds_to_hours"
-    flow:
-      - belief_state
-      - meta_controller
-      - reasoning_or_search
-      - hierarchical_plan
-      - tool_or_environment_action
-      - verification
-      - belief_revision
-  consolidation:
-    timescale: "minutes_to_weeks"
-    flow:
-      - trajectory_extraction
-      - verification_gate
-      - causal_credit
-      - novelty_utility_scoring
-      - memory_promotion
-      - optional_plastic_update
-      - regression_evaluation
-      - optional_core_consolidation
-
+version: '0.4'
+name: Leviathan consumer recurrent architecture
+single_cognitive_model: true
+historical_full_module_graph: spec/architecture-legacy.yaml
+# Historical graph is preserved, not an override of the current substrate.
+current_contracts:
+  substrate: spec/consumer-substrate.toml
+  cognition: spec/cognitive-kernel.toml
+  cells: spec/parameter-cells.toml
+  maturity: spec/architecture-maturity.toml
+  remaining_work: spec/consumer-checklist.json
 modules:
-  perception:
-    responsibilities:
-      - text
-      - vision
-      - audio
-      - environment_sensors
-    lessons:
-      - "BLT: adaptive representation granularity"
-      - "ShowUI: selective visual compute"
-      - "Qwen3-Omni: native multimodal representations"
-
-  adaptive_representation:
-    policy_inputs:
-      - entropy
-      - novelty
-      - task_relevance
-      - risk
-    outputs:
-      - latent_units
-      - resolution_metadata
-
   parameter_substrate:
-    canonical_pretrain: "deepseek-v4-pro-base"
-    r4_target: "routed_moe_ffn"
-    mechanism: "hardware-aligned mixture_of_parameters"
+    canonical_checkpoint: qwen3.8-27b
+    canonical_stage: posttrained
+    consumer_pretrain: qwen3-1.7b-base
+    target: dense_qwen_swiglu_and_recurrent_graft
     initial_tile_width: 128
+    fallback: original_selected_donor_FFN
     rules:
-      - "Do not route scalar parameters."
-      - "Do not average pretrained experts."
-      - "MoP-0 must exactly reconstruct the original routed expert computation."
-      - "Keep the shared expert, attention path and residual topology unchanged during R4."
-      - "Retire the original expert route only after retention and real-speed gates pass."
-    fallback: "original DeepSeek V4 MoE"
-
-  compute_router:
-    policy_inputs:
-      - context_difficulty
-      - uncertainty
-      - stakes
-      - hardware_load
-      - memory_traffic
-      - route_uncertainty
-    outputs:
-      - selected_model
-      - active_experts
-      - active_parameter_tiles
-      - route_granularity
-      - precision
-      - reasoning_budget
-    lessons:
-      - "LongCat: dynamic active compute"
-      - "Step/Kimi: sparse capacity"
-      - "Leviathan MoP: route hardware-aligned parameter tiles only when quality-per-compute improves"
-      - "hardware-aware routing"
-
-  belief_state:
-    fields:
-      - facts
-      - hypotheses
-      - causal_edges
-      - uncertainty
-      - provenance
-      - goals
-      - constraints
-      - contradictions
-      - active_plan
-      - failed_attempts
-      - open_questions
-
+      - Preserve original donor computation at zero influence.
+      - Keep attention, DeltaNet, positional encoding and causal caches unchanged.
+      - Never treat foreign packed quantized weights as plain matrices.
+      - Do not claim cell sparsity saves compute while the full dense donor still runs.
+  recurrent_fabric:
+    scope: selected_decoder_FFN_adapter_not_full_backbone
+    transition: shared_slot_transformer_plus_optional_ancestral_cells
+    inputs: [causal_donor_hidden_state, depth_local_cell_state, bounded_fast_state]
+    outputs: [zero_gated_residual, depth_trace, route_trace]
+    token_local: true
+    persistent_cross_request_state: false
+    default_ffns: [-1]
+  cell_ecology:
+    pipeline: [seed, propose, communicate, measure_disagreement, recruit, revise, commit]
+    cross_layer_routing: false
+    confidence_calibrated: false
+    independent_cells_are_agents: false
+  adaptive_representation:
+    scope: heuristic_plans_and_untrained_latent_slots
+    learned_semantic_branch_merge: false
+  belief_memory:
+    reference: src/leviathan/memory_ecology.py
+    prompt_integration: pending
+    promotion_requires_independent_evidence: true
+  cognitive_control:
+    reference: src/leviathan/cognitive_kernel.py
+    learned_algorithm_synthesis: pending
+    uncertainty_does_not_equal_message_variance: true
   world_model:
-    operations:
-      - estimate_state
-      - predict_forward
-      - compare_counterfactuals
-      - estimate_uncertainty
-      - estimate_information_gain
-      - retrospective_counterfactual
-    sources:
-      - Cosmos
-      - V-JEPA-2
-      - JEPA-WM
-
-  meta_controller:
-    modes:
-      - DIRECT
-      - RECALL
-      - SKILL
-      - REASON
-      - TREE_SEARCH
-      - EVOLVE
-      - SIMULATE
-      - EXPERIMENT
-      - TOOL
-      - PARALLELIZE
-      - ASK
-      - ACT
-      - WAIT_OBSERVE
-    utility_terms:
-      positive:
-        - expected_success_gain
-        - information_gain
-        - transfer_value
-      negative:
-        - compute_cost
-        - latency_cost
-        - risk_cost
-        - irreversibility
-        - hardware_congestion
-
-  planner:
-    hierarchy:
-      - goal
-      - semantic_subgoal
-      - operation
-      - action_chunk
-      - low_level_action
-    supports_dag: true
-
-  action_bus:
-    heads:
-      - text
-      - speech
-      - gui_region
-      - structured_api
-      - robot_continuous
-      - robot_tokenized
-      - image_video
-    rule: "Use native action geometry when available; do not force every action through text."
-
-  tool_registry:
-    preference_order:
-      - formal_solver
-      - deterministic_api
-      - database_query
-      - structured_ui_tree
-      - vision_grounding
-      - raw_coordinate
-    capabilities:
-      - retrieval
-      - schema_validation
-      - recovery
-      - parallel_execution
-
-  verifier:
-    trust_order:
-      - grounded_reality
-      - formal_proof
-      - deterministic_execution
-      - trusted_measurement
-      - independent_model
-      - learned_verifier
-      - same_model_self_critique
-    output:
-      - result
-      - confidence
-      - provenance
-      - independence_score
-      - calibration_profile
-
-  credit_assignment:
-    inputs:
-      - trajectory_dag
-      - process_rewards
-      - final_outcome
-      - verifier_events
-      - counterfactual_estimates
-    outputs:
-      - node_credit
-      - node_blame
-      - confidence
-
-  memory:
-    tiers:
-      working:
-        update_rate: fastest
-      episodic:
-        stores: "prediction-action-observation-verification trajectories"
-      semantic:
-        stores: "generalized claims with evidence links and contradictions"
-      procedural:
-        stores: "versioned executable skills with preconditions and verifiers"
-      parametric:
-        plastic:
-          update_rate: slow
-          rollback: required
-        core:
-          update_rate: slowest
-          rollback: required
-          shadow_evaluation: required
-
-  consolidation:
-    gates:
-      - verifier_quality
-      - provenance_quality
-      - novelty
-      - utility
-      - consistency
-      - transfer_value
-      - regression_safety
-    order:
-      - episodic
-      - semantic_or_procedural
-      - plastic_candidate
-      - sandbox_training
-      - regression_suite
-      - safety_suite
-      - calibration_suite
-      - shadow_deployment
-      - optional_core_promotion
-
-  curriculum:
-    objective_terms:
-      positive:
-        - learning_progress
-        - future_usefulness
-        - transfer
-        - verifier_reliability
-      negative:
-        - cost
-        - risk
-    restrictions:
-      - "Novelty alone is insufficient."
-      - "Simulator-only discoveries require grounded validation before real-world semantic promotion."
-
-serving:
-  recommended_features:
-    - continuous_batching
-    - paged_kv_cache
-    - prefix_cache
-    - speculative_decoding
-    - multi_token_prediction_where_supported
-    - expert_parallelism
-    - fused_parameter_tile_kernels
-    - fused_kernels
-    - cuda_graphs
-    - quantized_serving
-    - async_tools
-  metrics:
-    - time_to_first_token
-    - inter_token_latency
-    - single_stream_tokens_per_second
-    - aggregate_tokens_per_second
-    - active_parameters
-    - active_parameter_tiles
-    - hbm_bandwidth
-    - hbm_bytes_per_token
-    - kv_cache_bytes
-    - reasoning_tokens_per_task
-    - tool_calls_per_task
-    - wall_clock_task_time
-    - task_success_rate
-    - cost_per_successful_task
-
-research_blockers:
-  - stable_universal_belief_state
-  - open_world_verification
-  - long_horizon_causal_credit
-  - safe_frontier_scale_continual_learning
-  - cross_domain_metacognition
-  - simulator_grounding
-  - lifetime_calibration
-  - curriculum_integrity
-  - verifier_independence
-  - self_modification_governance
-  - parameter_tile_routing_without_hardware_regression
+    theory_induction: pending
+    simulation_is_ground_truth: false
+  learning:
+    candidate_only_graft_training: scripts/train_consumer_graft.py
+    raw_experience_updates_core: false
+    rollback_required: true
+    external_promotion_authority_required: true
+  execution:
+    nf4_baseline_loader: true
+    sparse_nf4_cell_kernel: false
+    self_speculative_reference: same_weights_shallow_deep_full_prefix_replay
+    production_mtp_cache_rollback: pending
+    custom_asic_implemented: false
+acceptance:
+  gates: [specification, executable, integrated, learned, demonstrated]
+  protected: [language_retention, ARC_Easy, ARC_Challenge, knowledge, math, coding, calibration, safety, wall_clock]
+  no_automatic_promotion: true

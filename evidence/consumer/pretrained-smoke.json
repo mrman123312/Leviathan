@@ -1,0 +1,45 @@
+{
+  "source_commit":"a10e04f800a3379492ebd27cb4e80df24fa8fee3",
+  "source_workflow_run":34012040364,
+  "torch":"2.10.0+cpu",
+  "transformers":"5.8.1",
+  "device":"cpu",
+  "quantization":"none",
+  "actual_pretrained":true,
+  "rtx3060_config_verified":"ea980cb0a6c2ae4b936e82123acc929f1cec04c1",
+  "qwen27b_config_verified":"1d4bf0f2ff6012fd82039f2fa52739d0dd7c60c0",
+  "profile":{"id":"qwen3-1.7b-base","repo_id":"Qwen/Qwen3-1.7B-Base","revision":"ea980cb0a6c2ae4b936e82123acc929f1cec04c1","stage":"base","architecture":"Qwen3ForCausalLM","model_type":"qwen3","hidden_size":2048,"intermediate_size":6144,"num_hidden_layers":28,"vocab_size":151936,"parameter_estimate_b":1.7,"context_limit":32768,"default_context":2048},
+  "prompt":{"input":"The capital of France is","completion":" Paris. Paris is the capital of France. Paris is the","elapsed_seconds":2.307745620999995,"generated_tokens":12},
+  "parity":{"max_abs_logit_difference":0.0,"argmax_all_positions":true,"graft_paths":["model.layers.27.mlp"]},
+  "arc_easy_baseline":{
+    "scope":"first test examples, smoke only, NOT full ARC-Easy or lm-eval-equivalent",
+    "protocol":"Question/Answer raw completion; sum/token-normalized option log probabilities",
+    "dataset_fingerprint":"b019ca21ba59e1f3","n":8,"correct":4,"token_normalized_correct":4,"seconds":11.736823811999997,
+    "records":[
+      {"id":"Mercury_417466","prediction":"A","token_normalized_prediction":"A","gold":"A","correct":true,"token_normalized_correct":true},
+      {"id":"Mercury_7081673","prediction":"A","token_normalized_prediction":"A","gold":"B","correct":false,"token_normalized_correct":false},
+      {"id":"Mercury_7239733","prediction":"C","token_normalized_prediction":"D","gold":"D","correct":false,"token_normalized_correct":true},
+      {"id":"NYSEDREGENTS_2015_4_8","prediction":"C","token_normalized_prediction":"C","gold":"D","correct":false,"token_normalized_correct":false},
+      {"id":"Mercury_7037258","prediction":"A","token_normalized_prediction":"B","gold":"B","correct":false,"token_normalized_correct":true},
+      {"id":"CSZ20679","prediction":"C","token_normalized_prediction":"C","gold":"C","correct":true,"token_normalized_correct":true},
+      {"id":"Mercury_182158","prediction":"A","token_normalized_prediction":"B","gold":"A","correct":true,"token_normalized_correct":false},
+      {"id":"Mercury_7216668","prediction":"C","token_normalized_prediction":"D","gold":"C","correct":true,"token_normalized_correct":false}
+    ]
+  },
+  "arc_easy_zero_graft":{
+    "scope":"first test examples, smoke only, NOT full ARC-Easy or lm-eval-equivalent",
+    "protocol":"Question/Answer raw completion; sum/token-normalized option log probabilities",
+    "dataset_fingerprint":"b019ca21ba59e1f3","n":8,"correct":4,"token_normalized_correct":4,"seconds":12.563994179999995,
+    "records":[
+      {"id":"Mercury_417466","prediction":"A","token_normalized_prediction":"A","gold":"A","correct":true,"token_normalized_correct":true},
+      {"id":"Mercury_7081673","prediction":"A","token_normalized_prediction":"A","gold":"B","correct":false,"token_normalized_correct":false},
+      {"id":"Mercury_7239733","prediction":"C","token_normalized_prediction":"D","gold":"D","correct":false,"token_normalized_correct":true},
+      {"id":"NYSEDREGENTS_2015_4_8","prediction":"C","token_normalized_prediction":"C","gold":"D","correct":false,"token_normalized_correct":false},
+      {"id":"Mercury_7037258","prediction":"A","token_normalized_prediction":"B","gold":"B","correct":false,"token_normalized_correct":true},
+      {"id":"CSZ20679","prediction":"C","token_normalized_prediction":"C","gold":"C","correct":true,"token_normalized_correct":true},
+      {"id":"Mercury_182158","prediction":"A","token_normalized_prediction":"B","gold":"A","correct":true,"token_normalized_correct":false},
+      {"id":"Mercury_7216668","prediction":"C","token_normalized_prediction":"D","gold":"C","correct":true,"token_normalized_correct":false}
+    ]
+  },
+  "full_27b_executed":false,"rtx3060_executed":false,"nf4_executed":false
+}

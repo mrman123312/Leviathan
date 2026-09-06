@@ -1,7 +1,7 @@
 version = "0.1"
 name = "Leviathan single-model cognitive kernel"
 single_cognitive_model = true
-canonical_model_id = "deepseek-v4-pro-base"
+canonical_model_id = "qwen3.8-27b"
 
 [invariant]
 semantic_model_count = 1
@@ -13,15 +13,7 @@ compression_may_raise_trust = false
 raw_experience_updates_core = false
 
 [pipeline]
-stages = [
-  "representation_compiler",
-  "cognitive_program_compiler",
-  "dynamic_cognitive_graph",
-  "theory_prediction",
-  "evidence_update",
-  "learning_router",
-  "cognitive_compilation"
-]
+stages = ["representation_compiler", "cognitive_program_compiler", "dynamic_cognitive_graph", "theory_prediction", "evidence_update", "learning_router", "cognitive_compilation"]
 
 [representation]
 kinds = ["token", "concept", "entity_event", "graph", "causal", "symbolic", "spatial", "temporal", "procedural"]
@@ -29,11 +21,7 @@ preserve_exact_input = true
 online_representation_invention = "future_learned_stage"
 
 [operators]
-allowed = [
-  "encode", "abstract", "expand", "recall", "bind", "compare",
-  "hypothesize", "predict", "simulate", "search", "verify",
-  "update_belief", "plan", "execute", "ask", "write_memory", "compile_skill"
-]
+allowed = ["encode", "abstract", "expand", "recall", "bind", "compare", "hypothesize", "predict", "simulate", "search", "verify", "update_belief", "plan", "execute", "ask", "write_memory", "compile_skill"]
 operator_outputs_are_not_independent_agents = true
 
 [graph]
