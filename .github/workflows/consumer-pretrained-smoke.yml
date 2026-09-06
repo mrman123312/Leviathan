@@ -1,0 +1,37 @@
+name: consumer-pretrained-smoke
+on:
+  push:
+    branches: [qwen-nrdf-consumer]
+    paths: ['.github/workflows/consumer-pretrained-smoke.yml']
+permissions:
+  contents: read
+jobs:
+  base-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      OMP_NUM_THREADS: '2'
+      MKL_NUM_THREADS: '2'
+      HF_HUB_DISABLE_PROGRESS_BARS: '1'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install CPU test dependencies
+        run: |
+          python -m pip install --index-url https://download.pytorch.org/whl/cpu 'torch==2.10.0'
+          python -m pip install -e . numpy 'transformers==5.8.1' accelerate safetensors datasets
+      - name: Run actual pinned 1.7B base and ARC smoke
+        run: |
+          set -o pipefail
+          mkdir -p evidence/consumer
+          python scripts/check_consumer_hf.py --actual-base --arc-limit 8 --output evidence/consumer/pretrained-smoke.json 2>&1 | tee evidence/consumer/pretrained-log.txt
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: pretrained-evidence-${{ github.sha }}
+          path: evidence/consumer/
+          retention-days: 14
