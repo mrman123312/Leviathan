@@ -1,0 +1,24 @@
+{
+  "repository": "fchollet/ARC-AGI",
+  "revision": "399030444e0ab0cc8b4e199870fb20b863846f34",
+  "license": "Apache-2.0",
+  "files": {
+    "training_tasks.json": {
+      "sha256": "3ffd82f1d20b0701d7710290d5a409eada06c28f54804f65e004aaa662aad81c",
+      "tasks": 400
+    },
+    "training_labels.json": {
+      "sha256": "131a8eaf96199b795a3c60d3be19b118847a0015ae7d8723cc01799642d16000",
+      "tasks": 400
+    },
+    "evaluation_tasks.json": {
+      "sha256": "56e9ec5017b8a0109fadba4651177cea9e6691ce7cd6bc21721d3dbf1cd8370a",
+      "tasks": 400
+    },
+    "evaluation_labels.json": {
+      "sha256": "e97693b0899f8f3fcc87d58c3891329cad63ed054489f9b0d440329de0bb9945",
+      "tasks": 400
+    }
+  },
+  "protocol": "test outputs separated; original repository allows 3 attempts; this harness reports stricter pass@1 and pass@2"
+}

@@ -1,0 +1,32 @@
+{
+  "archive_sha256": "d3cf7a2470ab167bd04b8a7dca23042826e66abe3610920c5999e66a23d95db1",
+  "source_sha256": {
+    "README_STRENGTH.md": "21e04ab20883c8eb3048e48bdbffb410732ff7e4a7590bc632f59b7ec8fb1f0c",
+    "RUN_ARC_AGI_1.bat": "200c65a92b1a1cec26923138d5c7bd2bf335bb9e7dc80d957c200792bcc54b95",
+    "RUN_ARC_AGI_1_FULL.bat": "df41e29d4e9480b729f02ed632b71c838f9a95b288d14184388bca1677194b98",
+    "docs/25-strength-arc-agi.md": "8bf6fc742a3e9670a960d8d1b0354d2c2f1a166b62ea4db8f6815d06ef32409d",
+    "scripts/check_strength_native.py": "f3d6e8ba701a434d5d3c0369e983abc16b778e02ab2a880ea23199cbc8670e3d",
+    "scripts/export_strength_data.py": "a286866d6d374024a936c9e33280b6ecd081db2a50c5048bf4dab7fa0f4a0b25",
+    "scripts/run_strength_arc.py": "c8e01df56ba1ab61c5b1c26da22d3812d4db2b60e620e3bf80eb4f47ac198e66",
+    "spec/strength-arc.toml": "f911ad715f3e30d700b7d7ba8523e1857c980b267befa2e5aa2c78b490442edf",
+    "src/leviathan/strength/__init__.py": "1686a9416f042b2b198c1c934c8341080300787d75a073fcea35986c84bf5ef3",
+    "src/leviathan/strength/contracts.py": "154b953202679e0641c409ca987646bb541b82ec101a6ed2b4241649862d420f",
+    "src/leviathan/strength/evaluation.py": "926e888c8d5a2864ebc0d2a4d6320995f01452442bb5597245da37717d43d912",
+    "src/leviathan/strength/grid.py": "3639456d0800637a9bc313b106ab5b2fb54fe2535c27378692ca193342f64ae5",
+    "src/leviathan/strength/memory.py": "eda2d2d6b76e60c1c7accd4a1dd443a665f50d5ca546ae4c24c9e2a2bc206ed1",
+    "src/leviathan/strength/neural.py": "15af6a4a166bfd2b086e0cc8c465aef74f28ef016467633820846f84ad7f6e8d",
+    "src/leviathan/strength/programs.py": "9743f578942d78f484048bc287b155a66222fa41f3ef9f97c7a93d6f853ea1bc",
+    "src/leviathan/strength/proposer.py": "f6a86233bda3326313299c23ccf6de1664b4e39858682a805a744f3ee7512991",
+    "src/leviathan/strength/runtime.py": "9076b5f18f2e4a786fa747da7ced94b85534922a6380a759f75c780976176066",
+    "src/leviathan/strength/safe_python.py": "a34c73e42c015fe216650ecaea02375c3bf73769ac6d92c380e9a1dddd11f749",
+    "src/leviathan/strength/search.py": "57752098c549f4bdb33070260fe566bd32676054d64c4dbfd71b7e1b752313fb",
+    "tests/test_strength_contracts.py": "64ab402f541fc08f19281a8ce6cd9cc848140f3c0cb002989dd20f14fe75bcb2",
+    "tests/test_strength_evaluation.py": "d797c1538e4e0953b5786713de0ee2c8c979c928c39e2e635e22804ac5068fb2",
+    "tests/test_strength_gates.py": "e59392b534a35a7277b65a9c1be5e1be9cde196cb54aa0d7bd01f86255605b96",
+    "tests/test_strength_memory.py": "709ba1427efbfcd5cdb8d1803f854a391144d872fb750d865adf85541b1c06fc",
+    "tests/test_strength_neural.py": "7ed253cba7dfa6331c0713c840e66c44e36ff39c1fb6e229e986353878726aae",
+    "tests/test_strength_runtime.py": "ec70bacbdd8f3c3206cf9a1642b7d6ee2568f0182624ccaeff50fc515ef31e12",
+    "tests/test_strength_safe_python.py": "a595325cebfe0013e5bbd35d5a4d7f6a6df0b236ba4ade8395ead271ec8520e8",
+    "tests/test_strength_search.py": "21d4466af29fbeb95af30ac4f472b0703bc406450d0bfdf08515f4215686804d"
+  }
+}
