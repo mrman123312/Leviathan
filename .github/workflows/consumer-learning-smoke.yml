@@ -1,0 +1,37 @@
+name: consumer-learning-smoke
+on:
+  push:
+    branches: [qwen-nrdf-consumer]
+    paths: ['.github/workflows/consumer-learning-smoke.yml']
+permissions:
+  contents: read
+jobs:
+  train-base-graft:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      OMP_NUM_THREADS: '2'
+      MKL_NUM_THREADS: '2'
+      HF_HUB_DISABLE_PROGRESS_BARS: '1'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install CPU training dependencies
+        run: |
+          python -m pip install --index-url https://download.pytorch.org/whl/cpu 'torch==2.10.0'
+          python -m pip install -e . numpy 'transformers==5.8.1' accelerate safetensors datasets
+      - name: Train only new parameters and evaluate protected WikiText passages
+        run: |
+          set -o pipefail
+          mkdir -p evidence/consumer/learning
+          python scripts/check_consumer_learning.py --steps 80 --output evidence/consumer/learning 2>&1 | tee evidence/consumer/learning/execution.log
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: learning-evidence-${{ github.sha }}
+          path: evidence/consumer/learning/
+          retention-days: 14
