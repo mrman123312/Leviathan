@@ -1,7 +1,7 @@
-"""Dense-Qwen ancestral cells plus bounded, token-local neural discussion.
+"""Dense-Qwen ancestral cells with bounded token-local neural discussion.
 
-Expert boundaries within ONE FFN can be removed. Cross-layer recruitment is not
-claimed: matching tensor dimensions does not establish compatible representations.
+Cross-layer recruitment is not claimed: equal dimensions do not prove compatible
+representations. Donor tensors are views, never a second registered model.
 """
 from __future__ import annotations
 from dataclasses import dataclass
@@ -11,9 +11,7 @@ from torch import Tensor, nn
 from torch.nn import functional as F
 from .quantization import slice_weight, supports_slicing
 
-
 class SwiGLUCells:
-    """A view of the donor, not a registered duplicate of its parameters."""
     def __init__(self, donor: nn.Module, width: int = 128):
         self.donor = donor
         for name in ("gate_proj", "up_proj", "down_proj"):
@@ -30,7 +28,6 @@ class SwiGLUCells:
         if donor.down_proj.in_features != self.intermediate or donor.down_proj.out_features != self.hidden:
             raise ValueError("Down geometry mismatch")
         self.width, self.count = width, self.intermediate // width
-
     def body(self, x: Tensor, ids: Tensor) -> Tensor:
         if x.ndim != 2 or ids.ndim != 1 or len(ids) != len(x):
             raise ValueError("Expected aligned [assignments, hidden] and [assignments]")
@@ -49,7 +46,6 @@ class SwiGLUCells:
             out = F.linear(act, slice_weight(down, cols=region).to(x.dtype))
             result = result.index_copy(0, idx, out)
         return result
-
     def reconstruct(self, x: Tensor) -> Tensor:
         flat = x.reshape(-1, self.hidden)
         result = torch.zeros_like(flat)
@@ -59,7 +55,6 @@ class SwiGLUCells:
         if self.donor.down_proj.bias is not None:
             result = result + self.donor.down_proj.bias.to(result.dtype)
         return result.reshape(x.shape)
-
 
 @dataclass(frozen=True)
 class EcologyConfig:
@@ -72,7 +67,6 @@ class EcologyConfig:
     recruit_threshold: float = 0.15
     coalition_size: int = 8
     macro_top_k: int = 0
-
     def __post_init__(self):
         if min(self.latent_dim, self.seed_cells, self.max_cells, self.max_neighbors,
                self.rounds, self.coalition_size) < 1:
@@ -83,7 +77,6 @@ class EcologyConfig:
             raise ValueError("Reference supports at most two rounds")
         if not math.isfinite(self.recruit_threshold) or self.recruit_threshold < 0:
             raise ValueError("Invalid disagreement threshold")
-
 
 @dataclass
 class CellResult:
@@ -96,14 +89,8 @@ class CellResult:
     mask: Tensor
     recruited: int
 
-
 class CellEcology(nn.Module):
-    """One layer-local learned membrane with real ancestral tile execution.
-
-    State is supplied by a caller for a single token cohort. Never stored on this
-    module. Caller may carry it between depth loops, not between unrelated requests.
-    Message disagreement and confidence are uncalibrated research signals.
-    """
+    """Explicit per-token depth state; confidence/disagreement remain uncalibrated."""
     def __init__(self, bank: SwiGLUCells, config: EcologyConfig = EcologyConfig()):
         super().__init__()
         self.bank, self.config = bank, config
@@ -122,7 +109,6 @@ class CellEcology(nn.Module):
         self.state_gate = nn.Parameter(torch.tensor(0.0))
         self.recruit_gate = nn.Parameter(torch.tensor(0.0))
         self.last_recruited = 0
-
     def _select(self, scores: Tensor, k: int) -> Tensor:
         if self.config.macro_top_k:
             c = self.config.coalition_size
@@ -135,7 +121,6 @@ class CellEcology(nn.Module):
                        == chosen[:, None, :]).any(-1).repeat_interleave(c, -1)[:, :self.bank.count]
             scores = scores.masked_fill(~allowed, -torch.inf)
         return scores.topk(k, -1).indices
-
     def _discuss(self, controls: Tensor, mask: Tensor) -> Tensor:
         msg = self.message(controls)
         scores = msg @ msg.transpose(-1, -2) / math.sqrt(msg.shape[-1])
@@ -146,15 +131,13 @@ class CellEcology(nn.Module):
         values_ = msg[:, None].expand(-1, msg.shape[1], -1, -1)
         gathered = values_.gather(2, neighbors[..., None].expand(-1, -1, -1, msg.shape[-1]))
         received = (weights[..., None] * gathered).sum(-2)
-        return torch.tanh(controls + torch.tanh(self.communication_gate) * self.peer(received))
-
+        return controls + torch.tanh(self.communication_gate) * torch.tanh(self.peer(received))
     @staticmethod
     def _disagreement(controls: Tensor, mask: Tensor) -> Tensor:
         weights = mask.to(controls.dtype)[..., None]
         mean = (controls * weights).sum(1) / weights.sum(1).clamp_min(1)
         return ((controls - mean[:, None]).square() * weights).sum((1, 2)) / (
             weights.sum(1).squeeze(-1).clamp_min(1) * controls.shape[-1])
-
     def forward(self, hidden: Tensor, latent: Tensor, state: Tensor | None = None) -> CellResult:
         n, d = latent.shape
         if hidden.shape != (n, self.bank.hidden):
@@ -189,20 +172,29 @@ class CellEcology(nn.Module):
             control = torch.cat((control, more_control), 1)
             recruited = int(valid.sum().detach())
             if self.config.rounds == 2:
-                peer_mask = mask.clone()
-                revised = self._discuss(control, peer_mask)
-                control = control + torch.tanh(self.recruit_gate) * (revised - control)
-        flat_mask = mask.reshape(-1)
-        repeated = hidden[:, None].expand(-1, ids.shape[1], -1).reshape(-1, self.bank.hidden)
-        body = hidden.new_zeros(len(repeated), self.bank.hidden)
-        valid_rows = flat_mask.nonzero(as_tuple=True)[0]
-        body = body.index_copy(0, valid_rows, self.bank.body(repeated[valid_rows], ids.reshape(-1)[valid_rows]))
-        body_latent = self.body_down(body.to(self.body_down.weight.dtype)).reshape(n, -1, d)
-        coefficient = scores.gather(1, ids).masked_fill(~mask, -torch.inf).softmax(-1)
-        factors = torch.ones_like(coefficient)
+                revised = self._discuss(control, mask)
+                control = control + (torch.tanh(self.recruit_gate)
+                                     * valid.any(-1)[:, None, None].to(control.dtype)
+                                     * (revised - control))
+        # Separate seed GEMMs: observing recruits must not change seed batch shapes.
+        def projected_bodies(selected_ids: Tensor, selected_mask: Tensor) -> Tensor:
+            repeated = hidden[:, None].expand(-1, selected_ids.shape[1], -1).reshape(-1, self.bank.hidden)
+            result = hidden.new_zeros(len(repeated), self.bank.hidden)
+            rows = selected_mask.reshape(-1).nonzero(as_tuple=True)[0]
+            result = result.index_copy(0, rows, self.bank.body(
+                repeated[rows], selected_ids.reshape(-1)[rows]))
+            return self.body_down(result.to(self.body_down.weight.dtype)).reshape(n, -1, d)
+        seed_bodies = projected_bodies(ids[:, :k], mask[:, :k])
+        # Recruits use their own differentiable scores; seed mass stays unchanged.
+        # Discrete top-k identities still require a routing learning objective.
+        seed_coefficients = scores.gather(1, ids[:, :k]).softmax(-1)
+        proposal = ((seed_bodies + control[:, :k]) * seed_coefficients[..., None]).sum(1)
         if extra:
-            factors = torch.cat((factors[:, :k], factors[:, k:] * torch.tanh(self.recruit_gate)), 1)
-        proposal = ((body_latent + control) * (coefficient * factors)[..., None]).sum(1)
+            recruited_bodies = projected_bodies(ids[:, k:], mask[:, k:])
+            rec_coefficients = rscores.gather(1, ids[:, k:]).softmax(-1)
+            rec_coefficients = rec_coefficients * mask[:, k:].to(rec_coefficients.dtype)
+            recruited_proposal = ((recruited_bodies + control[:, k:]) * rec_coefficients[..., None]).sum(1)
+            proposal = proposal + torch.tanh(self.recruit_gate) * recruited_proposal
         old = state.gather(1, ids[..., None].expand(-1, -1, d))
         new = self.state_cell(control.reshape(-1, d), old.reshape(-1, d)).reshape_as(old)
         new = torch.where(mask[..., None], new, old)
