@@ -1,0 +1,49 @@
+name: consumer-reference
+on:
+  push:
+    branches: [qwen-nrdf-consumer]
+  pull_request:
+    paths: ['src/**', 'tests/**', 'scripts/**', 'spec/**', '.github/workflows/consumer-reference.yml']
+permissions:
+  contents: read
+concurrency:
+  group: consumer-reference-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  reference:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      OMP_NUM_THREADS: '2'
+      MKL_NUM_THREADS: '2'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Package exact tracked source for reproducibility
+        run: |
+          mkdir -p evidence
+          git archive --format=zip HEAD -o evidence/source.zip
+          git rev-parse HEAD > evidence/commit.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: source-capsule-${{ github.sha }}
+          path: evidence/
+          retention-days: 7
+      - name: Install CPU reference dependencies
+        run: |
+          python -m pip install --index-url https://download.pytorch.org/whl/cpu 'torch>=2.7'
+          python -m pip install -e . numpy
+      - name: Test all executable architecture paths
+        run: |
+          python scripts/validate_model_registry.py
+          python -m unittest discover -s tests -v 2>&1 | tee evidence/tests.txt
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: test-evidence-${{ github.sha }}
+          path: evidence/*.txt
+          retention-days: 14
