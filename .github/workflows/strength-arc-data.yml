@@ -1,0 +1,41 @@
+name: strength-arc-data
+on:
+  push:
+    branches: [strength-arc-agi]
+    paths: [.github/workflows/strength-arc-data.yml]
+permissions:
+  contents: read
+jobs:
+  pinned-data:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: fchollet/ARC-AGI
+          ref: 399030444e0ab0cc8b4e199870fb20b863846f34
+          path: upstream
+          persist-credentials: false
+      - name: Export task views and separate scoring labels
+        run: |
+          python - <<'PY'
+          import json,hashlib,pathlib,shutil
+          root=pathlib.Path('arc-data');root.mkdir()
+          manifest={'repository':'fchollet/ARC-AGI','revision':'399030444e0ab0cc8b4e199870fb20b863846f34','license':'Apache-2.0','files':{},'protocol':'test outputs separated; original repository allows 3 attempts; this harness reports stricter pass@1 and pass@2'}
+          for split in ('training','evaluation'):
+              tasks={};labels={}
+              for p in sorted(pathlib.Path('upstream/data',split).glob('*.json')):
+                  task=json.loads(p.read_text());labels[p.stem]=[r['output'] for r in task['test']]
+                  tasks[p.stem]={'train':task['train'],'test':[{'input':r['input']} for r in task['test']]}
+              for name,obj in ((split+'_tasks.json',tasks),(split+'_labels.json',labels)):
+                  raw=json.dumps(obj,separators=(',',':')).encode();(root/name).write_bytes(raw)
+                  manifest['files'][name]={'sha256':hashlib.sha256(raw).hexdigest(),'tasks':len(obj)}
+          shutil.copyfile('upstream/LICENSE',root/'LICENSE')
+          (root/'MANIFEST.json').write_text(json.dumps(manifest,indent=2))
+          print(json.dumps(manifest,indent=2))
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pinned-arc-agi-1
+          path: arc-data/
+          retention-days: 14
