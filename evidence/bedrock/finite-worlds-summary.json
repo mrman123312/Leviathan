@@ -1,0 +1,15 @@
+{
+  "scope": "declared finite deterministic grammars; not general novel-world competence",
+  "seed": 602,
+  "training_steps": 0,
+  "neural_model_calls": 0,
+  "language_benchmarks": {"ARC-Easy":null,"WikiText":null,"GSM8K":null},
+  "evaluation_protocol": "explore then fresh-validation then unseen-action transfer; no transfer labels enter runtime",
+  "elapsed_seconds": 1.238610477000293,
+  "claim": "No-weight-update hypothesis elimination, experiment selection, persistence and executable skill transfer",
+  "families": {
+    "affine_mod11": {"instances":12,"validated":12,"unseen_queries":84,"transfer_correct":84,"mean_discovery_queries":2,"mean_total_observations":4,"mean_fixed_order_queries":2},
+    "bit_permutation": {"instances":12,"validated":12,"unseen_queries":36,"transfer_correct":36,"mean_discovery_queries":3,"mean_total_observations":5,"mean_fixed_order_queries":3},
+    "boolean_circuit": {"instances":12,"validated":12,"unseen_queries":17,"transfer_correct":17,"mean_discovery_queries":4.583333333333333,"mean_total_observations":6.583333333333333,"mean_fixed_order_queries":7.666666666666667}
+  }
+}
