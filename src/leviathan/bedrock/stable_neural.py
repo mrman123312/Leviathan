@@ -1,7 +1,7 @@
 """Numerically guarded frozen recurrence for real half-precision pretrained models.
 
 This module keeps the original FrozenExecutor as a historical/raw control and adds a
-manifold-constrained recurrence path. It creates no parameters and performs no fit.
+donor-input-bounded recurrence path. It creates no parameters and performs no fit.
 The central repair is simple: do not feed the *exit* of a pretrained layer band
 straight back into a much earlier layer. Re-enter near the actual donor band input,
 probe the donor band there, and apply only the resulting bounded innovation at the
@@ -19,6 +19,7 @@ from torch import Tensor
 
 from .cells import CellPolicy, FrozenCellBank
 from .contracts import Meter, stable_hash
+from .decisions import StopPolicy, PredictionSummary, summarize, compare, initial_stop, stable_stop
 from .neural import (
     FastAssociations,
     FrozenExecutor,
@@ -45,8 +46,18 @@ class StableFrozenPolicy(FrozenPolicy):
     reentry_radius: float = 0.08
     pointwise_multiplier: float = 2.0
     nonfinite_fallback: bool = True
+    prediction_stop: StopPolicy | None = None
+    branch_direction: str = "trajectory"
+    branch_sign: int = 1
+    branch_mix: float = 0.0
 
     def __post_init__(self):
+        if self.branch_direction not in {"trajectory", "causal_context", "orthogonal_context"}:
+            raise ValueError("Unknown branch direction")
+        if self.branch_sign not in {-1, 1} or not 0 <= self.branch_mix <= 1:
+            raise ValueError("Invalid branch sign/mix")
+        if self.prediction_stop is not None and not isinstance(self.prediction_stop, StopPolicy):
+            raise TypeError("prediction_stop requires a typed StopPolicy")
         if self.feedback not in {"transported", "anchored_difference", "repeat"}:
             raise ValueError("Unknown stable feedback rule")
         if self.exact_ffn_cache and self.cells.mode != "off":
@@ -91,8 +102,28 @@ def transport_reentry(entry: Tensor, target: Tensor, *, radius: float,
     return guarded
 
 
+def branch_target(entry: Tensor, current: Tensor, policy: StableFrozenPolicy) -> Tensor:
+    """Deterministic, per-position causal alternatives from inherited activations.
+
+    Signed context directions are not asserted to be semantic hypotheses. Previous
+    token states contain no future information. No random/new learned vector exists.
+    Radius projection is applied later by transport_reentry.
+    """
+    if policy.branch_direction == "trajectory" or policy.branch_mix == 0:
+        return current
+    e=entry.float();base=current.float()-e
+    previous=torch.cat((e[:,:1],e[:,:-1]),dim=1)
+    direction=previous-e
+    if policy.branch_direction == "orthogonal_context":
+        axis=torch.nn.functional.normalize(base,dim=-1)
+        direction=direction-(direction*axis).sum(-1,keepdim=True)*axis
+    direction=torch.nn.functional.normalize(direction,dim=-1)*e.norm(dim=-1,keepdim=True)
+    # Remain FP32 until the checked projection/cast, avoiding FP16 intermediate overflow.
+    return e+(1-policy.branch_mix)*base+policy.branch_mix*policy.branch_sign*direction
+
+
 class StableFrozenExecutor(FrozenExecutor):
-    """Frozen executor with manifold-constrained re-entry and fail-closed recurrence.
+    """Frozen executor with donor-input-bounded re-entry and fail-closed recurrence.
 
     Neutral policies still execute the untouched donor path. For transported policies:
 
@@ -113,6 +144,7 @@ class StableFrozenExecutor(FrozenExecutor):
             meter: Meter | None = None, request_id: str = "ephemeral",
             fast: FastAssociations | None = None, **kwargs):
         if not isinstance(policy, StableFrozenPolicy):
+            # Historical/raw policies remain available as explicit controls.
             return super().run(input_ids, policy=policy, meter=meter, request_id=request_id,
                                fast=fast, **kwargs)
         meter = meter or Meter()
@@ -129,6 +161,8 @@ class StableFrozenExecutor(FrozenExecutor):
             end = policy.end if policy.end >= 0 else n + policy.end
             if not 0 <= start <= end < n:
                 raise ValueError("Decoder band is outside model")
+            if policy.prediction_stop is not None and end != n-1:
+                raise ValueError("Prediction stopping requires the final decoder band; no untrained logit lens")
             meter.charge("model_calls")
             meter.charge("layer_calls", n)
             trace = {
@@ -144,6 +178,13 @@ class StableFrozenExecutor(FrozenExecutor):
                 "route_status": "experimental",
                 "nonfinite_replay_fallbacks": 0,
                 "reentry_relative_l2_max": [],
+                "prediction_head_calls": 0,
+                "prediction_probe_positions": 0,
+                "prediction_stopping": policy.prediction_stop is not None,
+                "prediction_steps": [],
+                "branch_direction": policy.branch_direction,
+                "branch_sign": policy.branch_sign,
+                "attention_rows_physically_compacted": False,
             }
             if policy.neutral:
                 result = self.model(input_ids=input_ids, use_cache=False, **kwargs)
@@ -212,6 +253,39 @@ class StableFrozenExecutor(FrozenExecutor):
                     stable = torch.zeros_like(active, dtype=torch.long)
                     steps = torch.ones_like(stable)
                     delta_trace = []
+                    prediction_previous = None
+                    prediction_streak = torch.zeros_like(steps)
+                    def probe(hidden, previous=None):
+                        norm=getattr(self.decoder,"norm",None)
+                        head=getattr(self.model,"lm_head",None)
+                        if head is None:
+                            raise TypeError("Prediction stopping requires the owning model output head")
+                        stop_policy=policy.prediction_stop
+                        flat_hidden=hidden.reshape(-1,hidden.shape[-1])
+                        snapshots=[];metrics=[]
+                        for first in range(0,len(flat_hidden),stop_policy.chunk_positions):
+                            last=min(first+stop_policy.chunk_positions,len(flat_hidden))
+                            h=flat_hidden[first:last]
+                            logits=head(norm(h) if norm is not None else h).float()
+                            trace["prediction_head_calls"]+=1
+                            trace["prediction_probe_positions"]+=last-first
+                            if previous is None:
+                                snapshots.append(summarize(logits,stop_policy.topk))
+                            else:
+                                old=PredictionSummary(**{k:getattr(previous,k)[first:last]
+                                    for k in previous.__dataclass_fields__})
+                                snap,metric=compare(old,logits,topk=stop_policy.topk)
+                                snapshots.append(snap);metrics.append(metric)
+                        combined=PredictionSummary(**{k:torch.cat([getattr(a,k) for a in snapshots])
+                            for k in PredictionSummary.__dataclass_fields__})
+                        signals={k:torch.cat([a[k] for a in metrics]).reshape(steps.shape)
+                                 for k in metrics[0]} if metrics else None
+                        return combined,signals
+                    if policy.prediction_stop is not None:
+                        prediction_previous,_=probe(current)
+                        initial=initial_stop(prediction_previous,policy.prediction_stop).reshape(steps.shape)
+                        active=active & ~initial
+                        trace["initial_prediction_halted_positions"]=int(initial.sum())
                     in_replay = True
                     try:
                         for recurrence_index in range(1, policy.passes):
@@ -222,7 +296,7 @@ class StableFrozenExecutor(FrozenExecutor):
                                 if policy.feedback == "transported":
                                     transformed = transport_reentry(
                                         band_entry,
-                                        current,
+                                        branch_target(band_entry,current,policy),
                                         radius=policy.reentry_radius,
                                         pointwise_multiplier=policy.pointwise_multiplier,
                                     )
@@ -278,10 +352,28 @@ class StableFrozenExecutor(FrozenExecutor):
 
                             delta = (proposed.float() - previous.float()).norm(dim=-1) / previous.float().norm(dim=-1).clamp_min(1e-12)
                             current = torch.where(active[..., None], proposed, current)
+                            if policy.prediction_stop is not None:
+                                prediction_now,signals=probe(current,prediction_previous)
+                                stable_prediction=stable_stop(signals,delta,policy.prediction_stop)
+                                prediction_streak=torch.where(stable_prediction,prediction_streak+1,
+                                                              torch.zeros_like(prediction_streak))
+                                enough=(steps+1>=policy.prediction_stop.min_passes)
+                                predicted_halt=enough & (prediction_streak>=policy.prediction_stop.patience)
+                                trace["prediction_steps"].append({
+                                    "pass":recurrence_index+1,
+                                    "active_positions_before":int(active.sum()),
+                                    "halted_positions":int((active & predicted_halt).sum()),
+                                    "max_coarse_js":float(signals["coarse_js"].max()),
+                                    "max_top_logprob_change":float(signals["max_top_logprob_change"].max()),
+                                    "max_entropy_change":float(signals["entropy_change"].max())})
+                                prediction_previous=prediction_now
+                            else:
+                                predicted_halt=torch.zeros_like(active)
                             steps = steps + active.long()
                             stable = torch.where(delta <= policy.halt_delta, stable + 1, torch.zeros_like(stable))
                             if policy.halt_delta > 0:
                                 active = active & (stable < policy.halt_patience)
+                            active=active & ~predicted_halt
                             delta_trace.append(float(delta.max()))
                             trace["passes_executed"] += 1
                     finally:

@@ -7,7 +7,10 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 
 def main():
-    manifest = json.loads((ROOT / 'evidence/bedrock/local-execution.json').read_text())
+    path = ROOT / 'evidence/bedrock-v3/local-execution.json'
+    if not path.exists():
+        path = ROOT / 'evidence/bedrock/local-execution.json'
+    manifest = json.loads(path.read_text())
     mismatches = []
     for name, expected in manifest['source_files_sha256'].items():
         path = ROOT / name

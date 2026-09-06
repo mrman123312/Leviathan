@@ -1,0 +1,31 @@
+{
+  "scope": "local CPU correctness; no pretrained model or GPU loaded",
+  "base_commit": "ce55d2e9ca9b8d226090234f9e00e27e100d6f8a",
+  "tests": {"run": 179, "failures": 0, "errors": 0, "skipped": 0},
+  "torch": "2.10.0+cpu",
+  "python": "3.13.5 (main, Jul 15 2026, 20:25:40) [GCC 14.2.0]",
+  "training_steps": 0,
+  "new_neural_parameters": 0,
+  "cuda_available": false,
+  "full_checkpoint_loaded": false,
+  "native_transformers_test": "not_run_locally_dependency_missing",
+  "new_language_scores": {},
+  "source_files_sha256": {
+    "scripts/check_bedrock_v3_hf.py": "bc46cbc811b0d5008307556a6cf029eb7e8bb6dccbbd74126eb1e60b078d29ef",
+    "scripts/export_arc_canary.py": "aedec3be8da62fd81aef12155a27833afc06c82322f58b277b2cc1034a85d56c",
+    "scripts/launch_bedrock_v3.py": "df921ca4357de0fa01640f0cb381b6b8fc6878c08c19736a323703988ddeb673",
+    "scripts/run_bedrock_v3.py": "17c7b265f1aa823ba6baf69d9b01f4dc842bcda55850dcf7765f5d24ee9a2cd9",
+    "src/leviathan/bedrock/__init__.py": "6060fffaecda3286dd0200863a2000afbecc46ac0b7f5137ec878b27d178111f",
+    "src/leviathan/bedrock/activation_cells.py": "b0fd5f1cc3bfaf61400a3028a72963c02c1bf59cee92871b9fe2ac61f3a5ef45",
+    "src/leviathan/bedrock/cells.py": "2a1c376ad4db7b704c6162ca89aa4b0597714362b6d36315ce9f978dd5e70356",
+    "src/leviathan/bedrock/contracts.py": "aeb3eef51ac7cdae1d7c93a7e763d93f3b1e712bc3b3d3819286d2567fbf1a91",
+    "src/leviathan/bedrock/decisions.py": "1b3b8ce1772b5f6ece5437341ba958449db60473bfd6952693c393e618cf2eb8",
+    "src/leviathan/bedrock/evaluation.py": "4854d60803af932d855064b47957bbe6db1950efb923e77983faed7787a90fe2",
+    "src/leviathan/bedrock/neural.py": "477f9d32e21b16e1d55dc3657ebb7d2c5e2d6cd423272e2f243f07b68424ffcd",
+    "src/leviathan/bedrock/neural_discovery.py": "8ffd80f0aa85113e14cdb909e5edccea3c22cb0883df0f10d791923e2d159765",
+    "src/leviathan/bedrock/runtime.py": "a1b0caf9db5f017adcbeb5bf793d4f54c9b9249429a5ba34f6db85dab7cae412",
+    "src/leviathan/bedrock/stable_neural.py": "8e8a0e2fe645c126a477dabb002ab00687c4db54180b664018b4961ccad74a7f",
+    "src/leviathan/bedrock/world.py": "4f6713d80fc0a3f4ebe557bfb681601ea784ed8b5f0c84fe22fd7f42424cc692",
+    "tests/test_bedrock_v3.py": "b80e2865d6b4286b1edeb86e5132a54f178fcca0a17aef500cf5f10928a0fc15"
+  }
+}
