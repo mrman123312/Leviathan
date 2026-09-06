@@ -1,7 +1,7 @@
 {
   "scope": "local CPU no-training correctness and finite-grammar experiments",
   "base_commit": "b168c2f6323365a3d08b9d4770ab25a7dd7a5e06",
-  "tests": {"run":147,"failures":0,"errors":0,"skipped":0},
+  "tests": {"run":151,"failures":0,"errors":0,"skipped":0},
   "training_steps": 0,
   "new_neural_parameters": 0,
   "torch": "2.10.0+cpu",
@@ -17,11 +17,12 @@
   "source_files_sha256": {
     "scripts/benchmark_bedrock_mechanisms.py": "38534b7fed92eb00f0ad060e76bf9167b5bf854f8cda038d8966d9c0098800c4",
     "scripts/check_bedrock_hf.py": "c3359204ee3e47f7f3961637923fdac8fc57615d0bc382a67302642a15c9442a",
-    "scripts/run_bedrock_lab.py": "335ffd591badb73bbdf016b163b9370691c61943c34239ac1c756947a8fcea77",
+    "scripts/run_bedrock_lab.py": "caa9e5769ef6b0cfd4b2330cf3a783f4e2bbf63bf6e57a77c6d40cfae04187d1",
     "src/leviathan/bedrock/__init__.py": "6060fffaecda3286dd0200863a2000afbecc46ac0b7f5137ec878b27d178111f",
     "src/leviathan/bedrock/cells.py": "2a1c376ad4db7b704c6162ca89aa4b0597714362b6d36315ce9f978dd5e70356",
     "src/leviathan/bedrock/contracts.py": "aeb3eef51ac7cdae1d7c93a7e763d93f3b1e712bc3b3d3819286d2567fbf1a91",
     "src/leviathan/bedrock/neural.py": "477f9d32e21b16e1d55dc3657ebb7d2c5e2d6cd423272e2f243f07b68424ffcd",
+    "src/leviathan/bedrock/stable_neural.py": "71b4699f902f306ccd6da4f34795b2d9ec80231fe6ca4addf07dfc092e26e1ae",
     "src/leviathan/bedrock/runtime.py": "a1b0caf9db5f017adcbeb5bf793d4f54c9b9249429a5ba34f6db85dab7cae412",
     "src/leviathan/bedrock/world.py": "4f6713d80fc0a3f4ebe557bfb681601ea784ed8b5f0c84fe22fd7f42424cc692",
     "src/leviathan/cognitive_kernel.py": "2bc09e119b3b74e143749e31e0e62217432493581ff142e7bebe73634f5ac448",
@@ -29,9 +30,15 @@
     "tests/test_bedrock_cell_state.py": "7105243a26610e7ed91470df4b0f1efe4f0b6352bf2e893bf8253aea3a6cc3d9",
     "tests/test_bedrock_memory_integrity.py": "e900405fbfbec5d67eb7de1e0314b35e59a5738a4b52966389d0bbeedea6c834",
     "tests/test_bedrock_neural.py": "020cc173a3dc9ed305f6e7e21224c557917f7e3473695c922f7b7478fc5b8f49",
+    "tests/test_bedrock_stability.py": "ae491da134b0385f31c6495bdeb056ce82e280b685697f9555be8febd86852fa",
     "tests/test_bedrock_text_integration.py": "1c079df4de87e47ebd45f7f0d747ad0cf794749ac9301529945618c69a52b79b",
     "tests/test_bedrock_world.py": "6a1c388cdc5bc5835f6e03fa440170c081eaa21a64cc14dfa624a2bfa3da1f48"
   },
   "new_language_scores": {},
-  "notes": ["Historical user GPU baseline was not rerun","Inference output changes are not capability gains","Finite-grammar results do not demonstrate AGI"]
+  "notes": [
+    "Historical user GPU baseline was not rerun locally",
+    "Inference output changes are not capability gains",
+    "Finite-grammar results do not demonstrate AGI",
+    "Real RTX 3060 raw band loopback produced a non-finite FP16 recurrent state; transported recurrence is the repair candidate"
+  ]
 }
