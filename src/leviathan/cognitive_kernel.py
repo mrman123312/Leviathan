@@ -235,14 +235,19 @@ class DynamicCognitiveGraph:
             visit(node_id)
 
     def refresh_ready(self) -> None:
-        for node in self.nodes.values():
-            if node.status is not NodeStatus.PENDING:
-                continue
-            dependencies = [self.nodes[item].status for item in node.instruction.dependencies]
-            if any(status is NodeStatus.FAILED for status in dependencies):
-                node.status = NodeStatus.BLOCKED
-            elif all(status is NodeStatus.SUCCEEDED for status in dependencies):
-                node.status = NodeStatus.READY
+        changed = True
+        while changed:
+            changed = False
+            for node in self.nodes.values():
+                if node.status is not NodeStatus.PENDING:
+                    continue
+                dependencies = [self.nodes[item].status for item in node.instruction.dependencies]
+                if any(status in {NodeStatus.FAILED, NodeStatus.BLOCKED} for status in dependencies):
+                    node.status = NodeStatus.BLOCKED
+                    changed = True
+                elif all(status is NodeStatus.SUCCEEDED for status in dependencies):
+                    node.status = NodeStatus.READY
+                    changed = True
 
     def ready(self, *, limit: int | None = None) -> tuple[CognitiveGraphNode, ...]:
         self.refresh_ready()
@@ -495,6 +500,7 @@ class CognitiveCompiler:
 
     def __init__(self) -> None:
         self._skills: dict[str, SkillCandidate] = {}
+        self._episode_results: dict[tuple[str, str], bool] = {}
 
     def observe(
         self,
@@ -504,6 +510,12 @@ class CognitiveCompiler:
         verified_success: bool,
     ) -> SkillCandidate:
         key = program.fingerprint
+        evidence_key = (key, episode_id)
+        if evidence_key in self._episode_results:
+            if self._episode_results[evidence_key] != verified_success:
+                raise ValueError("An episode cannot be recounted with a different outcome")
+            return self._skills[key]
+        self._episode_results[evidence_key] = verified_success
         skill = self._skills.get(key)
         if skill is None:
             skill = SkillCandidate(

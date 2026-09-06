@@ -1,0 +1,44 @@
+name: bedrock-expressive-arc
+on:
+  push:
+    branches: [bedrock-frozen-expressive]
+permissions:
+  contents: read
+concurrency:
+  group: bedrock-expressive-arc-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  no-training-reference:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      OMP_NUM_THREADS: '1'
+      MKL_NUM_THREADS: '1'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install CPU test dependencies (no checkpoint download)
+        run: |
+          python -m pip install --index-url https://download.pytorch.org/whl/cpu 'torch==2.10.0'
+          python -m pip install -e . 'transformers==5.8.1' safetensors pyarrow
+      - name: Test all paths and native tiny Qwen
+        run: |
+          set -o pipefail
+          mkdir -p evidence/bedrock-v3
+          python scripts/verify_bedrock_capsule.py
+          python -m unittest discover -s tests -v 2>&1 | tee evidence/bedrock-v3/ci-tests.txt
+          python scripts/check_bedrock_v3_hf.py
+      - name: Package small official ARC canary for offline user run
+        run: python scripts/export_arc_canary.py --allow-download --output data/arc_easy_50.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: expressive-arc-evidence-${{ github.sha }}
+          path: |
+            evidence/bedrock-v3/
+            data/arc_easy_50.json
+          retention-days: 14

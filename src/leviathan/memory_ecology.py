@@ -10,6 +10,7 @@ merge/forget policies must beat.
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field, replace
+from copy import deepcopy
 from enum import Enum
 import json
 from pathlib import Path
@@ -77,11 +78,11 @@ class MemoryEcology:
 
     @property
     def records(self) -> tuple[MemoryRecord, ...]:
-        return tuple(self._records.values())
+        return deepcopy(tuple(self._records.values()))
 
     @property
     def writes(self) -> tuple[MemoryWrite, ...]:
-        return tuple(self._writes)
+        return deepcopy(tuple(self._writes))
 
     def _serialize(self, write: MemoryWrite) -> str:
         record = write.record
@@ -99,7 +100,7 @@ class MemoryEcology:
                 },
             },
         }
-        return json.dumps(payload, sort_keys=True)
+        return json.dumps(payload, sort_keys=True, allow_nan=False)
 
     @staticmethod
     def _deserialize(line: str) -> MemoryWrite:
@@ -150,20 +151,25 @@ class MemoryEcology:
             record_id=record.id,
             record=record,
         )
-        self._writes.append(write)
-        self._records[record.id] = record
+        # A durable write must succeed BEFORE in-memory state is promoted.
+        # Snapshot nested payloads so callers cannot mutate verified history.
+        write = deepcopy(write)
+        serialized = self._serialize(write)
         if self.journal_path is not None:
             self.journal_path.parent.mkdir(parents=True, exist_ok=True)
             with self.journal_path.open("a", encoding="utf-8") as handle:
-                handle.write(self._serialize(write) + "\n")
-        return write
+                handle.write(serialized + "\n")
+                handle.flush()
+        self._writes.append(write)
+        self._records[record.id] = write.record
+        return deepcopy(write)
 
     def write(self, record: MemoryRecord) -> MemoryWrite:
         existing = self._records.get(record.id)
         if existing is not None and existing != record:
             raise ValueError("memory ids are immutable; use supersede/deprecate instead of overwrite")
         if existing is not None:
-            return self._writes[-1] if self._writes else self._append("write", record)
+            return deepcopy(next(w for w in reversed(self._writes) if w.record_id == record.id))
         return self._append("write", record)
 
     def deprecate(self, record_id: str, *, reason_ref: str) -> MemoryWrite:
@@ -187,6 +193,8 @@ class MemoryEcology:
     ) -> MemoryWrite:
         if destination not in {MemoryKind.SEMANTIC, MemoryKind.PROCEDURAL}:
             raise ValueError("episode promotion destination must be semantic or procedural")
+        if not verification_ref or new_id in self._records:
+            raise ValueError("Promotion needs fresh immutable ID and a verification reference")
         source = self._records[record_id]
         if source.kind is not MemoryKind.EPISODIC:
             raise ValueError("only episodic records may be promoted by this operation")
@@ -238,7 +246,7 @@ class MemoryEcology:
             and (not tag_set or tag_set.intersection(record.tags))
         ]
         candidates.sort(key=lambda item: (item.utility, item.confidence), reverse=True)
-        return tuple(candidates[:limit])
+        return deepcopy(tuple(candidates[:limit]))
 
 
 @dataclass(frozen=True, slots=True)
@@ -257,14 +265,14 @@ class BeliefStateStore:
 
     @property
     def current(self) -> tuple[Belief, ...]:
-        return tuple(self._current.values())
+        return deepcopy(tuple(self._current.values()))
 
     @property
     def history(self) -> tuple[BeliefRevision, ...]:
-        return tuple(self._history)
+        return deepcopy(tuple(self._history))
 
     def get(self, belief_id: str) -> Belief:
-        return self._current[belief_id]
+        return deepcopy(self._current[belief_id])
 
     def put(self, belief: Belief, *, reason_ref: str) -> BeliefRevision:
         if not 0.0 <= belief.confidence <= 1.0:
@@ -274,10 +282,10 @@ class BeliefStateStore:
             same_evidence = set(belief.evidence_refs) <= set(prior.evidence_refs)
             if belief.confidence > prior.confidence and same_evidence:
                 raise RuntimeError("belief confidence cannot increase without new evidence")
-        revision = BeliefRevision(len(self._history), belief, reason_ref)
+        revision = BeliefRevision(len(self._history), deepcopy(belief), reason_ref)
         self._history.append(revision)
-        self._current[belief.id] = belief
-        return revision
+        self._current[belief.id] = revision.belief
+        return deepcopy(revision)
 
     def apply_confidence_update(
         self,

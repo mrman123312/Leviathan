@@ -1,0 +1,15 @@
+LEVIATHAN FROZEN BEDROCK v3 — ARC-EASY INCLUDED
+
+Extract into its own folder. Double-click RUN_ARC_EASY.bat.
+No installations. No drive scanning. No training. Uses your working v7 CUDA environment.
+
+First: 50-question ARC-Easy comparison across donor, refine, explore-2, explore-4 and adaptive.
+Then: cached WikiText retention, prediction stopping, signed latent branches,
+activation-based cell relevance, and a same-Qwen rule-proposal/experiment/memory test.
+
+Progress prints for every ARC question/mode and every WikiText passage.
+Results are saved throughout the run. Previous results are not overwritten.
+RESULTS.html opens automatically. Send RESULTS.json for analysis.
+
+This package does not contain model weights or retrain the model.
+Changed logits are not proof of better reasoning. ARC now tests that question directly.

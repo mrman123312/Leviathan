@@ -1,0 +1,70 @@
+version = "0.1"
+name = "Frozen Bedrock execution"
+source_baseline_commit = "b168c2f6323365a3d08b9d4770ab25a7dd7a5e06"
+training_allowed = false
+new_learned_parameters = 0
+single_semantic_model = true
+runtime_class = "leviathan.bedrock.runtime.BedrockRuntime"
+legacy_research_preserved = true
+production_neural_default = "untouched_donor"
+
+[neural]
+parameter_updates = false
+reuses_pretrained_decoder_layers = true
+initializes_random_neural_heads = false
+supported_families = ["qwen2", "qwen3"]
+hybrid_qwen_delta_cache_port = "pending"
+feedback_modes = ["repeat", "anchored_difference"]
+max_passes = 16
+halting_scope = "per_position_causal"
+halting_means_correct = false
+latent_hypotheses = "sequential_different_frozen_routes_one_parameter_owner"
+merge_rule = "identical_completed_outputs_only"
+branch_promotion = "host_verification_otherwise_donor_fallback"
+cache_policy = "full_prefix_no_KV_cross_depth"
+
+[cells]
+training_free = true
+body = "actual_frozen_SwiGLU_slices"
+keys = "normalized_frozen_gate_up_row_means"
+local_state = "four_observable_moments_per_token_per_cell_per_model_call"
+local_state_is_calibrated_confidence = false
+communication = "symmetric_mutual_neighbor_diffusion"
+aggregate_message_sum_preserved_in_real_arithmetic = true
+recruitment = "message_derived_query_against_frozen_keys"
+source_layer = "one_compatible_FFN_only"
+exact_split_merge = "contiguous_parameter_views"
+exact_pruning = "identically_zero_down_slice_only"
+parameter_growth = "not_implemented"
+
+[efficiency]
+zero_influence_bypass = true
+exact_row_cache = "pure_FFN_only"
+route_reuse = "strict_margin_test_with_fixed_keys"
+fast_associations = "request_scoped_bounded_activation_map"
+speculation = "one_model_full_prefix_correctness_reference"
+speculation_is_a_speedup = false
+new_GPU_kernel_speedup_demonstrated = false
+
+[cognition]
+reuses_existing_runtime_beliefs_memory_and_DAG = true
+graph_nodes_record_actual_executed_operators = true
+rule_program = "bounded_typed_integer_AST_no_eval_no_import_no_shell"
+exploration = "finite_version_space_information_gain"
+world_model_is_general = false
+predictions_precede_observations = true
+memory_promoted_after_fresh_validation = true
+transfer_retains_environment_scope_and_program_preconditions = true
+contradiction_invalidates_skill = true
+metacognition = "transparent_policies_and_evidence_deduplicated_Beta_statistics"
+causal_credit = "dependency_invalidation_and_counterfactuals_conditional_on_supplied_SCM"
+
+[acceptance]
+neutral_path_parity_required = true
+modified_path_quality_is_unproven = true
+no_training_in_benchmark = true
+ARC_Easy_separately_reported_when_run = true
+WikiText_64_historical_gate_retained = true
+new_local_WikiText_result = "not_run"
+new_local_ARC_result = "not_run"
+all_features_demonstrated = false
