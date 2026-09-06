@@ -20,13 +20,13 @@ def report_html(report):
         for r in records:
             rows.append(f"<tr><td>{html.escape(mode)}</td><td>{html.escape(r['prompt'])}</td>"
                 f"<td>{r['max_logit_change']:.6g}</td><td>{r['seconds']:.3f}</td>"
-                f"<td>{r['extra_layer_calls']}</td></tr>")
+                f"<td>{r['extra_layer_calls']}</td><td>{html.escape(r.get('route_status',''))}</td></tr>")
     return """<!doctype html><html><head><meta charset='utf-8'><title>Leviathan Frozen Bedrock</title>
 <style>body{font:17px system-ui;max-width:1100px;margin:40px auto;padding:0 20px}td,th{padding:10px;border-bottom:1px solid #bbb;text-align:left}pre{white-space:pre-wrap}table{width:100%}</style></head><body>
 <h1>Leviathan: frozen-weight feature lab</h1>
 <p><b>No training, no new neural parameters, no cloud model.</b> An altered output proves different computation, not improved intelligence.</p>
 <p>These are small mechanism/integration tests. Public ARC/WikiText accuracy is not measured by this run. All transformed routes are experimental and the donor remains the fallback.</p>
-<h2>GPU route experiments</h2><table><tr><th>Mode</th><th>Prompt</th><th>Max logit change</th><th>Seconds (full prefix)</th><th>Extra layer calls</th></tr>"""+"".join(rows)+"</table><h2>Execution record</h2><pre>"+html.escape(json.dumps(report,indent=2))+"</pre></body></html>"
+<h2>GPU route experiments</h2><table><tr><th>Mode</th><th>Prompt</th><th>Max logit change</th><th>Seconds (full prefix)</th><th>Extra layer calls</th><th>Status</th></tr>"""+"".join(rows)+"</table><h2>Execution record</h2><pre>"+html.escape(json.dumps(report,indent=2))+"</pre></body></html>"
 
 
 def main():
@@ -58,20 +58,22 @@ def main():
             import torch
             from transformers import AutoTokenizer,Qwen3ForCausalLM
             from leviathan.consumer.profiles import get_profile
-            from leviathan.bedrock.neural import FrozenExecutor,FrozenPolicy
+            from leviathan.bedrock.stable_neural import StableFrozenExecutor,StableFrozenPolicy
             from leviathan.bedrock.cells import CellPolicy
             profile=get_profile("rtx3060")
             common=dict(revision=profile.revision,local_files_only=True,trust_remote_code=False)
             tokenizer=AutoTokenizer.from_pretrained(profile.repo_id,**common)
             model=Qwen3ForCausalLM.from_pretrained(profile.repo_id,**common,torch_dtype=torch.float16,
                         device_map={"":"cuda"},low_cpu_mem_usage=True,attn_implementation="eager").eval()
-            engine=FrozenExecutor(model,model_id=profile.id,revision=profile.revision)
+            engine=StableFrozenExecutor(model,model_id=profile.id,revision=profile.revision)
             report["model"]={"repository":profile.repo_id,"revision":profile.revision,"dtype":"FP16",
                              "gpu":torch.cuda.get_device_name(0),"stage":profile.stage}
-            modes={"donor":FrozenPolicy(),"frozen_band_2":FrozenPolicy(passes=2,gain=.1),
-                "anchored_difference_4":FrozenPolicy(passes=4,gain=.1,feedback="anchored_difference"),
-                "adaptive_band_4":FrozenPolicy(passes=4,gain=.1,halt_delta=.01,halt_patience=1),
-                "cell_discussion_observe":FrozenPolicy(cells=CellPolicy(mode="observe",seed=2,max_cells=4))}
+            modes={"donor":StableFrozenPolicy(),
+                "transported_band_2":StableFrozenPolicy(passes=2,gain=.08,reentry_radius=.06),
+                "transported_band_4":StableFrozenPolicy(passes=4,gain=.06,reentry_radius=.05),
+                "adaptive_transport_4":StableFrozenPolicy(passes=4,gain=.06,reentry_radius=.05,halt_delta=.01,halt_patience=1),
+                "anchored_guarded_4":StableFrozenPolicy(passes=4,gain=.06,reentry_radius=.05,feedback="anchored_difference"),
+                "cell_discussion_observe":StableFrozenPolicy(cells=CellPolicy(mode="observe",seed=2,max_cells=4))}
             prompts=("The capital of France is","A prime number is","Water freezes when")
             originals={}
             for name,policy in modes.items():
@@ -79,21 +81,34 @@ def main():
                 for text in prompts:
                     print(f"  {name}: {text}",flush=True)
                     ids=tokenizer(text,return_tensors="pt").input_ids.to("cuda")
-                    torch.cuda.synchronize();started=time.perf_counter()
-                    out=engine.run(ids,policy=policy,request_id=name).logits.detach().float()
-                    torch.cuda.synchronize();elapsed=time.perf_counter()-started
-                    if name=="donor":originals[text]=out.cpu()
-                    difference=float((out.cpu()-originals[text]).abs().max())
-                    report["gpu_routes"][name].append({"prompt":text,"seconds":elapsed,
-                        "max_logit_change":difference,"argmax_token":int(out[0,-1].argmax()),
-                        "extra_layer_calls":engine.last_trace["extra_layer_calls"],
-                        "cell_trace":engine.last_trace["cells"]})
-                    if name=="cell_discussion_observe" and difference!=0:
-                        report.setdefault("warnings",[]).append("Observe-mode numerical parity differed; investigate before using")
+                    try:
+                        _=engine.run(ids,policy=policy,request_id=name+":warmup")
+                        torch.cuda.synchronize();torch.cuda.reset_peak_memory_stats();started=time.perf_counter()
+                        out=engine.run(ids,policy=policy,request_id=name).logits.detach().float()
+                        torch.cuda.synchronize();elapsed=time.perf_counter()-started
+                        if name=="donor":originals[text]=out.cpu()
+                        difference=float((out.cpu()-originals[text]).abs().max())
+                        trace=dict(engine.last_trace)
+                        report["gpu_routes"][name].append({"prompt":text,"seconds":elapsed,
+                            "max_logit_change":difference,"argmax_token":int(out[0,-1].argmax()),
+                            "extra_layer_calls":trace["extra_layer_calls"],
+                            "route_status":trace.get("route_status","unknown"),
+                            "nonfinite_replay_fallbacks":trace.get("nonfinite_replay_fallbacks",0),
+                            "max_reentry_relative_l2":max(trace.get("reentry_relative_l2_max",[]) or [0.0]),
+                            "peak_vram_gib":torch.cuda.max_memory_allocated()/2**30,
+                            "cell_trace":trace["cells"]})
+                        if name=="cell_discussion_observe" and difference!=0:
+                            report.setdefault("warnings",[]).append("Observe-mode numerical parity differed; investigate before using")
+                    except Exception as route_exc:
+                        report["gpu_routes"][name].append({"prompt":text,"route_status":"error",
+                            "error":f"{type(route_exc).__name__}: {route_exc}","seconds":0.0,
+                            "max_logit_change":0.0,"extra_layer_calls":0})
+                        report.setdefault("route_errors",[]).append({"mode":name,"prompt":text,
+                            "error":f"{type(route_exc).__name__}: {route_exc}"})
                     save()
             print("  Running one raw completion with the frozen band (experimental, unverified)...",flush=True)
             ids=tokenizer(prompts[0],return_tensors="pt").input_ids.to("cuda")
-            generated,_=engine.generate(ids,policy=modes["frozen_band_2"],max_new_tokens=12,
+            generated,_=engine.generate(ids,policy=modes["transported_band_2"],max_new_tokens=12,
                                          eos_token_id=tokenizer.eos_token_id)
             report["experimental_completion"]=tokenizer.decode(generated[0,ids.shape[1]:],skip_special_tokens=True)
             report["frozen_version_tripwire_passed"]=engine.unchanged()
